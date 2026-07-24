@@ -1,0 +1,25 @@
+# Secrets & local state — NEVER commit these
+.env
+tokens.key
+*.sqlite
+*.sqlite3
+*.db
+data/
+assets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/

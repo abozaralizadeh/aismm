@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Instructions · AISMM{% endblock %}
+{% block content %}
+<div class="row-between">
+  <h1>Instructions</h1>
+  <a class="btn btn-primary" href="{{ url_for('new_instruction') }}">+ New instruction</a>
+</div>
+
+{% if instructions %}
+<table>
+  <thead>
+    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for i in instructions %}
+    <tr>
+      <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
+      <td class="small">{{ i.account_ids|length }}</td>
+      <td class="mono small">{{ i.schedule or "—" }}</td>
+      <td><span class="badge badge-{{ i.publish_mode.value }}">{{ i.publish_mode.value }}</span></td>
+      <td class="small">{{ i.media_pref.value }}</td>
+      <td>{{ "✓" if i.enabled else "—" }}</td>
+      <td class="actions">
+        <form method="post" action="{{ url_for('run_instruction_now', instruction_id=i.id) }}">
+          <button class="btn">Run now</button>
+        </form>
+        <form method="post" action="{{ url_for('delete_instruction', instruction_id=i.id) }}"
+              onsubmit="return confirm('Delete this instruction?');">
+          <button class="btn btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No instructions yet. <a href="{{ url_for('new_instruction') }}">Create one</a>.</p>
+{% endif %}
+{% endblock %}

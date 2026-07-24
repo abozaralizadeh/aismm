@@ -1,0 +1,28 @@
+# Optional seed reference — the DASHBOARD is the primary way to add accounts and
+# instructions. This file just documents the shape of an instruction so you can
+# see what the agent is driven by. (There is no importer wired up by default;
+# create these in the dashboard.)
+
+instructions:
+  - name: "Daily AI news reel"
+    brief: >
+      You run a punchy tech-culture account. Each post, surface ONE real, current
+      development in AI from a reputable source, and turn it into a short vertical
+      video with an upbeat, curious voice. Keep captions tight, 1 emoji max, and
+      add 3-5 relevant hashtags.
+    accounts:
+      - "<tiktok-account-id>"
+      - "<instagram-account-id>"
+    schedule: "0 9 * * *"        # 09:00 UTC daily (cron), or e.g. "every 12h"
+    publish_mode: "approval"      # dry_run | approval | live
+    media_pref: "video"           # auto | video | image | text
+
+  - name: "Hourly market quips (X)"
+    brief: >
+      A witty finance commentator. Post one sharp, non-advice observation about a
+      genuinely current market or tech story. Text-only, under 240 characters.
+    accounts:
+      - "<twitter-account-id>"
+    schedule: "every 6h"
+    publish_mode: "dry_run"
+    media_pref: "text"

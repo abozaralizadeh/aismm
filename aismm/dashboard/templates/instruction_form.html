@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit" if instruction else "New" }} instruction · AISMM{% endblock %}
+{% block content %}
+<h1>{{ "Edit" if instruction else "New" }} instruction</h1>
+
+<form method="post" action="{{ url_for('save_instruction') }}" class="form">
+  {% if instruction %}<input type="hidden" name="id" value="{{ instruction.id }}">{% endif %}
+
+  <label>Name
+    <input type="text" name="name" required value="{{ instruction.name if instruction else '' }}"
+           placeholder="e.g. Daily AI news reel">
+  </label>
+
+  <label>Brief / persona / directive
+    <textarea name="brief" rows="7"
+      placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
+    <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
+  </label>
+
+  <label>Target accounts
+    <div class="checklist">
+      {% for a in accounts %}
+        <label class="check">
+          <input type="checkbox" name="account_ids" value="{{ a.id }}"
+                 {% if instruction and a.id in instruction.account_ids %}checked{% endif %}>
+          {{ a.platform.value }} · {{ a.handle or a.external_id or a.id[:8] }}
+        </label>
+      {% else %}
+        <span class="muted">No accounts connected. <a href="{{ url_for('accounts') }}">Connect one first.</a></span>
+      {% endfor %}
+    </div>
+  </label>
+
+  <div class="grid-2">
+    <label>Schedule
+      <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
+             placeholder="0 9 * * *  or  every 6h">
+      <span class="hint">Cron (min hr dom mon dow) or interval ("every 6h", "30m", "1d").</span>
+    </label>
+
+    <label>Publish mode
+      <select name="publish_mode">
+        {% for m in modes %}
+          <option value="{{ m.value }}"
+            {% if instruction and instruction.publish_mode == m %}selected{% endif %}>
+            {{ m.value }}
+          </option>
+        {% endfor %}
+      </select>
+      <span class="hint">dry_run = preview only · approval = queue for your OK · live = post immediately.</span>
+    </label>
+  </div>
+
+  <div class="grid-2">
+    <label>Media preference
+      <select name="media_pref">
+        {% for mp in media_prefs %}
+          <option value="{{ mp.value }}"
+            {% if instruction and instruction.media_pref == mp %}selected{% endif %}>
+            {{ mp.value }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label class="check inline">
+      <input type="checkbox" name="enabled" {% if not instruction or instruction.enabled %}checked{% endif %}>
+      Enabled (scheduler will run it)
+    </label>
+  </div>
+
+  <div class="row">
+    <button class="btn btn-primary" type="submit">Save</button>
+    <a class="btn" href="{{ url_for('instructions') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,162 @@
+"""Command-line interface: ``aismm <command>``.
+
+    aismm run          start the scheduler AND the dashboard (default)
+    aismm dashboard    start only the dashboard
+    aismm scheduler    start only the scheduler (headless)
+    aismm auth <p>     print the connect URL for a platform (open in a browser)
+    aismm list         list connected accounts and instructions
+    aismm post ...     run one instruction once, now (honors its publish mode)
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+from .config import ensure_dirs, settings
+
+
+def cmd_run(_args) -> int:
+    from . import scheduler
+    from .dashboard import create_app
+    from .llm import configure_tracing
+
+    ensure_dirs()
+    configure_tracing()
+    scheduler.start()
+    app = create_app()
+    print(f"AISMM dashboard → {settings.dashboard.base_url}  (scheduler running)")
+    app.run(host=settings.dashboard.host, port=settings.dashboard.port,
+            threaded=True, use_reloader=False)
+    return 0
+
+
+def cmd_dashboard(_args) -> int:
+    from .dashboard import create_app
+
+    ensure_dirs()
+    app = create_app()
+    print(f"AISMM dashboard → {settings.dashboard.base_url}  (no scheduler)")
+    app.run(host=settings.dashboard.host, port=settings.dashboard.port,
+            threaded=True, use_reloader=False)
+    return 0
+
+
+def cmd_scheduler(_args) -> int:
+    from . import scheduler
+    from .llm import configure_tracing
+
+    ensure_dirs()
+    configure_tracing()
+    scheduler.start()
+    print("AISMM scheduler running. Ctrl-C to stop.")
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        return 0
+
+
+def cmd_auth(args) -> int:
+    from .models import PlatformName
+    from .platforms.registry import get_platform
+    from .auth import oauth
+
+    try:
+        name = PlatformName(args.platform)
+    except ValueError:
+        print(f"Unknown platform '{args.platform}'. Choose: "
+              + ", ".join(p.value for p in PlatformName))
+        return 1
+    integ = get_platform(name)
+    if not (integ.creds and integ.creds.configured):
+        print(f"{args.platform} app credentials are missing. Add them to your .env first.")
+        return 1
+    print("Connecting via the dashboard is recommended (it handles the OAuth callback).")
+    print(f"Start the dashboard, then open:\n  {settings.dashboard.base_url}/oauth/{args.platform}/start\n")
+    challenge = oauth.generate_pkce()[1] if integ.use_pkce else None
+    url = integ.authorize_url(redirect_uri=settings.redirect_uri(args.platform),
+                              state=oauth.random_state(), code_challenge=challenge)
+    print(f"Direct authorize URL (callback must reach {settings.redirect_uri(args.platform)}):\n  {url}")
+    return 0
+
+
+def cmd_list(_args) -> int:
+    from .store import get_store
+
+    store = get_store()
+    accounts = store.list_accounts()
+    print(f"\nAccounts ({len(accounts)}):")
+    for a in accounts:
+        print(f"  {a.id[:8]}  {a.platform.value:10}  {a.handle or a.external_id}")
+    instrs = store.list_instructions()
+    print(f"\nInstructions ({len(instrs)}):")
+    for i in instrs:
+        print(f"  {i.id[:8]}  {i.name:24}  mode={i.publish_mode.value:8}  "
+              f"sched={i.schedule or '—':12}  accounts={len(i.account_ids)}  "
+              f"{'on' if i.enabled else 'off'}")
+    print()
+    return 0
+
+
+def cmd_post(args) -> int:
+    from .store import get_store
+    from . import orchestrator
+
+    store = get_store()
+    instr = store.get_instruction(args.instruction)
+    if not instr:
+        # allow prefix match on id or exact name
+        matches = [i for i in store.list_instructions()
+                   if i.id.startswith(args.instruction) or i.name == args.instruction]
+        instr = matches[0] if len(matches) == 1 else None
+    if not instr:
+        print(f"Instruction '{args.instruction}' not found (use `aismm list`).")
+        return 1
+
+    if args.account:
+        acct = store.get_account(args.account)
+        if not acct:
+            print(f"Account '{args.account}' not found.")
+            return 1
+        print(orchestrator.run_single(instr, acct))
+    else:
+        results = orchestrator.run_instruction(instr.id)
+        for r in results:
+            print(r)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="aismm", description="AI Social Media Manager")
+    sub = p.add_subparsers(dest="command")
+
+    sub.add_parser("run", help="start scheduler + dashboard").set_defaults(func=cmd_run)
+    sub.add_parser("dashboard", help="start dashboard only").set_defaults(func=cmd_dashboard)
+    sub.add_parser("scheduler", help="start scheduler only").set_defaults(func=cmd_scheduler)
+
+    pa = sub.add_parser("auth", help="print a platform connect URL")
+    pa.add_argument("platform")
+    pa.set_defaults(func=cmd_auth)
+
+    sub.add_parser("list", help="list accounts and instructions").set_defaults(func=cmd_list)
+
+    pp = sub.add_parser("post", help="run one instruction once, now")
+    pp.add_argument("--instruction", required=True, help="instruction id (prefix) or name")
+    pp.add_argument("--account", help="limit to one account id")
+    pp.set_defaults(func=cmd_post)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "func", None):
+        # default to `run`
+        return cmd_run(args)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

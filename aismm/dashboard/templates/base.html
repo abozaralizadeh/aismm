@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AI Social Media Manager{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">🤖 AISMM</a>
+    <nav>
+      <a href="{{ url_for('accounts') }}">Accounts</a>
+      <a href="{{ url_for('instructions') }}">Instructions</a>
+      <a href="{{ url_for('runs') }}">Runs</a>
+      <a href="{{ url_for('settings_view') }}">Settings</a>
+    </nav>
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flashes">
+          {% for category, msg in messages %}
+            <div class="flash flash-{{ category }}">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

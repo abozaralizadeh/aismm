@@ -1,0 +1,27 @@
+# --- Core: OpenAI Agents SDK + Azure OpenAI ---
+openai-agents>=0.0.14
+openai>=1.40.0
+
+# --- HTTP / media / config ---
+httpx>=0.27.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+
+# --- Scheduling ---
+apscheduler>=3.10.0
+
+# --- Dashboard ---
+Flask[async]>=3.0.0
+
+# --- Storage / persistence ---
+sqlmodel>=0.0.14
+cryptography>=42.0.0
+PyYAML>=6.0
+
+# --- Optional (uncomment as needed) ---
+# langsmith>=0.1.0                     # Agents SDK -> LangSmith tracing (gated on LANGCHAIN_* env)
+# google-api-python-client>=2.0.0      # convenience for YouTube resumable upload
+# google-auth-oauthlib>=1.0.0          # convenience for YouTube OAuth
+# tweepy>=4.14.0                        # convenience for X/Twitter
+# azure-data-tables>=12.5.0            # Azure Store adapter (Table)
+# azure-storage-blob>=12.19.0          # Azure Store adapter (Blob)

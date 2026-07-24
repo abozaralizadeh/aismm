@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Overview</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-num">{{ accounts|length }}</div>
+    <div class="card-label">Connected accounts</div>
+    <a href="{{ url_for('accounts') }}">Manage →</a>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ instructions|length }}</div>
+    <div class="card-label">Instructions</div>
+    <a href="{{ url_for('instructions') }}">Manage →</a>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ pending|length }}</div>
+    <div class="card-label">Awaiting approval</div>
+    <a href="{{ url_for('runs') }}">Review →</a>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ "on" if scheduler_running else "off" }}</div>
+    <div class="card-label">Scheduler</div>
+    <span class="muted">provider: {{ settings.llm.provider }}</span>
+  </div>
+</div>
+
+<h2>Quick start</h2>
+<ol class="steps">
+  <li><a href="{{ url_for('accounts') }}">Connect a social account</a> (Instagram, X, YouTube, or TikTok).</li>
+  <li><a href="{{ url_for('new_instruction') }}">Create an instruction</a>: a brief + the accounts it targets + a schedule + a publish mode.</li>
+  <li>Let the scheduler run it, or hit <em>Run now</em> — then review results under <a href="{{ url_for('runs') }}">Runs</a>.</li>
+</ol>
+{% endblock %}

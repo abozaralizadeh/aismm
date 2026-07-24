@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Accounts · AISMM{% endblock %}
+{% block content %}
+<h1>Accounts</h1>
+
+<h2>Connect a new account</h2>
+<div class="platform-grid">
+  {% for p in platforms %}
+  <div class="platform-card">
+    <div class="platform-name">{{ p.name }}</div>
+    <div class="muted small">
+      {% if p.capabilities.supports_video %}video{% endif %}
+      {% if p.capabilities.supports_image %} · image{% endif %}
+      {% if p.capabilities.supports_text %} · text{% endif %}
+    </div>
+    {% if p.configured %}
+      <a class="btn" href="{{ url_for('oauth_start', platform=p.name) }}">Connect →</a>
+    {% else %}
+      <span class="badge badge-off">app creds missing</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Connected</h2>
+{% if accounts %}
+<table>
+  <thead><tr><th>Platform</th><th>Handle</th><th>Account ID</th><th>Token expires</th><th></th></tr></thead>
+  <tbody>
+  {% for a in accounts %}
+    <tr>
+      <td>{{ a.platform.value }}</td>
+      <td>{{ a.handle or "—" }}</td>
+      <td class="mono small">{{ a.external_id or a.id }}</td>
+      <td class="small">{{ a.expires_at.strftime('%Y-%m-%d %H:%M') if a.expires_at else "—" }}</td>
+      <td>
+        <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
+              onsubmit="return confirm('Disconnect this account?');">
+          <button class="btn btn-danger">Disconnect</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No accounts connected yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Settings · AISMM{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">Configuration is loaded from your <code>.env</code>. This page is read-only —
+edit <code>.env</code> and restart to change it.</p>
+
+<h2>LLM</h2>
+<table class="kv">
+  <tr><td>Provider</td><td><span class="badge">{{ settings.llm.provider }}</span></td></tr>
+  <tr><td>Model / deployment</td><td class="mono">{{ settings.llm.model }}</td></tr>
+  {% if settings.llm.provider == 'apim' %}
+  <tr><td>APIM base URL</td><td class="mono small">{{ settings.llm.apim_base_url or '—' }}</td></tr>
+  <tr><td>APIM key header</td><td class="mono">{{ settings.llm.apim_key_header }}</td></tr>
+  {% else %}
+  <tr><td>Azure endpoint</td><td class="mono small">{{ settings.llm.azure_endpoint or '—' }}</td></tr>
+  <tr><td>API version</td><td class="mono">{{ settings.llm.azure_api_version }}</td></tr>
+  {% endif %}
+</table>
+
+<h2>Media tools</h2>
+<table class="kv">
+  <tr><td>Sora 2 video</td><td>{{ "✓ enabled" if sora_enabled else "— not configured" }}</td></tr>
+  <tr><td>Image (gpt-image-1)</td><td>{{ "✓ enabled" if image_enabled else "— not configured" }}</td></tr>
+</table>
+
+<h2>Platform apps</h2>
+<table class="kv">
+  {% for p in platforms %}
+  <tr>
+    <td>{{ p.name }}</td>
+    <td>{% if p.configured %}<span class="badge badge-live">app configured</span>
+        {% else %}<span class="badge badge-off">creds missing</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Dashboard</h2>
+<table class="kv">
+  <tr><td>Public base URL</td><td class="mono small">{{ settings.dashboard.base_url }}</td></tr>
+  <tr><td>OAuth redirect pattern</td><td class="mono small">{{ settings.dashboard.base_url }}/oauth/&lt;platform&gt;/callback</td></tr>
+  <tr><td>Data dir</td><td class="mono small">{{ settings.data_dir }}</td></tr>
+</table>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Runs · AISMM{% endblock %}
+{% block content %}
+<h1>Runs &amp; approvals</h1>
+
+<h2>Awaiting approval</h2>
+{% if pending %}
+<div class="staged-list">
+  {% for s in pending %}
+  <div class="staged">
+    <div class="staged-media">
+      {% if s.media_kind == 'video' %}
+        <video controls src="{{ url_for('asset', filename=s.asset_path.split('/')[-1]) }}"></video>
+      {% elif s.media_kind == 'image' %}
+        <img src="{{ url_for('asset', filename=s.asset_path.split('/')[-1]) }}" alt="preview">
+      {% else %}
+        <div class="text-preview">Text-only</div>
+      {% endif %}
+    </div>
+    <div class="staged-body">
+      <div class="muted small">{{ accounts.get(s.account_id).platform.value if accounts.get(s.account_id) else s.account_id }}
+        · {{ accounts.get(s.account_id).handle if accounts.get(s.account_id) else '' }}</div>
+      <p class="caption">{{ s.caption }}</p>
+      <div class="row">
+        <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
+          <button class="btn btn-primary">Approve &amp; publish</button>
+        </form>
+        <form method="post" action="{{ url_for('reject', staged_id=s.id) }}">
+          <button class="btn btn-danger">Reject</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">Nothing waiting for approval.</p>
+{% endif %}
+
+<h2>Recent runs</h2>
+{% if runs %}
+<table>
+  <thead><tr><th>When</th><th>Status</th><th>Caption</th><th>Link</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+    <tr>
+      <td class="small">{{ r.created_at.strftime('%m-%d %H:%M') }}</td>
+      <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value }}</span></td>
+      <td class="small">{{ (r.caption or r.error or '')[:90] }}</td>
+      <td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank">open ↗</a>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No runs yet.</p>
+{% endif %}
+{% endblock %}
