@@ -24,6 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+server = ["gunicorn>=21.2.0"]
 tracing = ["langsmith>=0.1.0"]
 youtube = ["google-api-python-client>=2.0.0", "google-auth-oauthlib>=1.0.0"]
 twitter = ["tweepy>=4.14.0"]

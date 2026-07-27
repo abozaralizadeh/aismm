@@ -26,13 +26,19 @@ python -m aismm.cli list        # accounts + instructions
 python -m aismm.cli post --instruction <id-or-name> [--account <id>]
 
 # test / verify
-pytest -q                       # 18 unit tests (no network, no creds needed)
+pytest -q                       # 30 unit tests (no network, no creds needed)
 python scripts/smoke_llm.py     # verifies Azure/APIM LLM wiring (needs LLM creds)
 python scripts/smoke_sora.py    # generates one Sora clip (skips if unconfigured)
+python scripts/smoke_sora.py --pool   # print the Sora resource pool, no API calls
 ```
 
 There is no lint/format config; match the surrounding style (stdlib logging, `from __future__ import
 annotations`, type hints, ~100-col lines).
+
+A shared [`.vscode/`](.vscode) config ships launch profiles (run / dashboard-only / scheduler-only /
+post-one / smoke tests / pytest-current-file / attach) and tasks (venv setup, `.env` bootstrap,
+pytest, gunicorn). `justMyCode` is off so breakpoints hit the agent and SDK; the Flask reloader is
+off so the debugger keeps its process. README's "Debugging in VS Code" has the profile table.
 
 ## Architecture & data flow
 
@@ -83,12 +89,18 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (adapter stub) |
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
+| [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
+| [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
 
 ## Gotchas
 
 - **Sora 2** ([tools/sora_client.py](aismm/tools/sora_client.py)): job-scoped — a job id only exists
   on the resource that created it, so create/poll/download must stay on one resource. The pool
-  round-robins **at the job level**; never front it with a round-robin gateway. Sora 2 has **no
+  round-robins **at the job level** (`sora_config.next_resource`); never front it with a round-robin
+  gateway. `create_clip_with_failover` retries a failed clip on a *different* resource
+  (`exclude_endpoints`) and returns the serving resource + job id, since only that resource can
+  poll/download/remix the job — same scheme as SandBox/GenBox's `_safe_create`. Log Azure's response
+  body on failure (`format_http_error`); httpx's message alone omits the reason. Sora 2 has **no
   seed**; `input_reference` rejects human faces. The Videos API is announced for shutdown ~Sep 24
   2026 — the tool is behind the registry so a successor can replace it.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
@@ -101,5 +113,10 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   (see `orchestrator._run_async`, dashboard OAuth callback). Keep platform methods async.
 - **Secrets**: `.env`, `tokens.key`, and `data/` are git-ignored. Never commit tokens or print
   decrypted ones. The dashboard has no auth of its own.
+- **One worker only** when serving `aismm.wsgi:application`: the dashboard re-syncs APScheduler jobs
+  *in-process* (`scheduler.refresh_jobs`), so extra workers each get their own scheduler that the
+  dashboard never talks to. `setup_service.sh` pins `--workers 1 --threads N` for this reason. Set
+  `AISMM_ENABLE_SCHEDULER=0` (read in [config.py](aismm/config.py), honored by
+  [wsgi.py](aismm/wsgi.py)) to serve the dashboard alone; `aismm run`/`scheduler` ignore the flag.
 - **Live posting** requires real, approved developer apps (IG App Review, TikTok audit → else
   `SELF_ONLY`, YouTube quota). Default new instructions to `dry_run`.

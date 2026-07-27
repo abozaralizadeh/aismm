@@ -60,6 +60,10 @@ class SoraSettings:
     keys: list[str] = field(default_factory=list)
     models: list[str] = field(default_factory=lambda: ["sora-2"])
     api_version: str = "preview"
+    # How many resources one clip may try before giving up. 0 = auto
+    # (min(pool size, 3)) — enough to route around a dead endpoint without
+    # burning a whole run on a pool of slow timeouts.
+    max_attempts: int = 0
 
     def pool(self) -> list[dict]:
         """Return the Sora resource pool as a list of {endpoint, key, model}.
@@ -110,6 +114,8 @@ class Settings:
     sora: SoraSettings
     dashboard: DashboardSettings
     platform_creds: dict[str, PlatformCreds]
+    # Whether a server process (see aismm/wsgi.py) also runs the scheduler.
+    enable_scheduler: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -180,6 +186,7 @@ def load_settings() -> Settings:
             keys=_split_csv(os.getenv("AZURE_OPENAI_API_KEY_SORA")),
             models=_split_csv(os.getenv("AZURE_OPENAI_MODEL_SORA")) or ["sora-2"],
             api_version=os.getenv("AZURE_OPENAI_API_VERSION_SORA", "preview"),
+            max_attempts=int(os.getenv("SORA_MAX_ATTEMPTS", "0") or 0),
         ),
         dashboard=DashboardSettings(
             host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
@@ -188,6 +195,7 @@ def load_settings() -> Settings:
             secret_key=os.getenv("FLASK_SECRET_KEY", "change-me"),
         ),
         platform_creds=_load_platform_creds(),
+        enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
     )
 
 

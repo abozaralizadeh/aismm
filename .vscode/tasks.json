@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "aismm: setup venv + install deps",
+      "type": "shell",
+      "command": "python3 -m venv .venv && ./.venv/bin/pip install --upgrade pip && ./.venv/bin/pip install -r requirements.txt",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "aismm: create .env from example",
+      "type": "shell",
+      "command": "test -f .env && echo '.env already exists — leaving it alone' || (cp .env.example .env && echo 'Created .env — fill in your Azure OpenAI creds')",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "aismm: pytest",
+      "type": "shell",
+      "command": "./.venv/bin/python -m pytest -q",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "aismm: run (scheduler + dashboard)",
+      "type": "shell",
+      "command": "./.venv/bin/python -m aismm.cli run",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated" }
+    },
+    {
+      "label": "aismm: gunicorn (production-style, 1 worker)",
+      "type": "shell",
+      "command": "./.venv/bin/gunicorn -w 1 --threads 8 --timeout 1800 -b 127.0.0.1:8787 aismm.wsgi:application",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated" }
+    }
+  ]
+}

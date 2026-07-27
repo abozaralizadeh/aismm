@@ -20,7 +20,7 @@ new platform or a new tool with a single file.
 - [Configuration](#configuration) · [Azure vs APIM](#azure-openai-or-apim) · [Sora / images](#media-generation-sora-2--images) · [env reference](#environment-variable-reference)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
 - [The public-media-URL caveat (Instagram)](#the-public-media-url-caveat)
-- [Running it](#running-it)
+- [Running it](#running-it) · [VS Code debugging](#debugging-in-vs-code) · [Deploying (systemd)](#deploying-on-a-server-systemd)
 - [Extending the framework](#extending-the-framework)
 - [Project layout](#project-layout)
 - [Security](#security) · [Caveats](#caveats--limitations) · [References](#references)
@@ -137,10 +137,11 @@ Both paths build one shared `OpenAIResponsesModel` and register it as the SDK de
 ```ini
 # Sora 2 video (comma-separated pools spread load; each job stays pinned to its resource —
 # point these DIRECTLY at each resource, never at a round-robin gateway).
-AZURE_OPENAI_ENDPOINT_SORA=https://<sora-resource>.openai.azure.com
-AZURE_OPENAI_API_KEY_SORA=...
+AZURE_OPENAI_ENDPOINT_SORA=https://<sora-a>.openai.azure.com,https://<sora-b>.openai.azure.com
+AZURE_OPENAI_API_KEY_SORA=<key-for-a>,<key-for-b>
 AZURE_OPENAI_MODEL_SORA=sora-2
 AZURE_OPENAI_API_VERSION_SORA=preview
+SORA_MAX_ATTEMPTS=0             # resources one clip may try; 0 = auto (pool size, max 3)
 
 # Images (gpt-image-1) — a separate Azure resource, optional
 AZURE_OPENAI_API_KEY_DALLE=...
@@ -149,6 +150,22 @@ AZURE_OPENAI_MODEL_DALLE=gpt-image-1
 ```
 
 Either can be left blank — the corresponding tool then disables itself and the agent works without it.
+
+**Load balancing across several Sora resources** (same scheme as SandBox/GenBox). List the endpoints
+and keys comma-separated and **aligned by index** — the *n*-th key belongs to the *n*-th endpoint. A
+single key or model is reused for every endpoint; that's only correct when the resources genuinely
+share it, so list one key per endpoint when they differ.
+
+Clips are balanced **at the job level**: [`sora_config.next_resource()`](aismm/tools/sora_config.py)
+round-robins a resource, and the whole create → poll → download lifecycle runs against that one.
+A Sora job id only exists on the resource that created it, so this affinity is mandatory — putting a
+round-robin gateway in front of the pool would send each call to a backend that never heard of the
+job. If an attempt fails, `create_clip_with_failover` retries on a **different** resource (excluding
+ones that already failed this clip), so a single endpoint that is out of credits, throttled, or
+missing the deployment can't sink the post. The Azure response body is kept in the log line, which is
+where the actual reason (`InsufficientQuota`, content filter, …) appears. With one resource
+configured, the same code simply retries in place.
+
 > **Note:** Sora 2's Videos API is announced for shutdown ~**Sep 24 2026**. The video tool sits behind
 > the [tool registry](#add-a-tool) so a successor model can replace it in one file.
 
@@ -160,7 +177,8 @@ Either can be left blank — the corresponding tool then disables itself and the
 | `AZURE_OPENAI_MODEL` | Chat deployment name (both providers). |
 | `AZURE_OPENAI_API_KEY` / `_ENDPOINT` / `_API_VERSION` | Azure-direct LLM. |
 | `APIM_BASE_URL` / `APIM_SUBSCRIPTION_KEY` / `APIM_KEY_HEADER` / `APIM_API_VERSION` | APIM LLM. |
-| `AZURE_OPENAI_ENDPOINT_SORA` / `_API_KEY_SORA` / `_MODEL_SORA` / `_API_VERSION_SORA` | Sora 2 pool. |
+| `AZURE_OPENAI_ENDPOINT_SORA` / `_API_KEY_SORA` / `_MODEL_SORA` / `_API_VERSION_SORA` | Sora 2 pool (comma-separated, index-aligned). |
+| `SORA_MAX_ATTEMPTS` | Resources one clip may try before failing; `0` = auto (pool size, capped at 3). |
 | `AZURE_OPENAI_API_KEY_DALLE` / `_ENDPOINT_DALLE` / `_MODEL_DALLE` | Image generation. |
 | `AISMM_TOKEN_KEY` | Fernet key for encrypting OAuth tokens (auto-generated to `tokens.key` if unset). |
 | `AISMM_DATA_DIR` | Where the SQLite DB + generated assets live (default `./data`). |
@@ -283,6 +301,61 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]   # run onc
 
 **Schedules** accept a 5-field cron expression (`0 9 * * *`) or an interval (`every 6h`, `30m`,
 `1d`). Editing an instruction in the dashboard live-reschedules its job.
+
+### Debugging in VS Code
+
+The repo ships a shared [`.vscode/`](.vscode) config (launch profiles, tasks, pytest wiring). Pick a
+profile from the Run and Debug panel:
+
+| Profile | What it starts |
+|---|---|
+| **AISMM: Run (scheduler + dashboard)** | Both in one process — the normal way to debug (`aismm run`) |
+| **AISMM: Full Stack (dashboard + scheduler)** | Compound: the two as **separate** debuggable processes |
+| AISMM: Dashboard (frontend) | Dashboard only, no scheduler |
+| AISMM: Scheduler (backend) | Headless scheduler only |
+| AISMM: Post one instruction | Prompts for an instruction id/name and runs it once |
+| AISMM: Smoke test LLM / Sora | The `scripts/smoke_*.py` checks |
+| AISMM: Attach (debugpy :5678) | Attaches to an already-running process |
+
+Breakpoints work inside the agent and the SDK (`justMyCode: false`), and the Flask reloader is off so
+the debugger keeps its process. Before the first launch, run the **aismm: setup venv + install deps**
+task (`Terminal → Run Task`) and copy `.env.example` to `.env`.
+
+Use the compound profile when you want to step through a scheduled run and a dashboard request
+independently. One caveat in that split mode: the dashboard's live re-scheduling talks to its own
+in-process scheduler, so instruction edits reach the separate scheduler process only when it
+restarts. The single-process profile has no such gap.
+
+### Deploying on a server (systemd)
+
+[`setup_service.sh`](setup_service.sh) installs — or updates and restarts — a systemd unit that runs
+the dashboard and scheduler under Gunicorn. Re-run it after every `git pull`; it is idempotent.
+
+```bash
+sudo ./setup_service.sh
+```
+
+It creates `.venv` and installs the deps if missing, creates `.env` from the example on first run
+(then stops so you can fill it in), fixes ownership on `data/` and `tokens.key`, writes
+`/etc/systemd/system/aismm.service`, and enables + (re)starts it. Overrides:
+
+```bash
+sudo SERVICE_NAME=aismm SERVICE_USER=ubuntu BIND_ADDR=0.0.0.0:8787 THREADS=8 ./setup_service.sh
+sudo SKIP_INSTALL=1 ./setup_service.sh    # leave the venv/pip alone
+```
+
+```bash
+journalctl -u aismm.service -f
+```
+
+The unit serves [`aismm/wsgi.py`](aismm/wsgi.py) with **one worker and multiple threads** — the
+scheduler has to share a process with the dashboard for live re-scheduling to work, so scale with
+`THREADS`, not workers. Set `AISMM_ENABLE_SCHEDULER=0` in `.env` to serve the dashboard alone.
+`--timeout 1800` is deliberate: an agent run plus a video upload can take many minutes.
+
+Put a TLS reverse proxy (nginx/Caddy) in front of it and set `DASHBOARD_BASE_URL` to that public
+https URL — OAuth callbacks and Instagram's media fetch both depend on it. The dashboard has **no
+authentication of its own**; do not expose it directly to the internet.
 
 ---
 

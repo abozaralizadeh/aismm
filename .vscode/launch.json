@@ -1,0 +1,143 @@
+{
+  // AISMM debug profiles. The "frontend" is the Flask dashboard (server-rendered
+  // Jinja templates), the "backend" is the APScheduler daemon + agent runs.
+  //
+  //   AISMM: Run (scheduler + dashboard)  → both in ONE process, like `aismm run`.
+  //                                          Use this one for normal debugging —
+  //                                          instruction edits re-sync the scheduler live.
+  //   AISMM: Full Stack (compound)        → dashboard + scheduler as TWO processes,
+  //                                          so each can be stepped through separately.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "AISMM: Run (scheduler + dashboard)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "aismm.cli",
+      "args": ["run"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONUNBUFFERED": "1", "AISMM_ENABLE_SCHEDULER": "1" },
+      "presentation": { "group": "1-run", "order": 1 }
+    },
+    {
+      "name": "AISMM: Dashboard (frontend)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "aismm.cli",
+      "args": ["dashboard"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "FLASK_DEBUG": "1",
+        "AISMM_ENABLE_SCHEDULER": "0"
+      },
+      "presentation": { "group": "2-split", "order": 1 }
+    },
+    {
+      "name": "AISMM: Scheduler (backend)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "aismm.cli",
+      "args": ["scheduler"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONUNBUFFERED": "1" },
+      "presentation": { "group": "2-split", "order": 2 }
+    },
+    {
+      "name": "AISMM: Post one instruction",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "aismm.cli",
+      "args": ["post", "--instruction", "${input:instructionId}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONUNBUFFERED": "1" },
+      "presentation": { "group": "3-cli", "order": 1 }
+    },
+    {
+      "name": "AISMM: List accounts + instructions",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "aismm.cli",
+      "args": ["list"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "presentation": { "group": "3-cli", "order": 2 }
+    },
+    {
+      "name": "AISMM: Smoke test LLM",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/smoke_llm.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "presentation": { "group": "4-smoke", "order": 1 }
+    },
+    {
+      "name": "AISMM: Smoke test Sora",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/smoke_sora.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "presentation": { "group": "4-smoke", "order": 2 }
+    },
+    {
+      "name": "AISMM: Pytest (current file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "${file}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "presentation": { "group": "5-test", "order": 1 }
+    },
+    {
+      "name": "AISMM: Attach (debugpy :5678)",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": { "host": "127.0.0.1", "port": 5678 },
+      "pathMappings": [
+        { "localRoot": "${workspaceFolder}", "remoteRoot": "." }
+      ],
+      "justMyCode": false,
+      "presentation": { "group": "6-attach", "order": 1 }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "AISMM: Full Stack (dashboard + scheduler)",
+      "configurations": [
+        "AISMM: Dashboard (frontend)",
+        "AISMM: Scheduler (backend)"
+      ],
+      "stopAll": true,
+      "presentation": { "group": "0-compound", "order": 1 }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "instructionId",
+      "type": "promptString",
+      "description": "Instruction id (prefix ok) or exact name — see `aismm list`"
+    }
+  ]
+}

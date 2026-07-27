@@ -21,5 +21,10 @@ venv/
 
 # OS / editors
 .DS_Store
-.vscode/
+.vscode/*
+# ...but the shared debug/run config IS checked in
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/

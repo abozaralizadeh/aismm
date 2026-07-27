@@ -14,7 +14,7 @@ from agents import function_tool
 from ..assets import public_url, save_bytes
 from . import sora_config
 from .registry import register_tool
-from .sora_client import generate_video_bytes
+from .sora_client import create_clip_with_failover
 
 logger = logging.getLogger("aismm.tools.video")
 
@@ -46,14 +46,18 @@ def _make_generate_video(state: dict):
         size = sora_config.SIZE_PORTRAIT if orientation.lower().startswith("p") else sora_config.SIZE_LANDSCAPE
         secs = sora_config.normalize_seconds(seconds)
         try:
-            mp4 = await generate_video_bytes(prompt, secs, size)
+            # Load-balanced across the Sora pool; fails over to another resource.
+            mp4, job_id, resource = await create_clip_with_failover(prompt, secs, size)
         except Exception as exc:  # noqa: BLE001
             state["video_failures"] = state.get("video_failures", 0) + 1
             logger.warning("generate_video failed: %s", exc)
             return {"error": "video_generation_failed", "message": str(exc)}
         path = save_bytes(mp4, "mp4")
+        # Keep the serving endpoint + job id on the asset: a Sora job is only
+        # addressable on the resource that created it (poll/download/remix).
         asset = {"path": path, "kind": "video", "public_url": public_url(path),
-                 "seconds": secs, "size": size}
+                 "seconds": secs, "size": size,
+                 "sora_endpoint": resource["endpoint"], "sora_job_id": job_id}
         state.setdefault("assets", []).append(asset)
         return {"asset_path": path, "public_url": asset["public_url"],
                 "kind": "video", "seconds": secs, "size": size}

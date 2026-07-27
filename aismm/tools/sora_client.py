@@ -13,6 +13,12 @@ A returned id only exists on the resource that served the create call, so poll /
 download / remix MUST target that SAME resource (see ``sora_config``). Auth is the
 Azure-style ``api-key`` header.
 
+**Load balancing** (same scheme as SandBox/GenBox): the pool round-robins at the
+JOB level — ``create_clip_with_failover`` picks one resource and runs the whole
+create/poll/download lifecycle against it, retrying on a *different* resource if
+that one fails. Never front these endpoints with a round-robin gateway; it would
+send each call of a job to a backend that has never heard of the job id.
+
 NOTE: Sora 2's Videos API is announced for shutdown ~Sep 24 2026. This client sits
 behind the tool registry so a successor video model can replace it.
 """
@@ -29,6 +35,26 @@ logger = logging.getLogger("aismm.sora")
 
 _SUCCESS_STATES = {"completed", "succeeded"}
 _FAILURE_STATES = {"failed", "cancelled", "canceled"}
+
+
+def format_http_error(exc: httpx.HTTPStatusError) -> str:
+    """Build an actionable message from an Azure error response (status + body).
+
+    httpx's own message stops at the status line, but Azure puts the reason a
+    resource refused the job — out of quota, deployment not found, content
+    filtered — in the response body. That is exactly what you need to know when
+    one endpoint in the pool starts failing, so keep the body (truncated).
+    """
+    resp = exc.response
+    if resp is None:
+        return str(exc)
+    try:
+        body = resp.text or ""
+    except Exception:  # noqa: BLE001 - body is best-effort diagnostics
+        body = ""
+    req = resp.request
+    where = f"{req.method} {req.url}" if req is not None else ""
+    return f"HTTP {resp.status_code} {resp.reason_phrase} ({where}): {body[:800]}"
 
 
 def _videos_url(resource: dict, suffix: str = "") -> str:
@@ -111,19 +137,50 @@ async def create_clip(resource, prompt, seconds, size, ref_image_bytes=None) -> 
     return await download_video_bytes(resource, job_id), job_id
 
 
-async def generate_video_bytes(prompt: str, seconds: int, size: str, *, max_attempts: int = 2) -> bytes:
-    """High-level: pick a resource and generate a clip, failing over to a different
-    resource on error (e.g. one endpoint out of credits). Returns MP4 bytes.
+async def create_clip_with_failover(
+    prompt: str, seconds: int, size: str, *,
+    ref_image_bytes: bytes | None = None, max_attempts: int | None = None,
+) -> tuple[bytes, str, dict]:
+    """Generate one clip, rotating to a DIFFERENT resource on each failure.
+
+    This is the load-balancing entry point (GenBox's ``_safe_create``): each
+    attempt takes the next resource round-robin while excluding the endpoints
+    that already failed *this* clip, so one dead resource — out of credits (401),
+    throttled (429), deployment missing (404) — can't consume every attempt. The
+    exclusion is dropped rather than emptying the pool, so a single-resource
+    setup still retries in place.
+
+    Returns ``(mp4_bytes, job_id, resource)``. The serving resource comes back
+    because a Sora job id only exists there: any follow-up call for this
+    clip (poll, download, remix) must target that same resource.
     """
+    attempts = max_attempts or config.max_attempts()
     tried: set[str] = set()
-    last_exc: Exception | None = None
-    for _ in range(max_attempts):
+    last_detail: str | None = None
+    for attempt in range(attempts):
         resource = config.next_resource(exclude_endpoints=tried)
         tried.add(resource["endpoint"])
         try:
-            mp4, _job = await create_clip(resource, prompt, seconds, size)
-            return mp4
-        except Exception as exc:  # noqa: BLE001 - failover to another resource
-            logger.warning("Sora clip failed on %s: %s", _host(resource), exc)
-            last_exc = exc
-    raise RuntimeError(f"Sora video generation failed after {max_attempts} attempt(s): {last_exc}")
+            mp4, job_id = await create_clip(resource, prompt, seconds, size, ref_image_bytes)
+            if attempt:
+                logger.info("Sora clip succeeded on %s after %d failed attempt(s)",
+                            _host(resource), attempt)
+            return mp4, job_id, resource
+        except httpx.HTTPStatusError as exc:
+            last_detail = format_http_error(exc)
+        except Exception as exc:  # noqa: BLE001 - network/timeout/etc. → try elsewhere
+            last_detail = f"{type(exc).__name__}: {exc}"
+        logger.warning("Sora clip failed (attempt %d/%d on %s): %s",
+                       attempt + 1, attempts, _host(resource), last_detail)
+    raise RuntimeError(
+        f"Sora video generation failed after {attempts} attempt(s) across "
+        f"{len(tried)} resource(s): {last_detail}"
+    )
+
+
+async def generate_video_bytes(prompt: str, seconds: int, size: str,
+                               *, max_attempts: int | None = None) -> bytes:
+    """Convenience wrapper over :func:`create_clip_with_failover` returning MP4 bytes."""
+    mp4, _job_id, _resource = await create_clip_with_failover(
+        prompt, seconds, size, max_attempts=max_attempts)
+    return mp4

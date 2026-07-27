@@ -19,6 +19,7 @@ cryptography>=42.0.0
 PyYAML>=6.0
 
 # --- Optional (uncomment as needed) ---
+# gunicorn>=21.2.0                     # WSGI server for `setup_service.sh` (installed by that script)
 # langsmith>=0.1.0                     # Agents SDK -> LangSmith tracing (gated on LANGCHAIN_* env)
 # google-api-python-client>=2.0.0      # convenience for YouTube resumable upload
 # google-auth-oauthlib>=1.0.0          # convenience for YouTube OAuth

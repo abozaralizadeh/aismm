@@ -7,10 +7,14 @@ turn, and prints the reply. A clean run proves the provider toggle + client are
 configured correctly. Does not require any social credentials.
 """
 import asyncio
+import sys
+from pathlib import Path
 
-from agents import Agent, Runner
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # run without `pip install -e .`
 
-from aismm.llm import build_model
+from agents import Agent, Runner  # noqa: E402
+
+from aismm.llm import build_model  # noqa: E402
 
 
 async def main() -> None:

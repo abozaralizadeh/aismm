@@ -33,6 +33,23 @@ def enabled() -> bool:
     return bool(pool())
 
 
+def pool_size() -> int:
+    return len(pool())
+
+
+def max_attempts() -> int:
+    """How many resources a single clip may try before giving up.
+
+    ``SORA_MAX_ATTEMPTS`` overrides; 0 (the default) means auto — every resource
+    in the pool, capped at 3 so one clip can't spend three poll timeouts' worth
+    of a run walking a large pool.
+    """
+    configured = settings.sora.max_attempts
+    if configured > 0:
+        return min(configured, max(pool_size(), 1))
+    return max(min(pool_size(), 3), 1)
+
+
 def next_resource(exclude_endpoints: set[str] | None = None) -> dict:
     """Round-robin pick of a usable ``{endpoint, key, model}`` resource.
 
