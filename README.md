@@ -183,6 +183,7 @@ configured, the same code simply retries in place.
 | `AISMM_TOKEN_KEY` | Fernet key for encrypting OAuth tokens (auto-generated to `tokens.key` if unset). |
 | `AISMM_DATA_DIR` | Where the SQLite DB + generated assets live (default `./data`). |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` / `DASHBOARD_BASE_URL` / `FLASK_SECRET_KEY` | Dashboard. |
+| `REVERSE_PROXY_PREFIX` | Optional dashboard path prefix, such as `/aismm`; applied to links, forms, assets, and OAuth URLs. |
 | `INSTAGRAM_APP_ID` / `_APP_SECRET` | Meta app. |
 | `TWITTER_CLIENT_ID` / `_CLIENT_SECRET` (+ `TWITTER_API_KEY`/`_API_SECRET`) | X app. |
 | `GOOGLE_CLIENT_ID` / `_CLIENT_SECRET` | YouTube (Google) app. |
@@ -190,8 +191,9 @@ configured, the same code simply retries in place.
 | `YOUTUBE_PRIVACY` / `TIKTOK_PRIVACY` | Default visibility (`private` / `SELF_ONLY`). |
 
 Every account's OAuth **redirect/callback URL** is:
-`<DASHBOARD_BASE_URL>/oauth/<platform>/callback` (e.g. `https://your-host/oauth/twitter/callback`).
-Register exactly this in each developer portal.
+`<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/oauth/<platform>/callback` (for example,
+`https://your-host/aismm/oauth/twitter/callback` when the prefix is `/aismm`). Omit the prefix when
+`REVERSE_PROXY_PREFIX` is empty. Register exactly this in each developer portal.
 
 ---
 
@@ -275,10 +277,10 @@ to **`SELF_ONLY`** visibility (`TIKTOK_PRIVACY`), so only the creator can see it
 ## The public-media-URL caveat
 
 **Instagram fetches your media from a public URL** — it does not accept a direct binary upload. AISMM
-serves generated assets at `<DASHBOARD_BASE_URL>/assets/<file>`, so **`DASHBOARD_BASE_URL` must be a
-public HTTPS address** for Instagram to work (use an ngrok tunnel locally, or deploy the dashboard).
-If it points at `localhost`/`127.0.0.1`, the Instagram integration raises a clear error instead of
-failing silently.
+serves generated assets at `<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/assets/<file>`, so
+**`DASHBOARD_BASE_URL` must be a public HTTPS address** for Instagram to work (use an ngrok tunnel
+locally, or deploy the dashboard). If it points at `localhost`/`127.0.0.1`, the Instagram
+integration raises a clear error instead of failing silently.
 
 X, YouTube, and TikTok upload the bytes directly, so they work without a public URL. For a fully
 cloud-hosted setup, implement the Azure Blob adapter (`aismm/store/azure_store.py`) and serve media
@@ -356,6 +358,17 @@ scheduler has to share a process with the dashboard for live re-scheduling to wo
 Put a TLS reverse proxy (nginx/Caddy) in front of it and set `DASHBOARD_BASE_URL` to that public
 https URL — OAuth callbacks and Instagram's media fetch both depend on it. The dashboard has **no
 authentication of its own**; do not expose it directly to the internet.
+
+To expose AISMM below a path, set `REVERSE_PROXY_PREFIX` as well. For example:
+
+```dotenv
+DASHBOARD_BASE_URL=https://example.com
+REVERSE_PROXY_PREFIX=/aismm
+```
+
+Then proxy `/aismm/` to `http://127.0.0.1:8787/`. AISMM accepts the prefix whether the proxy strips
+it or passes it upstream, and automatically generates paths such as `/aismm/runs`,
+`/aismm/assets/...`, and `/aismm/oauth/<platform>/callback`.
 
 ---
 

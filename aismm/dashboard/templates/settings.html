@@ -37,8 +37,9 @@ edit <code>.env</code> and restart to change it.</p>
 
 <h2>Dashboard</h2>
 <table class="kv">
-  <tr><td>Public base URL</td><td class="mono small">{{ settings.dashboard.base_url }}</td></tr>
-  <tr><td>OAuth redirect pattern</td><td class="mono small">{{ settings.dashboard.base_url }}/oauth/&lt;platform&gt;/callback</td></tr>
+  <tr><td>Public base URL</td><td class="mono small">{{ settings.dashboard.public_base_url }}</td></tr>
+  <tr><td>Reverse proxy prefix</td><td class="mono small">{{ settings.dashboard.reverse_proxy_prefix or '—' }}</td></tr>
+  <tr><td>OAuth redirect pattern</td><td class="mono small">{{ settings.dashboard.public_base_url }}/oauth/&lt;platform&gt;/callback</td></tr>
   <tr><td>Data dir</td><td class="mono small">{{ settings.data_dir }}</td></tr>
 </table>
 {% endblock %}

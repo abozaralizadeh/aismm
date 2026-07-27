@@ -2,8 +2,9 @@
 
 Media the agent generates (Sora MP4s, images) is written under the data dir's
 ``assets/`` folder and referenced by filename. The dashboard serves these at
-``<DASHBOARD_BASE_URL>/assets/<filename>`` — which is also the PUBLIC url
-Instagram needs to fetch media (see the Instagram platform + README).
+``<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/assets/<filename>`` — which is
+also the PUBLIC url Instagram needs to fetch media (see the Instagram platform
+and README).
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ def public_url(asset_path: str | None) -> str:
     if not asset_path:
         return ""
     name = Path(asset_path).name
-    return f"{settings.dashboard.base_url.rstrip('/')}/assets/{name}"
+    return settings.dashboard.external_url(f"assets/{name}")
 
 
 def kind_from_path(asset_path: str | None) -> str:

@@ -104,8 +104,8 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   seed**; `input_reference` rejects human faces. The Videos API is announced for shutdown ~Sep 24
   2026 — the tool is behind the registry so a successor can replace it.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
-  `DASHBOARD_BASE_URL/assets/<file>`; the IG integration raises if that resolves to localhost. X /
-  YouTube / TikTok upload bytes directly.
+  `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
+  resolves to localhost. X / YouTube / TikTok upload bytes directly.
 - **`WebSearchTool` is hosted** (runs in the Responses API). If a deployment/region lacks it, swap
   [tools/web_search.py](aismm/tools/web_search.py) for a fallback (LangChain `{"type":"web_search"}`,
   Tavily, DDG) — one file.

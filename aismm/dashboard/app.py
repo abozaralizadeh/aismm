@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import threading
+from collections.abc import Callable
 
 from flask import (
     Flask, abort, flash, redirect, render_template, request, send_from_directory, session, url_for,
@@ -22,9 +23,35 @@ from .. import orchestrator, scheduler
 from ..store import get_store
 
 
+class ReverseProxyPrefixMiddleware:
+    """Mount a WSGI app at a fixed prefix, whether nginx strips it or not."""
+
+    def __init__(self, app: Callable, prefix: str):
+        self.app = app
+        self.prefix = prefix
+
+    def __call__(self, environ: dict, start_response: Callable):
+        path = environ.get("PATH_INFO", "")
+        if path == self.prefix:
+            environ["PATH_INFO"] = "/"
+        elif path.startswith(f"{self.prefix}/"):
+            environ["PATH_INFO"] = path[len(self.prefix):]
+
+        script_name = environ.get("SCRIPT_NAME", "").rstrip("/")
+        if not (script_name == self.prefix or script_name.endswith(self.prefix)):
+            environ["SCRIPT_NAME"] = f"{script_name}{self.prefix}"
+        return self.app(environ, start_response)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = settings.dashboard.secret_key
+    prefix = settings.dashboard.reverse_proxy_prefix
+    if prefix:
+        # APPLICATION_ROOT covers cookies and URL generation outside requests;
+        # the middleware sets SCRIPT_NAME for normal proxied requests.
+        app.config["APPLICATION_ROOT"] = prefix
+        app.wsgi_app = ReverseProxyPrefixMiddleware(app.wsgi_app, prefix)
 
     # ---- helpers --------------------------------------------------------- #
     def _platforms_view():

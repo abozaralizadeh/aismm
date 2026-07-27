@@ -25,7 +25,7 @@ def cmd_run(_args) -> int:
     configure_tracing()
     scheduler.start()
     app = create_app()
-    print(f"AISMM dashboard → {settings.dashboard.base_url}  (scheduler running)")
+    print(f"AISMM dashboard → {settings.dashboard.public_base_url}  (scheduler running)")
     app.run(host=settings.dashboard.host, port=settings.dashboard.port,
             threaded=True, use_reloader=False)
     return 0
@@ -36,7 +36,7 @@ def cmd_dashboard(_args) -> int:
 
     ensure_dirs()
     app = create_app()
-    print(f"AISMM dashboard → {settings.dashboard.base_url}  (no scheduler)")
+    print(f"AISMM dashboard → {settings.dashboard.public_base_url}  (no scheduler)")
     app.run(host=settings.dashboard.host, port=settings.dashboard.port,
             threaded=True, use_reloader=False)
     return 0
@@ -73,7 +73,8 @@ def cmd_auth(args) -> int:
         print(f"{args.platform} app credentials are missing. Add them to your .env first.")
         return 1
     print("Connecting via the dashboard is recommended (it handles the OAuth callback).")
-    print(f"Start the dashboard, then open:\n  {settings.dashboard.base_url}/oauth/{args.platform}/start\n")
+    start_url = settings.dashboard.external_url(f"oauth/{args.platform}/start")
+    print(f"Start the dashboard, then open:\n  {start_url}\n")
     challenge = oauth.generate_pkce()[1] if integ.use_pkce else None
     url = integ.authorize_url(redirect_uri=settings.redirect_uri(args.platform),
                               state=oauth.random_state(), code_challenge=challenge)

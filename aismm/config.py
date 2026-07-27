@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,19 @@ def _bool(value: str | None, default: bool = False) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _path_prefix(value: str | None) -> str:
+    """Normalize a reverse-proxy path prefix to ``/path`` or ``""``."""
+    raw = (value or "").strip()
+    if not raw or raw == "/":
+        return ""
+    if "://" in raw or "?" in raw or "#" in raw:
+        raise ValueError("REVERSE_PROXY_PREFIX must be a URL path, for example /aismm")
+    parts = [part for part in raw.split("/") if part]
+    if any(part in {".", ".."} for part in parts):
+        raise ValueError("REVERSE_PROXY_PREFIX cannot contain '.' or '..' path segments")
+    return "/" + "/".join(parts)
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,29 @@ class DashboardSettings:
     port: int = 8787
     base_url: str = "http://127.0.0.1:8787"
     secret_key: str = "change-me"
+    reverse_proxy_prefix: str = ""
+
+    @property
+    def public_base_url(self) -> str:
+        """Dashboard URL, including the configured reverse-proxy path prefix."""
+        base_url = self.base_url.rstrip("/")
+        prefix = self.reverse_proxy_prefix
+        if not prefix:
+            return base_url
+
+        parsed = urlsplit(base_url)
+        base_path = parsed.path.rstrip("/")
+        # Keep supporting deployments that already included the prefix in
+        # DASHBOARD_BASE_URL before REVERSE_PROXY_PREFIX was introduced.
+        if base_path == prefix or base_path.endswith(prefix):
+            return base_url
+        return urlunsplit(parsed._replace(path=f"{base_path}{prefix}"))
+
+    def external_url(self, path: str = "") -> str:
+        """Build an absolute public dashboard URL under the proxy prefix."""
+        if not path:
+            return self.public_base_url
+        return f"{self.public_base_url}/{path.lstrip('/')}"
 
 
 @dataclass(frozen=True)
@@ -130,7 +167,7 @@ class Settings:
         return f"sqlite:///{self.db_path}"
 
     def redirect_uri(self, platform: str) -> str:
-        return f"{self.dashboard.base_url.rstrip('/')}/oauth/{platform}/callback"
+        return self.dashboard.external_url(f"oauth/{platform}/callback")
 
 
 def _load_platform_creds() -> dict[str, PlatformCreds]:
@@ -193,6 +230,7 @@ def load_settings() -> Settings:
             port=int(os.getenv("DASHBOARD_PORT", "8787")),
             base_url=os.getenv("DASHBOARD_BASE_URL", "http://127.0.0.1:8787"),
             secret_key=os.getenv("FLASK_SECRET_KEY", "change-me"),
+            reverse_proxy_prefix=_path_prefix(os.getenv("REVERSE_PROXY_PREFIX")),
         ),
         platform_creds=_load_platform_creds(),
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
