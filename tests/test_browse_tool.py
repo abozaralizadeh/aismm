@@ -132,3 +132,33 @@ def test_close_browser_swallows_teardown_errors():
     state = {"_browser": Boom(), "_playwright": stopper}
     asyncio.run(browse_tool.close_browser(state))    # error must not propagate
     assert stopper.stopped is True                   # ...and stop() still ran
+
+
+# --- image extraction shape ---------------------------------------------------------- #
+
+@pytest.mark.parametrize("image,expected", [
+    ({"src": "https://x/favicon.ico", "width": 512, "height": 512}, True),
+    ({"src": "https://x/static/icons/a.png", "width": 512, "height": 512}, True),
+    ({"src": "https://x/pixel.gif", "width": 1, "height": 1}, True),      # tracking pixel
+    ({"src": "", "width": 900, "height": 900}, True),                     # never loaded
+    ({"src": "https://x/panel1.jpg", "width": 1536, "height": 1024}, False),
+    ({"src": "https://x/panel2.jpg", "width": 0, "height": 0}, False),    # unknown size: keep
+])
+def test_decorative_images_are_filtered(image, expected):
+    assert browse_tool._is_decorative(image) is expected
+
+
+def test_extraction_js_prefers_the_full_resolution_source():
+    """A thumbnail in src often has the real asset in data-full/srcset."""
+    js = browse_tool._EXTRACT_IMAGES_JS
+    for attr in ("data-full", "data-src", "data-original", "data-lazy-src"):
+        assert attr in js
+    assert "srcset" in js
+    assert "alt" in js and "caption" in js
+
+
+def test_lazy_images_are_forced_to_load():
+    """loading=lazy images never populate unless eagerly loaded or scrolled to."""
+    js = browse_tool._LOAD_IMAGES_JS
+    assert 'loading="lazy"' in js and "eager" in js
+    assert "scrollTo" in js

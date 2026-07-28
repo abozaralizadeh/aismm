@@ -12,7 +12,7 @@ import logging
 from agents import Agent, ModelSettings, Runner
 
 from ..llm import build_model
-from ..models import Account, Instruction, Run
+from ..models import Account, Instruction, Run, RunStatus
 from ..platforms.registry import get_platform
 from ..store.base import Store
 from ..tools import build_tools
@@ -61,17 +61,23 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         if not state.get("result"):
             assets = state.get("assets", [])
             asset_hint = (
-                f"You already generated media at: {assets[-1]['path']} "
-                f"(kind={assets[-1]['kind']}). Use it. "
-                if assets else "Generate media if the platform requires it. "
+                f"You already have media at: {assets[-1]['path']} "
+                f"(kind={assets[-1]['kind']}) — use it if it fits the brief."
+                if assets else ""
             )
             memory_hint = (
                 "" if state.get("memory_written")
                 else "Also call update_memory with where you got to. "
             )
             nudge = (
-                "You did not finish. " + asset_hint + memory_hint +
-                "Write the final caption and call the publish tool now, exactly once."
+                "You did not finish this run. " + memory_hint +
+                "End it now with exactly one terminal call:\n"
+                "- publish, IF you have a real post that satisfies the brief. "
+                + asset_hint +
+                "\n- report_failure, if you could not carry out the instruction. "
+                "Do NOT publish a post that describes the problem, apologises, or "
+                "substitutes invented content for what you failed to fetch — a "
+                "failed run is the correct outcome there."
             )
             logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
             # Continue the SAME conversation so prior tool outputs/assets are retained.
@@ -89,4 +95,17 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     # fatal — a failed compaction leaves the memory untouched.
     await maybe_compact(instruction.id, store)
 
-    return state.get("result") or {"error": "no_publish", "message": "Agent did not publish."}
+    if state.get("result"):
+        return state["result"]
+
+    # Neither terminal tool was called even after the nudge. That is a failed
+    # run, recorded as one — not a silent no-op the operator never sees.
+    message = ("The agent ended without calling publish or report_failure. "
+               "Check the tool errors above for what blocked it.")
+    logger.error("Run ended with no terminal call | instruction='%s' account=%s",
+                 instruction.name, account.handle or account.external_id)
+    run.status = RunStatus.failed
+    run.error = message
+    run.log = (run.log + "\nFAILED: no terminal tool call.").strip()
+    store.update_run(run)
+    return {"error": "no_terminal_call", "message": message}

@@ -255,3 +255,37 @@ def test_operator_can_reset_the_memory_from_the_dashboard(store, instruction, mo
         "note": "", "memory": "",
     })
     assert store.get_state(instruction.id).memory == ""
+
+
+# --- runs page ------------------------------------------------------------------- #
+
+def test_runs_page_links_each_run_to_its_instruction(store, instruction, monkeypatch):
+    """A run is meaningless without knowing which instruction produced it."""
+    from aismm.dashboard import app as app_module
+    from aismm.models import Account, PlatformName, Run
+
+    account = store.upsert_account(Account(platform=PlatformName.instagram, handle="demo",
+                                           external_id="1"), access_token="t")
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
+    monkeypatch.setattr(app_module, "get_store", lambda: store)
+    app = app_module.create_app()
+    app.secret_key = "test"
+
+    page = app.test_client().get("/runs").get_data(as_text=True)
+    assert instruction.name in page
+    assert f"/instructions/{instruction.id}/edit" in page      # clickable
+    assert "instagram" in page and "demo" in page              # which account too
+
+
+def test_runs_page_survives_a_deleted_instruction(store, monkeypatch):
+    from aismm.dashboard import app as app_module
+    from aismm.models import Run
+
+    store.add_run(Run(instruction_id="gone-forever", account_id="also-gone"))
+    monkeypatch.setattr(app_module, "get_store", lambda: store)
+    app = app_module.create_app()
+    app.secret_key = "test"
+
+    response = app.test_client().get("/runs")
+    assert response.status_code == 200
+    assert "deleted instruction" in response.get_data(as_text=True)

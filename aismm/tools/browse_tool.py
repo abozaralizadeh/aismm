@@ -37,6 +37,8 @@ from .registry import register_tool
 logger = logging.getLogger("aismm.tools.browse")
 
 _NAV_TIMEOUT_MS = 45_000
+_IDLE_TIMEOUT_MS = 15_000      # client-side rendering settle
+_SELECTOR_TIMEOUT_MS = 20_000
 _TEXT_LIMIT = 12_000          # chars of page text returned to the model
 _LINK_LIMIT = 60
 _MEDIA_LIMIT = 40
@@ -113,8 +115,83 @@ async def close_browser(state: dict) -> None:
 
 # --- tools --------------------------------------------------------------------- #
 
-async def perform_browse_page(state: dict, url: str, scroll: bool = True) -> dict:
-    """Render one page and extract text/links/media (extracted for testability)."""
+# Collects every image on the page with the context an agent needs to pick the
+# right one: its alt text ("Panel 1"), its real dimensions, the full-resolution
+# source hiding in data-full/data-src/srcset, and the text of the block it sits
+# in (a comic panel's dialogue, a figure's caption).
+_EXTRACT_IMAGES_JS = """
+() => {
+  const best = (img) => {
+    // A thumbnail in src often has the full asset in a data attribute or srcset.
+    for (const attr of ['data-full', 'data-src', 'data-original', 'data-lazy-src']) {
+      const v = img.getAttribute(attr);
+      if (v) return v;
+    }
+    if (img.srcset) {
+      const last = img.srcset.split(',').pop().trim().split(/\\s+/)[0];
+      if (last) return last;
+    }
+    return img.currentSrc || img.src || '';
+  };
+  const caption = (img) => {
+    const fig = img.closest('figure');
+    if (fig && fig.innerText.trim()) return fig.innerText.trim();
+    let node = img.parentElement;
+    for (let i = 0; i < 4 && node; i++) {
+      const t = (node.innerText || '').trim();
+      if (t.length > 20) return t;
+      node = node.parentElement;
+    }
+    return '';
+  };
+  return [...document.images].map(img => ({
+    src: img.currentSrc || img.src || '',
+    full: best(img),
+    alt: (img.alt || '').trim(),
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+    caption: caption(img).slice(0, 600),
+  }));
+}
+"""
+
+# Force lazy images to load, then scroll so viewport-triggered ones fire too.
+_LOAD_IMAGES_JS = """
+async () => {
+  document.querySelectorAll('img[loading="lazy"]').forEach(i => { i.loading = 'eager'; });
+  for (let y = 0; y < document.body.scrollHeight; y += 600) {
+    window.scrollTo(0, y);
+    await new Promise(r => setTimeout(r, 100));
+  }
+  window.scrollTo(0, 0);
+  await Promise.all([...document.images]
+    .filter(i => !i.complete)
+    .map(i => new Promise(res => { i.onload = i.onerror = res; setTimeout(res, 3000); })));
+}
+"""
+
+
+def _is_decorative(image: dict) -> bool:
+    """Drop favicons, tracking pixels and spacers — never what the agent wants."""
+    src = (image.get("src") or "").lower()
+    if not src:
+        return True
+    if "favicon" in src or "/static/icon" in src:
+        return True
+    width, height = image.get("width") or 0, image.get("height") or 0
+    return bool(width and height and (width < 64 or height < 64))
+
+
+async def perform_browse_page(state: dict, url: str, scroll: bool = True,
+                              wait_for: str = "") -> dict:
+    """Render one page and extract text/links/media (extracted for testability).
+
+    Waiting is the hard part: many pages render their real content from
+    JavaScript *after* DOMContentLoaded, so extracting too early returns the
+    loading skeleton ("Generating…") and none of the images. We therefore wait
+    for the network to go idle, optionally for a caller-supplied selector, and
+    then force lazy images to load before reading the DOM.
+    """
     ok, why = is_public_url(url)
     if not ok:
         return {"error": "url_not_allowed", "message": why}
@@ -123,18 +200,32 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True) -> dic
         page = await browser.new_page()
         try:
             await page.goto(url, timeout=_NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            # Let client-side rendering finish. networkidle is best-effort: a page
+            # with polling/analytics never reaches it, so a timeout is not fatal.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=_IDLE_TIMEOUT_MS)
+            except Exception:  # noqa: BLE001
+                logger.debug("networkidle not reached for %s; continuing", url)
+            if wait_for:
+                try:
+                    await page.wait_for_selector(wait_for, timeout=_SELECTOR_TIMEOUT_MS)
+                except Exception:  # noqa: BLE001
+                    logger.info("wait_for selector %r never appeared on %s", wait_for, url)
             if scroll:
-                await page.evaluate(
-                    "async () => { for (let y = 0; y < document.body.scrollHeight; y += 800)"
-                    " { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 120)); } }")
+                await page.evaluate(_LOAD_IMAGES_JS)
+                # One more settle: scrolling usually triggers further fetches.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=_IDLE_TIMEOUT_MS)
+                except Exception:  # noqa: BLE001
+                    pass
+
             title = await page.title()
             text = await page.evaluate(
                 "() => (document.querySelector('article, main') || document.body).innerText")
             links = await page.eval_on_selector_all(
                 "a[href]", "els => els.map(e => ({text: e.innerText.trim().slice(0, 120),"
                            " href: e.href})).filter(l => l.href.startsWith('http'))")
-            images = await page.eval_on_selector_all(
-                "img", "els => els.map(e => e.currentSrc || e.src).filter(Boolean)")
+            images = await page.evaluate(_EXTRACT_IMAGES_JS)
             videos = await page.eval_on_selector_all(
                 "video, video source",
                 "els => els.map(e => e.currentSrc || e.src).filter(Boolean)")
@@ -146,28 +237,44 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True) -> dic
 
     text = (text or "").strip()
     truncated = len(text) > _TEXT_LIMIT
-    # De-duplicate while preserving order, resolving relative URLs.
-    seen: set[str] = set()
 
-    def _uniq(items, limit):
-        out = []
-        for item in items:
-            absolute = urljoin(url, item)
-            if absolute not in seen:
-                seen.add(absolute)
-                out.append(absolute)
-            if len(out) >= limit:
-                break
-        return out
+    kept, seen = [], set()
+    for image in images or []:
+        if _is_decorative(image):
+            continue
+        absolute = urljoin(url, image.get("full") or image.get("src") or "")
+        if not absolute or absolute in seen:
+            continue
+        seen.add(absolute)
+        kept.append({
+            "url": absolute,
+            "alt": image.get("alt", ""),
+            "width": image.get("width") or 0,
+            "height": image.get("height") or 0,
+            "caption": (image.get("caption") or "").strip(),
+        })
+        if len(kept) >= _MEDIA_LIMIT:
+            break
 
+    video_urls, seen_videos = [], set()
+    for item in videos or []:
+        absolute = urljoin(url, item)
+        if absolute not in seen_videos:
+            seen_videos.add(absolute)
+            video_urls.append(absolute)
+        if len(video_urls) >= _MEDIA_LIMIT:
+            break
+
+    logger.info("browse_page %s -> %d chars, %d image(s), %d link(s)",
+                url, len(text), len(kept), len(links or []))
     return {
         "url": url,
         "title": title,
         "text": text[:_TEXT_LIMIT],
         "text_truncated": truncated,
         "links": [{"text": l["text"], "href": l["href"]} for l in (links or [])[:_LINK_LIMIT]],
-        "images": _uniq(images or [], _MEDIA_LIMIT),
-        "videos": _uniq(videos or [], _MEDIA_LIMIT),
+        "images": kept,
+        "videos": video_urls,
     }
 
 
@@ -176,21 +283,30 @@ def _make_browse_page(state: dict):
         return None
 
     @function_tool
-    async def browse_page(url: str, scroll: bool = True) -> dict:
+    async def browse_page(url: str, scroll: bool = True, wait_for: str = "") -> dict:
         """Open a web page in a real browser and read it.
 
         Runs JavaScript, so it works on pages that a plain HTTP fetch returns
-        empty. Returns the page title, its visible text, the links it contains,
-        and the image/video URLs found on it. Pass an image or video URL to
-        ``save_media`` to download it for posting.
+        empty. Returns the page title, its visible text, its links, and its
+        media. Each image comes back as
+        ``{url, alt, width, height, caption}`` — ``alt`` often identifies it
+        ("Panel 1"), ``caption`` is the text of the block around it (a comic
+        panel's dialogue, a figure's caption), and ``url`` is the FULL-resolution
+        source when the page exposes one. Pass that ``url`` to ``save_media`` to
+        download it for posting. Decorative images (favicons, tracking pixels,
+        anything under 64px) are filtered out.
 
         Args:
             url: Absolute http(s) URL to open.
             scroll: Scroll to the bottom first so lazy-loaded images and
                 infinite-scroll items are present. Leave true for feeds and
                 article lists.
+            wait_for: Optional CSS selector to wait for before reading the page.
+                Use it when the content is drawn by JavaScript and the first
+                attempt came back with a placeholder ("Loading…", "Generating…")
+                or no images — e.g. "img[alt^=Panel]" or ".comic-panels img".
         """
-        return await perform_browse_page(state, url, scroll)
+        return await perform_browse_page(state, url, scroll, wait_for)
 
     return browse_page
 

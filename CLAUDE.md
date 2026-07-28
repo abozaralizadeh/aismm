@@ -49,6 +49,14 @@ calls the agent → [agent/manager_agent.py](aismm/agent/manager_agent.py) build
 per-run tools and does `Runner.run` + deterministic recovery → the agent finishes by calling the
 **`publish`** tool, which **gates on `instruction.publish_mode`** in code.
 
+**A run has two terminal tools**: `publish` OR `report_failure`
+([tools/failure_tool.py](aismm/tools/failure_tool.py)). Publishing is not mandatory — the prompt
+previously said "Always finish by calling publish", and a blocked agent duly generated a video and
+published a caption explaining the problem. Keep all four parts intact: the prompt's "WHEN YOU CANNOT
+DO THE JOB" section, the recovery nudge offering both endings, `meta_caption_reason` in publish_tool
+(refuses first-person failure captions; keep it narrow — blocking real copy is worse), and the
+no-terminal-call fallback that marks the run failed.
+
 The publish gate is the core design point (autonomy + guardrail): the agent always "publishes", but
 `perform_publish` in [tools/publish_tool.py](aismm/tools/publish_tool.py) does:
 `dry_run` → StagedPost(preview) · `approval` → StagedPost(pending) → dashboard Approve → platform API
@@ -151,7 +159,12 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   new setting would change behavior under test.
 - **Playwright browsing** ([tools/browse_tool.py](aismm/tools/browse_tool.py)): one Chromium per run,
   cached on `state["_browser"]` and closed by `manager_agent` in a `finally` — AIBlog's lesson is
-  that a browser finalized later by GC raises "Event loop is closed". The browser *binary* is a
+  that a browser finalized later by GC raises "Event loop is closed". **Wait properly or you scrape
+  the loading skeleton**: `domcontentloaded` alone returns "Generating…" and zero images on
+  JS-rendered pages, so we also wait for `networkidle`, force `loading="lazy"` images eager, scroll,
+  and accept a `wait_for` selector. Images are returned as `{url, alt, width, height, caption}` with
+  `url` preferring `data-full`/`data-src`/`srcset` over the `src` thumbnail — an agent working
+  through numbered panels needs the alt text and the surrounding dialogue, not a bare URL. The browser *binary* is a
   separate install (`playwright install chromium`), per-user; `setup_service.sh` runs `install-deps`
   as root but the download as the service user, or the service can't find it. The agent picks the
   URL, so `is_public_url` refuses private/loopback/link-local addresses (cloud instance metadata).

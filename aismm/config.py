@@ -240,6 +240,9 @@ class Settings:
     enable_scheduler: bool = True
     # Carry-over memory is summarized once it grows past this many characters.
     memory_max_chars: int = 6000
+    # Refuse to publish a caption that narrates the run's own failure. See
+    # tools/publish_tool.meta_caption_reason.
+    publish_content_guard: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -366,6 +369,7 @@ def load_settings() -> Settings:
         store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
         memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
+        publish_content_guard=_bool(os.getenv("PUBLISH_CONTENT_GUARD"), True),
     )
 
 

@@ -217,7 +217,8 @@ def create_app() -> Flask:
         store = get_store()
         return render_template("runs.html", runs=store.list_runs(limit=100),
                                pending=store.list_staged(pending_only=True),
-                               accounts={a.id: a for a in store.list_accounts()})
+                               accounts={a.id: a for a in store.list_accounts()},
+                               instructions={i.id: i for i in store.list_instructions()})
 
     @app.route("/staged/<staged_id>/approve", methods=["POST"])
     def approve(staged_id):

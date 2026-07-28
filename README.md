@@ -365,9 +365,28 @@ judgement. It applies from the next run; clear the box to withdraw it. The agent
 ### Browsing real pages
 
 `browse_page` opens a URL in headless Chromium (**Playwright** — the engine SandBox/AIBlog uses;
-free, no API key) and returns the title, visible text, links, and image/video URLs. Because it runs
-JavaScript it works on pages a plain fetch returns empty. `save_media` then downloads one of those
-images or videos into the assets dir, so it can be passed to `publish` like generated media.
+free, no API key) and returns the title, visible text, links, and media. `save_media` then downloads
+one of those images or videos into the assets dir, so it can be passed to `publish` like generated
+media.
+
+Each image comes back with the context needed to pick the right one:
+
+```json
+{"url": "https://…/20260513_0335_da11.png", "alt": "Panel 1",
+ "width": 1536, "height": 1024,
+ "caption": "At dawn, Nerina drags Mira up the sealed lighthouse…"}
+```
+
+- `url` is the **full-resolution** source when the page exposes one in `data-full`, `data-src` or
+  `srcset` — not the thumbnail or proxy URL in `src`.
+- `alt` is often the identifier you need for ordered work ("Panel 1", "Panel 2").
+- `caption` is the text of the block the image sits in — a comic panel's dialogue, a figure's caption.
+- Favicons, tracking pixels and anything under 64px are filtered out.
+
+**Pages that render from JavaScript** are the common failure. `browse_page` waits for the network to
+go idle, forces `loading="lazy"` images to load, and scrolls — without that you get the loading
+skeleton ("Generating…") and no images at all. If a page is still not ready, pass `wait_for` with a
+CSS selector (`"img[alt^=Panel]"`) and it will wait for that element to appear.
 
 Use it when the brief names a specific site; `web_search` remains better for open research.
 
@@ -384,6 +403,35 @@ same way the Sora tool does when unconfigured.
 > the model. And media you download belongs to someone else: the agent is told to post it only when
 > the brief or your note says that source may be reused, and to credit it. Rights are your call, not
 > the model's.
+
+---
+
+## When a run can't do its job, it fails
+
+A run has **two** legitimate endings, and the agent picks one:
+
+| Tool | Meaning |
+|---|---|
+| `publish` | There is a real post that satisfies the brief. |
+| `report_failure` | The work could not be done — nothing is posted. |
+
+`report_failure` records the run as **failed** with the agent's own diagnosis (what it tried, which
+URLs, what came back), visible in the Runs table and the service log. A failed run is a normal
+outcome; a wrong post is not.
+
+Three things enforce that a blocked run doesn't turn into a bad post:
+
+1. **The prompt** says publishing is not mandatory, and never to publish a post *about* the problem
+   or a substitute for content it failed to fetch.
+2. **The recovery nudge** (which fires when a run ends without a terminal call) offers both endings
+   instead of demanding a publish.
+3. **A code guard** refuses a caption written in the agent's own failure voice — "I was unable to
+   retrieve…", "Unable to load…", tool names, "as an AI language model", apologies — and tells it to
+   call `report_failure` instead. It is deliberately narrow so real copy survives: *"Investigators
+   could not find the black box"* and *"I couldn't believe the sunrise"* both publish fine.
+   `PUBLISH_CONTENT_GUARD=0` disables it.
+
+A run that ends without calling either tool is also recorded as failed, rather than passing silently.
 
 ---
 
@@ -643,6 +691,9 @@ the dashboard and scheduler under Gunicorn. Re-run it after every `git pull`; it
 ```bash
 sudo ./setup_service.sh
 ```
+
+Re-running is cheap: pip runs **only when `requirements.txt` has changed** (a hash is stamped into
+the venv), and Chromium is downloaded only when it's missing. `FORCE_INSTALL=1` reinstalls anyway.
 
 It creates `.venv` and installs the deps if missing, creates `.env` from the example on first run
 (then stops so you can fill it in), fixes ownership on `data/` and `tokens.key`, writes

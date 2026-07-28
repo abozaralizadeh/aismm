@@ -18,7 +18,10 @@
       {% endif %}
     </div>
     <div class="staged-body">
-      <div class="muted small">{{ accounts.get(s.account_id).platform.value if accounts.get(s.account_id) else s.account_id }}
+      <div class="muted small">
+        {% set instr = instructions.get(s.instruction_id) %}
+        {% if instr %}<a href="{{ url_for('edit_instruction', instruction_id=instr.id) }}">{{ instr.name }}</a> · {% endif %}
+        {{ accounts.get(s.account_id).platform.value if accounts.get(s.account_id) else s.account_id }}
         · {{ accounts.get(s.account_id).handle if accounts.get(s.account_id) else '' }}</div>
       <p class="caption">{{ s.caption }}</p>
       <div class="row">
@@ -40,11 +43,24 @@
 <h2>Recent runs</h2>
 {% if runs %}
 <table>
-  <thead><tr><th>When</th><th>Status</th><th>Caption</th><th>Link</th></tr></thead>
+  <thead><tr><th>When</th><th>Instruction</th><th>Account</th><th>Status</th><th>Caption</th><th>Link</th></tr></thead>
   <tbody>
   {% for r in runs %}
+    {% set instr = instructions.get(r.instruction_id) %}
+    {% set acct = accounts.get(r.account_id) %}
     <tr>
       <td class="small">{{ r.created_at.strftime('%m-%d %H:%M') }}</td>
+      <td class="small">
+        {% if instr %}
+          <a href="{{ url_for('edit_instruction', instruction_id=instr.id) }}">{{ instr.name }}</a>
+        {% else %}
+          <span class="muted" title="{{ r.instruction_id }}">deleted instruction</span>
+        {% endif %}
+      </td>
+      <td class="small">
+        {% if acct %}{{ acct.platform.value }} · {{ acct.handle or acct.external_id }}
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
       <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value }}</span></td>
       <td class="small">{{ (r.caption or r.error or '')[:90] }}</td>
       <td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank">open ↗</a>{% endif %}</td>

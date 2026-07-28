@@ -55,26 +55,52 @@ run_as_service_user() {
 }
 
 # --- venv + dependencies ----------------------------------------------------- #
+# Re-running this script is the normal way to deploy, so the expensive steps are
+# skipped when nothing changed: pip runs only if requirements.txt differs from
+# what the venv was last built with, and Chromium is downloaded only if absent.
+# FORCE_INSTALL=1 does it anyway.
+DEPS_STAMP="$VENV_PATH/.aismm-requirements.sha256"
+
+deps_changed() {
+  [[ "${FORCE_INSTALL:-0}" == "1" ]] && return 0
+  [[ ! -f "$DEPS_STAMP" ]] && return 0
+  local current
+  current="$(sha256sum "$PROJECT_ROOT/requirements.txt" | cut -d' ' -f1)"
+  [[ "$current" != "$(cat "$DEPS_STAMP" 2>/dev/null)" ]]
+}
+
 if [[ "$SKIP_INSTALL" != "1" ]]; then
   if [[ ! -x "$VENV_PATH/bin/python" ]]; then
     echo "Creating virtualenv at $VENV_PATH ..."
     run_as_service_user "$PYTHON_BIN -m venv '$VENV_PATH'"
   fi
-  echo "Installing dependencies (requirements.txt + gunicorn) ..."
-  run_as_service_user "'$VENV_PATH/bin/pip' install --upgrade pip >/dev/null"
-  run_as_service_user "'$VENV_PATH/bin/pip' install -r '$PROJECT_ROOT/requirements.txt'"
-  run_as_service_user "'$VENV_PATH/bin/pip' install 'gunicorn>=21.2.0'"
+
+  if deps_changed; then
+    echo "Installing dependencies (requirements.txt changed) ..."
+    run_as_service_user "'$VENV_PATH/bin/pip' install --upgrade pip >/dev/null"
+    run_as_service_user "'$VENV_PATH/bin/pip' install -r '$PROJECT_ROOT/requirements.txt'"
+    run_as_service_user "'$VENV_PATH/bin/pip' install 'gunicorn>=21.2.0'"
+    run_as_service_user "sha256sum '$PROJECT_ROOT/requirements.txt' | cut -d' ' -f1 > '$DEPS_STAMP'"
+  else
+    echo "Dependencies unchanged — skipping pip (FORCE_INSTALL=1 to reinstall)."
+  fi
 
   # Chromium for the browse_page/save_media tools. The binary is a separate
   # download from the pip package, and it is cached PER USER (~/.cache/
   # ms-playwright) — so the system libraries go in as root, but the browser
   # itself must be fetched as the service user or the service won't find it.
   if [[ "${SKIP_BROWSER:-0}" != "1" ]]; then
-    echo "Installing Chromium for Playwright (SKIP_BROWSER=1 to skip) ..."
-    "$VENV_PATH/bin/playwright" install-deps chromium \
-      || echo "Warning: playwright install-deps failed (missing system libs may break browsing)." >&2
-    run_as_service_user "'$VENV_PATH/bin/playwright' install chromium" \
-      || echo "Warning: Chromium download failed — the browse tools will stay disabled." >&2
+    SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+    if [[ "${FORCE_INSTALL:-0}" != "1" ]] \
+       && compgen -G "$SERVICE_HOME/.cache/ms-playwright/chromium*" >/dev/null 2>&1; then
+      echo "Chromium already installed — skipping the download."
+    else
+      echo "Installing Chromium for Playwright (SKIP_BROWSER=1 to skip) ..."
+      "$VENV_PATH/bin/playwright" install-deps chromium \
+        || echo "Warning: playwright install-deps failed (missing system libs may break browsing)." >&2
+      run_as_service_user "'$VENV_PATH/bin/playwright' install chromium" \
+        || echo "Warning: Chromium download failed — the browse tools will stay disabled." >&2
+    fi
   fi
 fi
 

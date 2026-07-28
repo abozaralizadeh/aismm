@@ -13,15 +13,53 @@ Platform / store imports are lazy to keep the tool layer decoupled.
 from __future__ import annotations
 
 import logging
+import re
 
 from agents import function_tool
 
 from .. import disclosure, media
 from ..assets import kind_from_path, read_bytes, save_bytes
+from ..config import settings
 from ..models import PublishMode, RunStatus, StagedPost, StagedStatus
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.publish")
+
+
+# A caption that narrates the agent's own trouble is a bug report, not a post —
+# and it goes to real followers. The prompt tells the agent to call
+# report_failure instead; this is the backstop for when it doesn't.
+#
+# Deliberately narrow: a failure verb must be attached to an operational object
+# ("unable to retrieve"), so ordinary copy survives — "I couldn't believe the
+# sunrise" does not match, and neither does news about someone else's failure.
+_FAILURE_VERBS = (r"(fetch|retrieve|access|load|download|read|find|obtain|generate|"
+                  r"create|produce|publish|extract)")
+
+_META_CAPTION_PATTERNS = (
+    # First person: the agent narrating its own trouble. "Rescue crews could not
+    # find survivors" is news about someone else and must NOT match.
+    re.compile(r"\b(i|we)\s+(was |were |am |are )?(unable to|could ?n[o']?t|failed to|"
+               r"can ?n[o']?t|was not able to)\s+" + _FAILURE_VERBS + r"\b", re.IGNORECASE),
+    # Subject-less, at the start of the caption or a sentence — same voice.
+    re.compile(r"(^|[.!?\n]\s*)(unable to|could ?n[o']?t|failed to|was not able to)\s+"
+               + _FAILURE_VERBS + r"\b", re.IGNORECASE),
+    re.compile(r"\b(browse_page|save_media|generate_image|generate_video|report_failure|"
+               r"read_memory|update_memory)\b", re.IGNORECASE),
+    re.compile(r"\bas an ai (language )?(model|assistant)\b", re.IGNORECASE),
+    re.compile(r"\bi (apolog(ise|ize)|am sorry|'m sorry)\b", re.IGNORECASE),
+    re.compile(r"\b(placeholder (post|content|image)|dummy (post|content)|"
+               r"technical (issue|difficulties|problem))\b", re.IGNORECASE),
+)
+
+
+def meta_caption_reason(caption: str) -> str:
+    """Return the offending phrase if this caption is about the agent's own failure."""
+    for pattern in _META_CAPTION_PATTERNS:
+        match = pattern.search(caption or "")
+        if match:
+            return match.group(0)
+    return ""
 
 
 def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
@@ -83,6 +121,20 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         return {"error": "unsupported_media",
                 "message": f"{account.platform.value} requires media; generate a "
                            f"{'video' if caps.supports_video else 'image'} first."}
+
+    # Refuse to post the agent's own error message. Checked on the RAW caption,
+    # before the AI disclosure is appended.
+    offending = meta_caption_reason(caption) if settings.publish_content_guard else ""
+    if offending:
+        logger.error("Refusing to publish a caption about the run's own failure "
+                     "(matched %r). Caption: %s", offending, (caption or "")[:200])
+        return {
+            "error": "caption_describes_a_failure",
+            "message": (f"This caption talks about the run itself ({offending!r}). That is not "
+                        "a post — call report_failure to end the run instead, with the "
+                        "diagnosis in its details. If you DO have real content that satisfies "
+                        "the brief, rewrite the caption to be about that content only."),
+        }
 
     # Convert the image locally if this platform won't accept it as-is. Done
     # here (before staging) so the preview, the approval queue and the live post
