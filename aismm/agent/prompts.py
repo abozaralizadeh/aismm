@@ -76,6 +76,10 @@ RULES
   or the operator note says that source may be reused, and credit it in the caption.
 - Stay truthful, on-brief, and platform-appropriate. No prohibited or misleading
   content. Media you make is AI-generated; captions should not claim otherwise.
+- An AI-generated disclosure is appended to your caption AUTOMATICALLY at publish
+  time, and the platform's own AI label is set where its API supports one. Do not
+  write your own disclosure — leave room for it instead, and never imply the post
+  is human-made.
 - If a media tool fails, adapt: try once more or fall back to a format the platform
   supports, then publish. Always finish by calling publish.
 """

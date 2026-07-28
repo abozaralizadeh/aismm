@@ -17,6 +17,7 @@ import os
 
 import httpx
 
+from .. import disclosure
 from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
@@ -66,7 +67,10 @@ class YouTube(SocialPlatform):
         metadata = {
             "snippet": {"title": title[:100] or "Untitled", "description": description.strip()},
             "status": {"privacyStatus": os.getenv("YOUTUBE_PRIVACY", "private"),
-                       "selfDeclaredMadeForKids": False},
+                       "selfDeclaredMadeForKids": False,
+                       # containsSyntheticMedia drives YouTube's altered/synthetic
+                       # content disclosure ("How this content was made").
+                       **disclosure.native_flags("youtube")},
         }
         size = len(video_bytes)
         async with httpx.AsyncClient(timeout=None) as client:

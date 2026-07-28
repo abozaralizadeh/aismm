@@ -20,6 +20,7 @@ new platform or a new tool with a single file.
 - [Configuration](#configuration) · [Azure vs APIM](#azure-openai-or-apim) · [Sora / images](#media-generation-sora-2--images) · [env reference](#environment-variable-reference)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
 - [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing)
+- [AI-content disclosure](#ai-content-disclosure)
 - [Storage: local or Azure Table + Blob](#storage-local-sqlite-or-azure-table--blob)
 - [The public-media-URL caveat (Instagram)](#the-public-media-url-caveat)
 - [Running it](#running-it) · [VS Code debugging](#debugging-in-vs-code) · [Deploying (systemd)](#deploying-on-a-server-systemd)
@@ -222,6 +223,7 @@ configured, the same code simply retries in place.
 | `AZURE_STORAGE_CONNECTION_STRING` | Storage account for Table + Blob (SandBox's `connection_string` also accepted). |
 | `AISMM_TABLE_NAME` / `AISMM_BLOB_NAME` | Table and blob container names (default `aismm` / `aismm-media`). |
 | `MEMORY_MAX_CHARS` | Size at which an instruction's [carry-over memory](#continuity-memory-notes-and-browsing) is summarized (default 6000). |
+| `AI_DISCLOSURE_ENABLED` / `_TEXT` / `_SEPARATOR` | [AI-content disclosure](#ai-content-disclosure) — on by default. |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` / `DASHBOARD_BASE_URL` / `FLASK_SECRET_KEY` | Dashboard. |
 | `AUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPES` | [Dashboard SSO](#dashboard-sign-in-sso) — any OIDC provider. |
 | `AUTH_ALLOWED_EMAILS` / `AUTH_ALLOWED_DOMAINS` | Who may sign in. Both empty = nobody. |
@@ -382,6 +384,66 @@ same way the Sora tool does when unconfigured.
 > the model. And media you download belongs to someone else: the agent is told to post it only when
 > the brief or your note says that source may be reused, and to credit it. Rights are your call, not
 > the model's.
+
+---
+
+## AI-content disclosure
+
+**Every post is labelled as AI-generated, automatically.** This is enforced in code next to the
+publish-mode gate, not requested of the model — a disclosure the agent can forget is not a
+disclosure.
+
+Two layers, because a caption line is not what the platforms key on:
+
+| Platform | Native API flag | What AISMM does |
+|---|---|---|
+| TikTok | `post_info.is_aigc` | sets it → *"Creator labeled as AI-generated"* |
+| YouTube | `status.containsSyntheticMedia` | sets it → altered/synthetic disclosure |
+| Instagram | none per-post (Meta infers from C2PA/IPTC metadata → its *"AI info"* label) | caption line |
+| X | none per-post (its *"Made with AI"* toggle is UI-only) | caption line |
+
+The caption suffix is appended within the platform's limit — the **caption** is trimmed to make
+room, never the label:
+
+```
+Record rainfall hit the north coast today, per the weather serv
+
+🤖 AI-generated
+```
+
+It applies on every path, so a `dry_run` preview and an `approval` queue item show exactly what
+would be posted. A caption that already discloses ("made with AI", "#ai", …) is left alone rather
+than double-labelled.
+
+```ini
+AI_DISCLOSURE_ENABLED=1
+AI_DISCLOSURE_TEXT=🤖 AI-generated      # e.g. "Contenuto generato dall'IA"
+AI_DISCLOSURE_SEPARATOR=\n\n
+```
+
+### Why it defaults to on
+
+- **EU AI Act, Article 50** — transparency obligations apply from **2 August 2026**. Deployers must
+  disclose AI-generated or manipulated image/audio/video that resembles real people, and
+  AI-generated **text published to inform the public on matters of public interest**. Disclosure
+  must be made *"at the latest at the time of the first interaction or exposure"*, clearly and
+  distinguishably. Content published before 2 August 2026 does not need relabelling retroactively.
+- **Platform rules** — Meta labels AI content as *"AI info"*, TikTok requires AIGC labelling,
+  YouTube requires disclosing realistic altered/synthetic content, and X is rolling out
+  *"Made with AI"* with mandatory disclosure already for some categories.
+
+Two caveats worth understanding, because they may change what *you* need:
+
+1. Article 50's text obligation **does not apply** where content had *"human review or editorial
+   control and a natural or legal person holds editorial responsibility"* — and the review must be
+   substantive, not a cursory approval. AISMM's `approval` publish mode is a plausible basis for
+   that; `live` mode is not, since nobody sees the post before it goes out.
+2. The machine-readable marking duty (watermarks, C2PA provenance) falls on the **provider** of the
+   generative model — Azure OpenAI for Sora/gpt-image — not on you as the deployer. AISMM does not
+   strip that metadata.
+
+This is engineering, not legal advice. Whether these rules bind your posts depends on where you and
+your audience are; confirm it for your situation.
 
 ---
 

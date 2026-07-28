@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..auth.oauth import TokenBundle
+from .. import disclosure
 from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
@@ -102,8 +103,10 @@ class TikTok(SocialPlatform):
                 "disable_comment": False,
                 "disable_duet": False,
                 "disable_stitch": False,
-                # AI-generated content must be labelled (2026 requirement).
-                "is_ai_generated": True,
+                # AI disclosure: the field is `is_aigc` (NOT `is_ai_generated`,
+                # which the API silently ignores). True renders TikTok's
+                # "Creator labeled as AI-generated" tag on the video.
+                **disclosure.native_flags("tiktok"),
             },
             "source_info": {
                 "source": "FILE_UPLOAD",

@@ -129,6 +129,20 @@ class DashboardSettings:
 
 
 @dataclass(frozen=True)
+class DisclosureSettings:
+    """Whether and how posts are labelled as AI-generated.
+
+    On by default: the EU AI Act's Article 50 transparency duties apply from
+    2 August 2026, and every major platform has its own AI-labelling rule. See
+    :mod:`aismm.disclosure`.
+    """
+
+    enabled: bool = True
+    text: str = "🤖 AI-generated"
+    separator: str = "\n\n"
+
+
+@dataclass(frozen=True)
 class AzureStorageSettings:
     """Azure Table + Blob storage, wired the way the SandBox projects do it.
 
@@ -218,6 +232,7 @@ class Settings:
     platform_creds: dict[str, PlatformCreds]
     auth: AuthSettings = field(default_factory=AuthSettings)
     azure_storage: AzureStorageSettings = field(default_factory=AzureStorageSettings)
+    disclosure: DisclosureSettings = field(default_factory=DisclosureSettings)
     # "local" (SQLite + disk) or "azure" (Table + Blob). "auto" picks azure as
     # soon as a storage connection string is present.
     store_backend: str = "auto"
@@ -342,6 +357,11 @@ def load_settings() -> Settings:
                         or os.getenv("aismm_table_name") or "aismm").strip(),
             container_name=(os.getenv("AISMM_BLOB_NAME")
                             or os.getenv("aismm_blob_name") or "aismm-media").strip(),
+        ),
+        disclosure=DisclosureSettings(
+            enabled=_bool(os.getenv("AI_DISCLOSURE_ENABLED"), True),
+            text=os.getenv("AI_DISCLOSURE_TEXT", "🤖 AI-generated"),
+            separator=os.getenv("AI_DISCLOSURE_SEPARATOR", "\n\n").replace("\\n", "\n"),
         ),
         store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),

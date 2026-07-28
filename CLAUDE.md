@@ -114,6 +114,17 @@ run `agent/memory.maybe_compact` summarizes an oversized memory; that LLM call l
 layer because **tools do deterministic work only**, and it fails safe (a failed compaction leaves
 the memory untouched — losing the cursor would break continuity entirely).
 
+## AI disclosure
+
+[disclosure.py](aismm/disclosure.py) labels every post as AI-generated, applied in
+`perform_publish` **beside the publish-mode gate** — deterministic, on every path (preview, approval
+queue, live), never left to the model (the prompt tells it not to write its own). Two layers: the
+caption suffix, and the platform's native flag where its API has one — TikTok `post_info.is_aigc`
+(**not** `is_ai_generated`, which the API silently ignores) and YouTube
+`status.containsSyntheticMedia`. Instagram and X have no per-post field, so the caption line is the
+disclosure there. When trimming to a caption limit, cut the caption, never the label. Driven by EU AI
+Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_ENABLED=0` opts out.
+
 ## Gotchas
 
 - **Sora 2** ([tools/sora_client.py](aismm/tools/sora_client.py)): job-scoped — a job id only exists

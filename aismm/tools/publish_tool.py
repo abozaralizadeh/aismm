@@ -16,6 +16,7 @@ import logging
 
 from agents import function_tool
 
+from .. import disclosure
 from ..assets import kind_from_path
 from ..models import PublishMode, RunStatus, StagedPost, StagedStatus
 from .registry import register_tool
@@ -51,6 +52,11 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         return {"error": "unsupported_media",
                 "message": f"{account.platform.value} requires media; generate a "
                            f"{'video' if caps.supports_video else 'image'} first."}
+
+    # AI-content disclosure, applied HERE so it reaches every path — the dry-run
+    # preview and the approval queue show exactly what would be posted, and the
+    # model cannot skip it. See aismm/disclosure.py for the legal/platform basis.
+    caption = disclosure.apply_to_caption(caption, caption_limit=caps.caption_limit)
 
     run.caption = caption
     run.asset_path = asset_path
