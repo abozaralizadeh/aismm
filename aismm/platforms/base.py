@@ -25,6 +25,18 @@ class Capabilities:
     caption_limit: int
     notes: str = ""
 
+    # --- image constraints, enforced locally before publishing --------------- #
+    # Defaults are permissive: a platform that doesn't declare these accepts
+    # whatever the agent produced. Instagram is the strict one (JPEG only,
+    # 8 MB, 4:5–1.91:1, width <=1440) and a mismatch there surfaces as an
+    # opaque "Media download has failed", so we normalize first.
+    # See aismm/media.py.
+    image_formats: tuple[str, ...] = ()      # () = anything
+    max_image_bytes: int | None = None
+    min_image_ratio: float | None = None     # width / height
+    max_image_ratio: float | None = None
+    max_image_width: int | None = None
+
 
 @dataclass
 class Identity:

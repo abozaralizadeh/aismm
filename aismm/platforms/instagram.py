@@ -98,7 +98,15 @@ class Instagram(SocialPlatform):
         needs_public_media_url=True,
         default_orientation="portrait",
         caption_limit=2200,
-        notes="Business/Creator account required. Reels: 9:16, 5–90s. Media must be at a public URL.",
+        notes="Business/Creator account required. Reels: 9:16, 5–90s. Media must be at a public URL. "
+              "Images: JPEG only, 8MB, aspect 4:5–1.91:1.",
+        # Meta's published limits for image containers. Anything else comes back
+        # as "Media download has failed" with no hint that the FILE is the problem.
+        image_formats=("jpg", "jpeg"),
+        max_image_bytes=8 * 1024 * 1024,
+        min_image_ratio=0.8,       # 4:5
+        max_image_ratio=1.91,      # 1.91:1
+        max_image_width=1440,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
     token_endpoint = f"{GRAPH}/oauth/access_token"

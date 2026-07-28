@@ -16,12 +16,40 @@ import logging
 
 from agents import function_tool
 
-from .. import disclosure
-from ..assets import kind_from_path
+from .. import disclosure, media
+from ..assets import kind_from_path, read_bytes, save_bytes
 from ..models import PublishMode, RunStatus, StagedPost, StagedStatus
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.publish")
+
+
+def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
+    """Re-encode an image to what ``platform_name`` accepts; return the new path.
+
+    Returns the original path unchanged when the platform declares no image
+    constraints, or when conversion fails — a publish attempt with the original
+    file gives a better error than failing here.
+    """
+    if not (caps.image_formats or caps.max_image_bytes or caps.min_image_ratio):
+        return asset_path
+    try:
+        converted = media.normalize_image(
+            read_bytes(asset_path),
+            max_bytes=caps.max_image_bytes,
+            min_ratio=caps.min_image_ratio,
+            max_ratio=caps.max_image_ratio,
+            max_width=caps.max_image_width,
+        )
+    except Exception as exc:  # noqa: BLE001 - never block a post on conversion
+        logger.warning("Image conversion for %s failed (%s); using the original",
+                       platform_name, exc)
+        return asset_path
+
+    new_path = save_bytes(converted, caps.image_formats[0] if caps.image_formats else "jpg")
+    logger.info("Converted image for %s: %s -> %s (%d bytes)",
+                platform_name, asset_path, new_path, len(converted))
+    return new_path
 
 
 async def perform_publish(state: dict, caption: str, asset_path: str = "", media_kind: str = "auto") -> dict:
@@ -52,6 +80,12 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         return {"error": "unsupported_media",
                 "message": f"{account.platform.value} requires media; generate a "
                            f"{'video' if caps.supports_video else 'image'} first."}
+
+    # Convert the image locally if this platform won't accept it as-is. Done
+    # here (before staging) so the preview, the approval queue and the live post
+    # all reference the SAME converted file.
+    if kind == "image" and asset_path:
+        asset_path = _normalize_image_for(asset_path, caps, account.platform.value)
 
     # AI-content disclosure, applied HERE so it reaches every path — the dry-run
     # preview and the approval queue show exactly what would be posted, and the

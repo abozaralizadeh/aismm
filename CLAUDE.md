@@ -161,6 +161,13 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   datetimes), and caps a property at 64 KB (`MAX_PROPERTY_CHARS` fails loudly first). Locks are
   `create_entity` + `ResourceExistsError` + TTL reclaim — `GenBox._try_acquire_lock`. RowKey forbids
   `/ \ # ?`, so lock keys are sanitized. Env vars accept SandBox's lowercase `connection_string`.
+- **Images are normalized before publishing** ([media.py](aismm/media.py), called from
+  `perform_publish` so preview/approval/live share one converted file). Platform limits live on
+  `Capabilities` (`image_formats`, `max_image_bytes`, `min/max_image_ratio`, `max_image_width`);
+  only Instagram declares them today — **JPEG only**, 8MB, 4:5–1.91:1, ≤1440px — and anything else
+  comes back as a misleading "Media download has failed". Flatten alpha before JPEG (Pillow raises
+  otherwise), and **pad, never crop**, to fix a ratio. Conversion is best-effort: on failure pass
+  the original through so the platform's error surfaces. Video isn't re-encoded (no ffmpeg dep).
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

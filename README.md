@@ -521,6 +521,30 @@ X, YouTube, and TikTok upload the bytes directly, so they work without a public 
 cloud-hosted setup, implement the Azure Blob adapter (`aismm/store/azure_store.py`) and serve media
 from Blob with a public/SAS URL.
 
+### Images are converted locally to what the platform accepts
+
+Instagram takes **JPEG only** (8 MB max, aspect ratio 4:5–1.91:1, width ≤1440) and rejects anything
+else with `Media download has failed` — an error that points at the URL when the problem is the
+*file*. So before publishing, [`media.py`](aismm/media.py) normalizes the image with Pillow:
+
+| Problem | Fix |
+|---|---|
+| WebP scraped from a page, PNG from `generate_image` | re-encoded to JPEG |
+| Transparency (RGBA/palette) | flattened onto a background — JPEG has no alpha |
+| 1024×1536 portrait (ratio 0.67, below Instagram's 0.8 floor) | **padded** to the nearest allowed ratio |
+| Wider than 1440px, or over 8 MB | downscaled; JPEG quality steps down until it fits |
+
+Padding rather than cropping is deliberate: cropping an AI-generated image can cut the subject out.
+The pad colour is sampled from the image, so the bars are unobtrusive.
+
+Conversion runs inside the publish gate, so the dry-run preview, the approval queue and the live post
+all reference the same converted file — and with blob storage on, the converted JPEG is the one
+uploaded and fetched. Platforms that declare no image constraints (X) get their asset untouched, and
+a file Pillow can't read is passed through unchanged so the platform's own error surfaces.
+
+Video is **not** re-encoded — that needs ffmpeg, which is not a dependency. Sora outputs MP4, which
+every target accepts; a WebM saved from a web page will be rejected by the platform.
+
 ### When an Instagram publish fails
 
 Failures surface Graph's own error body — message, `code`, `error_subcode`, `error_user_msg` and
