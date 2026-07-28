@@ -120,14 +120,24 @@ def configure_tracing() -> None:
     """
     import os
 
-    if os.getenv("LANGCHAIN_API_KEY"):
+    # LANGSMITH_* are the current names; LANGCHAIN_* are the legacy ones SandBox
+    # uses. Accept either.
+    if os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY"):
         try:
             from agents import set_trace_processors
             from langsmith.wrappers import OpenAIAgentsTracingProcessor
 
+            # Route the SDK's own tracer into LangSmith — this is what produces the
+            # agent/tool/handoff span tree. Do NOT also wrap the client with
+            # `wrap_openai` or add `@traceable` around the same calls: SandBox
+            # learned that duplicates traces and flattens the structure.
             set_trace_processors([OpenAIAgentsTracingProcessor()])
-            logger.info("LangSmith tracing enabled.")
+            logger.info("LangSmith tracing enabled (project=%s).",
+                        os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "default")
             return
+        except ImportError:
+            logger.warning("LANGCHAIN_API_KEY is set but langsmith is not installed — no traces "
+                           "will be sent. Fix with: pip install -r requirements.txt")
         except Exception as exc:  # pragma: no cover - tracing is best-effort
             logger.warning("LangSmith tracing not enabled: %s", exc)
 

@@ -143,14 +143,28 @@ direct path (the trAIde pattern) precisely so the `/openai` segment and `api-key
 Wiring lives in [`aismm/llm.py`](aismm/llm.py); [`tests/test_llm_client.py`](tests/test_llm_client.py)
 pins the request URL for both providers.
 
-### Tracing
+### Tracing (LangSmith)
 
-The Agents SDK uploads traces to `api.openai.com` using the **default client's** key. On Azure/APIM
-that isn't a platform.openai.com key, so every run would log
-`Tracing client error 401: Incorrect API key provided`. `configure_tracing()` handles it: traces go
-to LangSmith if `LANGCHAIN_API_KEY` is set, stay on the built-in exporter if a real `OPENAI_API_KEY`
-is present, and are otherwise **disabled**. The 401s are noise, not a failed run — but they should no
-longer appear.
+```ini
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=ls__...
+LANGCHAIN_PROJECT=AISMM
+```
+
+`configure_tracing()` routes the **Agents SDK's own tracer** into LangSmith with
+`set_trace_processors([OpenAIAgentsTracingProcessor()])` — the same wiring as SandBox's ComicBook.
+That is what produces the agent / tool / handoff span tree instead of a flat list of LLM calls. Don't
+also add `wrap_openai` or `@traceable` around the same calls: SandBox's notes are explicit that it
+duplicates traces and flattens the structure.
+
+`langsmith` is a **hard dependency** (as in SandBox) — it's inert without `LANGCHAIN_API_KEY`, and
+having it merely "optional" is how traces end up silently never appearing. If the log says
+`LANGCHAIN_API_KEY is set but langsmith is not installed`, run `pip install -r requirements.txt`.
+
+Without a LangSmith key the SDK would otherwise upload traces to `api.openai.com` using the **default
+client's** key — which on Azure/APIM isn't a platform key, so every run logs
+`Tracing client error 401: Incorrect API key provided`. In that case tracing is **disabled** instead.
+Those 401s are noise, not a failed run, but they should no longer appear.
 
 ### Media generation (Sora 2 + images)
 
@@ -308,6 +322,23 @@ integration raises a clear error instead of failing silently.
 X, YouTube, and TikTok upload the bytes directly, so they work without a public URL. For a fully
 cloud-hosted setup, implement the Azure Blob adapter (`aismm/store/azure_store.py`) and serve media
 from Blob with a public/SAS URL.
+
+### When an Instagram publish fails
+
+Failures surface Graph's own error body — message, `code`, `error_subcode`, `error_user_msg` and
+`fbtrace_id` — because `400 Bad Request` on its own says nothing:
+
+```
+Instagram Graph 400: The media is not eligible [code=352 · error_subcode=2207026 · fbtrace_id=…]
+```
+
+Common ones: **code 9007** ("Media ID is not available") means the container wasn't ready — AISMM
+waits for `status_code=FINISHED` and retries the publish, so this should self-resolve; **code 352 /
+subcode 2207xxx** is a Reels format problem (9:16, 5–90s, H.264/AAC); **code 190** is an expired
+token — reconnect the account. A 25-posts-per-24h cap also applies per account.
+
+The access token is sent as an `Authorization: Bearer` header, never as a URL parameter, so it can't
+end up in exception messages or the service log.
 
 ---
 

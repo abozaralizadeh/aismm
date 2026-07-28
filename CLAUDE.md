@@ -120,6 +120,13 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.
+- **Graph calls send the token as `Authorization: Bearer`, never in the query string** — httpx puts
+  the URL in its exception message, so a token in `params` lands in the service log. Always surface
+  Graph's JSON error body (`_graph_error`): a bare `400` hides whether it's a format, permission,
+  readiness (code 9007 → wait + retry, handled) or rate-limit problem.
+- **Tracing needs `langsmith` installed** — it's a hard dep in requirements.txt (SandBox does the
+  same). `set_trace_processors([OpenAIAgentsTracingProcessor()])` only; never add `wrap_openai` or
+  `@traceable` on the same calls (duplicates traces, flattens the span tree).
 - **`WebSearchTool` is hosted** (runs in the Responses API). If a deployment/region lacks it, swap
   [tools/web_search.py](aismm/tools/web_search.py) for a fallback (LangChain `{"type":"web_search"}`,
   Tavily, DDG) — one file.
