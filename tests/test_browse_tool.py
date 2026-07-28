@@ -162,3 +162,75 @@ def test_lazy_images_are_forced_to_load():
     js = browse_tool._LOAD_IMAGES_JS
     assert 'loading="lazy"' in js and "eager" in js
     assert "scrollTo" in js
+
+
+# --- media sniffing ------------------------------------------------------------------ #
+# Storage written without a content type serves application/octet-stream. The
+# project's own comic-panel blobs do exactly that, and trusting the header meant
+# refusing real PNGs.
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+GIF = b"GIF89a" + b"\x00" * 32
+WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 20
+MP4 = b"\x00\x00\x00\x20" + b"ftyp" + b"isom" + b"\x00" * 20
+MOV = b"\x00\x00\x00\x20" + b"ftyp" + b"qt  " + b"\x00" * 20
+WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 32
+
+
+@pytest.mark.parametrize("data,kind,ext", [
+    (PNG, "image", "png"), (JPEG, "image", "jpg"), (GIF, "image", "gif"),
+    (WEBP, "image", "webp"), (MP4, "video", "mp4"), (MOV, "video", "mov"),
+    (WEBM, "video", "webm"),
+])
+def test_magic_bytes_identify_media_regardless_of_content_type(data, kind, ext):
+    got_kind, got_ext, how = browse_tool.sniff_media(data, "application/octet-stream", "")
+    assert (got_kind, got_ext) == (kind, ext)
+    assert how.startswith("magic:")
+
+
+def test_the_real_failure_case_a_png_served_as_octet_stream():
+    """Exactly what the comic-panel blob returns."""
+    kind, ext, _ = browse_tool.sniff_media(
+        PNG, "application/octet-stream",
+        "https://pkrstr.blob.core.windows.net/comicbook-html/20260513_0335_da11.png")
+    assert (kind, ext) == ("image", "png")
+
+
+def test_bytes_win_over_a_wrong_content_type():
+    kind, ext, how = browse_tool.sniff_media(PNG, "image/jpeg", "x.jpg")
+    assert (kind, ext) == ("image", "png")
+    assert how == "magic:png"
+
+
+def test_content_type_is_used_when_bytes_are_inconclusive():
+    kind, ext, how = browse_tool.sniff_media(b"\x00" * 64, "image/jpeg", "")
+    assert (kind, ext) == ("image", "jpg")
+    assert how.startswith("content-type:")
+
+
+def test_url_extension_is_the_last_resort():
+    kind, ext, how = browse_tool.sniff_media(b"\x00" * 64, "application/octet-stream",
+                                             "https://x/y/panel.mp4?sig=abc")
+    assert (kind, ext) == ("video", "mp4")
+    assert how.startswith("url-extension:")
+
+
+@pytest.mark.parametrize("data,content_type,url", [
+    (b"<html><body>nope</body></html>", "text/html", "https://x/page"),
+    (b"%PDF-1.7 something", "application/pdf", "https://x/doc.pdf"),
+    (b"\x00" * 64, "application/octet-stream", "https://x/mystery"),
+])
+def test_non_media_is_still_refused(data, content_type, url):
+    kind, ext, why = browse_tool.sniff_media(data, content_type, url)
+    assert (kind, ext) == ("", "")
+    assert why
+
+
+def test_save_media_accepts_an_octet_stream_png(monkeypatch, tmp_path):
+    """The end-to-end regression: this used to fail the whole run."""
+    result, state = _save_media(monkeypatch, tmp_path, content_type="application/octet-stream",
+                                body=PNG, url="https://cdn.example.com/panel.png")
+    assert result["kind"] == "image"
+    assert result["asset_path"].endswith(".png")
+    assert state["assets"][0]["kind"] == "image"

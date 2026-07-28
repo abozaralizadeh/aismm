@@ -383,6 +383,16 @@ Each image comes back with the context needed to pick the right one:
 - `caption` is the text of the block the image sits in — a comic panel's dialogue, a figure's caption.
 - Favicons, tracking pixels and anything under 64px are filtered out.
 
+`save_media` identifies files by their **bytes**, not the `Content-Type` header. Storage written
+without a content type serves `application/octet-stream` (Azure Blob does this routinely), and a
+perfectly good PNG then looks like a binary blob — trusting the header meant refusing real media. The
+order is magic numbers → Pillow → declared content type → URL extension, and a server that positively
+declares something non-media (an HTML error page at a `.jpg` URL) is still refused.
+
+The saved file goes into your own storage — local assets dir, and the blob container when Azure is
+configured — and is then [converted to the target platform's format](#images-are-converted-locally-to-what-the-platform-accepts)
+at publish time. A 1536×1024 PNG panel becomes a 1440×960 JPEG for Instagram automatically.
+
 **Pages that render from JavaScript** are the common failure. `browse_page` waits for the network to
 go idle, forces `loading="lazy"` images to load, and scrolls — without that you get the loading
 skeleton ("Generating…") and no images at all. If a page is still not ready, pass `wait_for` with a

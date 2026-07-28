@@ -164,7 +164,11 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   JS-rendered pages, so we also wait for `networkidle`, force `loading="lazy"` images eager, scroll,
   and accept a `wait_for` selector. Images are returned as `{url, alt, width, height, caption}` with
   `url` preferring `data-full`/`data-src`/`srcset` over the `src` thumbnail — an agent working
-  through numbered panels needs the alt text and the surrounding dialogue, not a bare URL. The browser *binary* is a
+  through numbered panels needs the alt text and the surrounding dialogue, not a bare URL.
+  **`save_media` sniffs bytes, never trusts `Content-Type`** (`sniff_media`): blobs uploaded without
+  a content type serve `application/octet-stream`, which made real PNGs unpostable. Magic numbers →
+  Pillow → content-type → URL extension, but a declared non-media type (text/html, pdf) still wins
+  over the extension so a 404 page at `.jpg` isn't saved as a broken image. The browser *binary* is a
   separate install (`playwright install chromium`), per-user; `setup_service.sh` runs `install-deps`
   as root but the download as the service user, or the service can't find it. The agent picks the
   URL, so `is_public_url` refuses private/loopback/link-local addresses (cloud instance metadata).

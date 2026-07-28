@@ -47,6 +47,78 @@ _MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
 _IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 _VIDEO_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm"}
 
+# Content types that carry no information about the payload — these are the only
+# ones for which the URL's extension is worth guessing from.
+_GENERIC_TYPES = {"application/octet-stream", "binary/octet-stream", "application/binary"}
+
+# Pillow's name for a format -> our extension, for the sniffing fallback.
+_PIL_FORMATS = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "GIF": "gif",
+                "BMP": "bmp", "TIFF": "tiff"}
+
+
+def sniff_media(data: bytes, content_type: str = "", url: str = "") -> tuple[str, str, str]:
+    """Identify downloaded bytes as ``(kind, extension, how)``; ``("", "", why)`` if neither.
+
+    **The bytes are the authority, not the Content-Type header.** Storage that
+    was written without a content type serves ``application/octet-stream`` — the
+    Azure blob behind this project's own comic panels does exactly that — and a
+    perfectly good PNG then looks like a binary blob. Trusting the header meant
+    refusing real media.
+
+    Order: magic numbers, then Pillow (covers formats we have no magic for),
+    then the declared Content-Type, and finally the URL's extension as a hint of
+    last resort.
+    """
+    head = data[:16]
+
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image", "png", "magic:png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image", "jpg", "magic:jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image", "gif", "magic:gif"
+    if head[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image", "webp", "magic:webp"
+    if data[4:8] == b"ftyp":
+        brand = data[8:12]
+        return "video", ("mov" if brand[:2] == b"qt" else "mp4"), "magic:isobmff"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video", "webm", "magic:matroska"
+
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as image:
+            ext = _PIL_FORMATS.get((image.format or "").upper())
+            if ext:
+                return "image", ext, f"pillow:{image.format}"
+    except Exception:  # noqa: BLE001 - not an image Pillow understands
+        pass
+
+    declared = (content_type or "").split(";")[0].strip().lower()
+    if declared in _IMAGE_TYPES:
+        return "image", _IMAGE_TYPES[declared], f"content-type:{declared}"
+    if declared in _VIDEO_TYPES:
+        return "video", _VIDEO_TYPES[declared], f"content-type:{declared}"
+
+    # A server that positively declares something non-media (an HTML error page,
+    # a PDF) is believed — otherwise a 404 page served at ".../panel.jpg" would
+    # be saved as a broken image. Only a generic/absent type falls through to the
+    # URL extension.
+    if declared and declared not in _GENERIC_TYPES:
+        return "", "", f"served as {declared}, which is not an image or video"
+
+    ext = (url or "").split("?")[0].rsplit(".", 1)[-1].lower() if "." in (url or "") else ""
+    if ext in {"jpg", "jpeg", "png", "webp", "gif"}:
+        return "image", ("jpg" if ext == "jpeg" else ext), f"url-extension:{ext}"
+    if ext in {"mp4", "mov", "webm"}:
+        return "video", ext, f"url-extension:{ext}"
+
+    return "", "", (f"could not identify the bytes as an image or video "
+                    f"(content-type {declared or 'absent'}, {len(data)} bytes)")
+
 
 def playwright_available() -> bool:
     try:
@@ -326,20 +398,20 @@ async def perform_save_media(state: dict, url: str) -> dict:
         logger.warning("save_media failed for %s: %s", url, exc)
         return {"error": "download_failed", "message": f"{type(exc).__name__}: {exc}"}
 
-    ext = _IMAGE_TYPES.get(content_type) or _VIDEO_TYPES.get(content_type)
-    if not ext:
+    kind, ext, how = sniff_media(data, content_type, url)
+    if not kind:
+        logger.warning("save_media could not identify %s: %s", url, how)
         return {"error": "unsupported_media",
-                "message": f"{url} is {content_type or 'an unknown type'}, not an image or video."}
+                "message": f"{url} is not an image or video — {how}."}
     if len(data) > _MAX_DOWNLOAD_BYTES:
         return {"error": "too_large",
                 "message": f"{len(data)} bytes exceeds the {_MAX_DOWNLOAD_BYTES} byte limit."}
 
-    kind = "image" if content_type in _IMAGE_TYPES else "video"
     path = save_bytes(data, ext)
     asset = {"path": path, "kind": kind, "public_url": public_url(path),
              "source_url": url, "bytes": len(data)}
     state.setdefault("assets", []).append(asset)
-    logger.info("Saved %s from %s (%d bytes)", kind, url, len(data))
+    logger.info("Saved %s (.%s via %s, %d bytes) from %s", kind, ext, how, len(data), url)
     return {"asset_path": path, "kind": kind, "public_url": asset["public_url"],
             "bytes": len(data), "source_url": url}
 
