@@ -66,9 +66,15 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is
   inherited; override only when a platform differs (TikTok uses `client_key`, so it overrides them).
-- **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Default is
-  `LocalStore` (SQLite + SQLModel). Never read/write the DB directly from routes/agent code — call
-  the store. Tokens cross this boundary in plaintext; the store encrypts (Fernet) internally.
+- **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Two
+  implementations: `LocalStore` (SQLite) and `AzureStore` (Table storage), chosen by
+  `settings.use_azure_store`. Never read/write the DB directly from routes/agent code — call the
+  store, and add new methods to `base.py` + **both** backends. Tokens cross this boundary in
+  plaintext; the store encrypts (Fernet) internally.
+- **Media goes through [assets.py](aismm/assets.py)**, never `open()`/`Path.read_bytes` on an
+  `asset_path`: with Azure configured the bytes may live only in blob storage. `save_bytes` writes
+  locally *and* mirrors to blob, `read_bytes` falls back to the blob, `public_url` returns the blob
+  URL when available.
 - **Config is a frozen `Settings` singleton** ([config.py](aismm/config.py)) read from env **at
   import time**. Tests that need different config set env before import or pass an explicit `db_url`
   to `LocalStore`. Don't call `os.getenv` elsewhere.
@@ -86,12 +92,27 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/tools/](aismm/tools/) | registry + web_search, sora_client/config, video/image/publish/context tools |
 | [aismm/platforms/](aismm/platforms/) | base + registry + instagram/twitter/youtube/tiktok |
 | [aismm/orchestrator.py](aismm/orchestrator.py) | per-account run + lock + `approve_staged`/`reject_staged` |
-| [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (adapter stub) |
+| [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (Table) + blob_media (Blob) |
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
 | [aismm/dashboard/sso.py](aismm/dashboard/sso.py) | generic OIDC sign-in guard + `/login`, `/auth/callback`, `/logout` |
+| [aismm/agent/memory.py](aismm/agent/memory.py) | post-run summarizer for an oversized carry-over memory |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
 | [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
+
+## Continuity (memory + note)
+
+`InstructionState` ([models.py](aismm/models.py)) is a **side table**, not columns on `Instruction`:
+`SQLModel.create_all` adds missing tables but never missing columns, so widening a table breaks
+existing databases. Add future per-instruction state there, or write a migration.
+
+It holds two independent things: `memory` (agent-written via `read_memory`/`update_memory`, carried
+into the next run) and `note` (human-written in the dashboard, an override the agent must follow and
+must not edit). Both are inlined into the kickoff by `build_kickoff` — a scheduled run only reliably
+*continues* work when the previous position is in the first turn, not merely fetchable. After each
+run `agent/memory.maybe_compact` summarizes an oversized memory; that LLM call lives in the agent
+layer because **tools do deterministic work only**, and it fails safe (a failed compaction leaves
+the memory untouched — losing the cursor would break continuity entirely).
 
 ## Gotchas
 
@@ -117,6 +138,18 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Tests must not read the developer's `.env`** — `tests/conftest.py` pins the env vars settings are
   built from *before* `aismm` is imported (config reads env at import time). Add a pin there when a
   new setting would change behavior under test.
+- **Playwright browsing** ([tools/browse_tool.py](aismm/tools/browse_tool.py)): one Chromium per run,
+  cached on `state["_browser"]` and closed by `manager_agent` in a `finally` — AIBlog's lesson is
+  that a browser finalized later by GC raises "Event loop is closed". The browser *binary* is a
+  separate install (`playwright install chromium`), per-user; `setup_service.sh` runs `install-deps`
+  as root but the download as the service user, or the service can't find it. The agent picks the
+  URL, so `is_public_url` refuses private/loopback/link-local addresses (cloud instance metadata).
+- **Azure store = ONE table, PartitionKey per entity type** ([store/azure_store.py](aismm/store/azure_store.py)),
+  the SandBox layout (`GenBox`/`ComicBook` azurestorage.py). Table Storage can't sort or paginate
+  server-side (sort in Python), rejects `None`/dict/list values (`_upsert` filters + ISO-formats
+  datetimes), and caps a property at 64 KB (`MAX_PROPERTY_CHARS` fails loudly first). Locks are
+  `create_entity` + `ResourceExistsError` + TTL reclaim — `GenBox._try_acquire_lock`. RowKey forbids
+  `/ \ # ?`, so lock keys are sanitized. Env vars accept SandBox's lowercase `connection_string`.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

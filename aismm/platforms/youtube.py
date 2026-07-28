@@ -17,6 +17,7 @@ import os
 
 import httpx
 
+from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
@@ -57,15 +58,17 @@ class YouTube(SocialPlatform):
         return Identity(external_id=ch["id"], handle=ch["snippet"].get("title", ""))
 
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
-        if media_kind != "video" or not (asset_path and os.path.exists(asset_path)):
+        if media_kind != "video" or not asset_path:
             raise RuntimeError("YouTube requires a video asset; generate a video first.")
+        # Read up front: the bytes may live in blob storage rather than on disk.
+        video_bytes = read_bytes(asset_path)
         title, _, description = caption.partition("\n")
         metadata = {
             "snippet": {"title": title[:100] or "Untitled", "description": description.strip()},
             "status": {"privacyStatus": os.getenv("YOUTUBE_PRIVACY", "private"),
                        "selfDeclaredMadeForKids": False},
         }
-        size = os.path.getsize(asset_path)
+        size = len(video_bytes)
         async with httpx.AsyncClient(timeout=None) as client:
             init = await client.post(
                 UPLOAD_URL, json=metadata,
@@ -77,9 +80,8 @@ class YouTube(SocialPlatform):
             location = init.headers.get("Location")
             if not location:
                 raise RuntimeError("YouTube resumable init returned no upload Location.")
-            with open(asset_path, "rb") as fh:
-                put = await client.put(
-                    location, content=fh.read(),
+            put = await client.put(
+                    location, content=video_bytes,
                     headers={"Authorization": f"Bearer {access_token}",
                              "Content-Type": "video/*", "Content-Length": str(size)})
             put.raise_for_status()

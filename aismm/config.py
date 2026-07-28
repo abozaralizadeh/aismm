@@ -129,6 +129,25 @@ class DashboardSettings:
 
 
 @dataclass(frozen=True)
+class AzureStorageSettings:
+    """Azure Table + Blob storage, wired the way the SandBox projects do it.
+
+    One storage account serves both: a single **Table** holds every entity
+    (PartitionKey = entity type, RowKey = id — SandBox's convention) and a
+    **Blob container** holds generated media. The blob container doubles as the
+    PUBLIC media URL Instagram needs, which the dashboard otherwise has to serve.
+    """
+
+    connection_string: str = ""
+    table_name: str = "aismm"
+    container_name: str = "aismm-media"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.connection_string)
+
+
+@dataclass(frozen=True)
 class AuthSettings:
     """Single-sign-on for the dashboard itself (generic OpenID Connect).
 
@@ -198,8 +217,14 @@ class Settings:
     dashboard: DashboardSettings
     platform_creds: dict[str, PlatformCreds]
     auth: AuthSettings = field(default_factory=AuthSettings)
+    azure_storage: AzureStorageSettings = field(default_factory=AzureStorageSettings)
+    # "local" (SQLite + disk) or "azure" (Table + Blob). "auto" picks azure as
+    # soon as a storage connection string is present.
+    store_backend: str = "auto"
     # Whether a server process (see aismm/wsgi.py) also runs the scheduler.
     enable_scheduler: bool = True
+    # Carry-over memory is summarized once it grows past this many characters.
+    memory_max_chars: int = 6000
 
     @property
     def db_path(self) -> Path:
@@ -215,6 +240,16 @@ class Settings:
 
     def redirect_uri(self, platform: str) -> str:
         return self.dashboard.external_url(f"oauth/{platform}/callback")
+
+    @property
+    def use_azure_store(self) -> bool:
+        """Should state live in Azure Table storage rather than local SQLite?"""
+        backend = (self.store_backend or "auto").strip().lower()
+        if backend == "azure":
+            return True
+        if backend == "local":
+            return False
+        return self.azure_storage.configured      # auto
 
     @property
     def auth_redirect_uri(self) -> str:
@@ -297,7 +332,20 @@ def load_settings() -> Settings:
             enabled_override=(None if not os.getenv("AUTH_ENABLED", "").strip()
                               else _bool(os.getenv("AUTH_ENABLED"), True)),
         ),
+        azure_storage=AzureStorageSettings(
+            # SandBox shares one storage account across its projects under the
+            # lowercase `connection_string` name; accept that verbatim so an
+            # existing SandBox .env drops straight in, with an explicit alias.
+            connection_string=(os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+                               or os.getenv("connection_string") or "").strip(),
+            table_name=(os.getenv("AISMM_TABLE_NAME")
+                        or os.getenv("aismm_table_name") or "aismm").strip(),
+            container_name=(os.getenv("AISMM_BLOB_NAME")
+                            or os.getenv("aismm_blob_name") or "aismm-media").strip(),
+        ),
+        store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
+        memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
     )
 
 

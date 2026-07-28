@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..auth.oauth import TokenBundle
+from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
@@ -87,9 +88,11 @@ class TikTok(SocialPlatform):
         return Identity(external_id=user.get("open_id", ""), handle=user.get("display_name", ""))
 
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
-        if media_kind != "video" or not (asset_path and os.path.exists(asset_path)):
+        if media_kind != "video" or not asset_path:
             raise RuntimeError("TikTok requires a video asset; generate a video first.")
-        size = os.path.getsize(asset_path)
+        # Read up front: the bytes may live in blob storage rather than on disk.
+        video_bytes = read_bytes(asset_path)
+        size = len(video_bytes)
         privacy = os.getenv("TIKTOK_PRIVACY", "SELF_ONLY")
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         init_body = {
@@ -117,8 +120,7 @@ class TikTok(SocialPlatform):
             if not upload_url:
                 raise RuntimeError(f"TikTok init returned no upload_url: {init.json()}")
 
-            with open(asset_path, "rb") as fh:
-                await client.put(upload_url, content=fh.read(), headers={
+            await client.put(upload_url, content=video_bytes, headers={
                     "Content-Type": "video/mp4",
                     "Content-Range": f"bytes 0-{size - 1}/{size}",
                 })

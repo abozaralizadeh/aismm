@@ -10,6 +10,12 @@ Pillow>=10.0.0
 # --- Scheduling ---
 apscheduler>=3.10.0
 
+# --- Web browsing (browse_page / save_media tools) ---
+# Headless Chromium, same engine as SandBox/AIBlog. Free, no API key. The browser
+# BINARY is a separate download: `playwright install --with-deps chromium`
+# (setup_service.sh does this). Without it the browse tools disable themselves.
+playwright>=1.48.0
+
 # --- Dashboard ---
 Flask[async]>=3.0.0
 
@@ -20,6 +26,10 @@ Flask[async]>=3.0.0
 langsmith>=0.4.0
 
 # --- Storage / persistence ---
+# Azure Table (state) + Blob (media), the SandBox setup. Inert unless
+# AZURE_STORAGE_CONNECTION_STRING is set; the default backend is local SQLite.
+azure-data-tables>=12.5.0
+azure-storage-blob>=12.19.0
 sqlmodel>=0.0.14
 cryptography>=42.0.0
 PyYAML>=6.0
@@ -29,5 +39,3 @@ PyYAML>=6.0
 # google-api-python-client>=2.0.0      # convenience for YouTube resumable upload
 # google-auth-oauthlib>=1.0.0          # convenience for YouTube OAuth
 # tweepy>=4.14.0                        # convenience for X/Twitter
-# azure-data-tables>=12.5.0            # Azure Store adapter (Table)
-# azure-storage-blob>=12.19.0          # Azure Store adapter (Blob)

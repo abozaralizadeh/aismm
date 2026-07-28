@@ -14,7 +14,9 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
-from ..models import Account, Instruction, Lock, Run, StagedPost, StagedStatus
+from ..models import (
+    Account, Instruction, InstructionState, Lock, Run, StagedPost, StagedStatus,
+)
 from .base import Store
 
 
@@ -97,7 +99,39 @@ class LocalStore(Store):
             obj = s.get(Instruction, instruction_id)
             if obj:
                 s.delete(obj)
-                s.commit()
+            state = s.get(InstructionState, instruction_id)
+            if state:
+                s.delete(state)          # don't orphan memory/notes
+            s.commit()
+
+    # --- instruction state (agent memory + human note) --------------------- #
+    def get_state(self, instruction_id):
+        with Session(self._engine) as s:
+            state = s.get(InstructionState, instruction_id)
+            return state or InstructionState(instruction_id=instruction_id)
+
+    def _update_state(self, instruction_id, **fields):
+        with Session(self._engine) as s:
+            state = s.get(InstructionState, instruction_id) or InstructionState(
+                instruction_id=instruction_id)
+            for key, value in fields.items():
+                setattr(state, key, value)
+            merged = s.merge(state)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def set_memory(self, instruction_id, memory, *, compacted=False):
+        current = self.get_state(instruction_id)
+        return self._update_state(
+            instruction_id,
+            memory=memory or "",
+            memory_updated_at=_now(),
+            compactions=current.compactions + (1 if compacted else 0),
+        )
+
+    def set_note(self, instruction_id, note):
+        return self._update_state(instruction_id, note=note or "", note_updated_at=_now())
 
     # --- runs -------------------------------------------------------------- #
     def add_run(self, run):

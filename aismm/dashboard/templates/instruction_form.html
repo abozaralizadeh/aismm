@@ -17,6 +17,28 @@
     <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
   </label>
 
+  <label>Operator note <span class="muted small">— a standing correction, applied from the next run</span>
+    <textarea name="note" rows="3"
+      placeholder="e.g. 'Search for more up-to-date content — the last few posts were stale.' or 'Skip opinion pieces; stick to reported news.'">{{ state.note if state else '' }}</textarea>
+    <span class="hint">
+      Steer a running instruction without rewriting the brief or losing its memory. The agent is
+      told to treat this as an override of its own judgement. Clear the box to withdraw it.
+      {% if state and state.note_updated_at %}<br>Last changed {{ state.note_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
+    </span>
+  </label>
+
+  {% if state and state.memory %}
+  <label>Agent memory <span class="muted small">— written by the agent, carried into the next run</span>
+    <textarea name="memory" rows="8" class="mono small">{{ state.memory }}</textarea>
+    <span class="hint">
+      Where the agent got to and what it plans next. Edit to correct a wrong position, or empty it
+      to make the instruction start over.
+      {{ state.memory|length }} characters{% if state.compactions %}, summarized {{ state.compactions }}×{% endif %}.
+      {% if state.memory_updated_at %}Updated {{ state.memory_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
+    </span>
+  </label>
+  {% endif %}
+
   <label>Target accounts
     <div class="checklist">
       {% for a in accounts %}

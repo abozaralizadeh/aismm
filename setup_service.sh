@@ -64,6 +64,18 @@ if [[ "$SKIP_INSTALL" != "1" ]]; then
   run_as_service_user "'$VENV_PATH/bin/pip' install --upgrade pip >/dev/null"
   run_as_service_user "'$VENV_PATH/bin/pip' install -r '$PROJECT_ROOT/requirements.txt'"
   run_as_service_user "'$VENV_PATH/bin/pip' install 'gunicorn>=21.2.0'"
+
+  # Chromium for the browse_page/save_media tools. The binary is a separate
+  # download from the pip package, and it is cached PER USER (~/.cache/
+  # ms-playwright) — so the system libraries go in as root, but the browser
+  # itself must be fetched as the service user or the service won't find it.
+  if [[ "${SKIP_BROWSER:-0}" != "1" ]]; then
+    echo "Installing Chromium for Playwright (SKIP_BROWSER=1 to skip) ..."
+    "$VENV_PATH/bin/playwright" install-deps chromium \
+      || echo "Warning: playwright install-deps failed (missing system libs may break browsing)." >&2
+    run_as_service_user "'$VENV_PATH/bin/playwright' install chromium" \
+      || echo "Warning: Chromium download failed — the browse tools will stay disabled." >&2
+  fi
 fi
 
 if [[ ! -x "$GUNICORN_BIN" ]]; then

@@ -8,6 +8,8 @@ Four entities drive the whole system:
 * ``Run``          — one execution of an instruction against one account.
 * ``StagedPost``   — a prepared-but-not-yet-live post (dry-run preview or an
                      approval-queue item awaiting a human click in the dashboard).
+* ``InstructionState`` — an instruction's carry-over memory (agent-written) and
+                     note (human-written); see the class docstring.
 
 Plus a ``Lock`` table used for single-flight de-duplication (ported from the
 SandBox ``_try_acquire_lock`` pattern) so a schedule firing twice never
@@ -147,6 +149,30 @@ class StagedPost(SQLModel, table=True):
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+
+class InstructionState(SQLModel, table=True):
+    """Mutable per-instruction state that outlives a single run.
+
+    Deliberately a SIDE TABLE rather than columns on ``Instruction``: SQLModel's
+    ``create_all`` adds missing *tables* but never missing *columns*, so widening
+    ``Instruction`` would break an existing database. A new table just appears.
+
+    * ``memory`` — written by the AGENT through the ``memory`` tool: where it got
+      to, what comes next, what it already covered. Injected into the next run's
+      kickoff so a recurring instruction continues instead of repeating itself.
+      Compacted by a summarizer when it grows past ``MEMORY_MAX_CHARS``.
+    * ``note``   — written by the HUMAN in the dashboard: a standing correction
+      ("prefer more recent sources") that steers subsequent runs without editing
+      the brief. The agent never modifies it.
+    """
+
+    instruction_id: str = Field(primary_key=True)
+    memory: str = ""
+    note: str = ""
+    memory_updated_at: datetime | None = None
+    note_updated_at: datetime | None = None
+    compactions: int = 0                     # how many times memory has been summarized
 
 
 class Lock(SQLModel, table=True):

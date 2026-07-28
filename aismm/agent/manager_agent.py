@@ -16,6 +16,8 @@ from ..models import Account, Instruction, Run
 from ..platforms.registry import get_platform
 from ..store.base import Store
 from ..tools import build_tools
+from ..tools.browse_tool import close_browser
+from .memory import maybe_compact
 from .prompts import MANAGER_INSTRUCTIONS, build_kickoff
 
 logger = logging.getLogger("aismm.agent")
@@ -37,6 +39,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         "run": run,
         "assets": [],
     }
+    instruction_state = store.get_state(instruction.id)
     agent = Agent(
         name="SocialManager",
         instructions=MANAGER_INSTRUCTIONS,
@@ -44,25 +47,41 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         model=build_model(),
         model_settings=ModelSettings(temperature=0.8),
     )
-    kickoff = build_kickoff(account=account, instruction=instruction, platform_caps=caps)
+    kickoff = build_kickoff(account=account, instruction=instruction,
+                            platform_caps=caps, state=instruction_state)
 
-    result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
+    try:
+        result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
 
-    # --- deterministic recovery: ensure the run reached a terminal publish ---
-    if not state.get("result"):
-        assets = state.get("assets", [])
-        asset_hint = (
-            f"You already generated media at: {assets[-1]['path']} "
-            f"(kind={assets[-1]['kind']}). Use it. "
-            if assets else "Generate media if the platform requires it. "
-        )
-        nudge = (
-            "You did not finish. " + asset_hint +
-            "Write the final caption and call the publish tool now, exactly once."
-        )
-        logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
-        # Continue the SAME conversation so prior tool outputs/assets are retained.
-        follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
-        await Runner.run(agent, follow_up, max_turns=8)
+        # --- deterministic recovery: ensure the run reached a terminal publish ---
+        if not state.get("result"):
+            assets = state.get("assets", [])
+            asset_hint = (
+                f"You already generated media at: {assets[-1]['path']} "
+                f"(kind={assets[-1]['kind']}). Use it. "
+                if assets else "Generate media if the platform requires it. "
+            )
+            memory_hint = (
+                "" if state.get("memory_written")
+                else "Also call update_memory with where you got to. "
+            )
+            nudge = (
+                "You did not finish. " + asset_hint + memory_hint +
+                "Write the final caption and call the publish tool now, exactly once."
+            )
+            logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
+            # Continue the SAME conversation so prior tool outputs/assets are retained.
+            follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
+            await Runner.run(agent, follow_up, max_turns=8)
+    finally:
+        # Tear the browser down inside THIS event loop (the AIBlog lesson): a
+        # Chromium subprocess finalized later by GC raises "Event loop is closed".
+        await close_browser(state)
+
+    if not state.get("memory_written"):
+        logger.info("Agent did not update memory for instruction %s", instruction.id)
+    # Summarize an overgrown memory now, so the next kickoff stays small. Never
+    # fatal — a failed compaction leaves the memory untouched.
+    await maybe_compact(instruction.id, store)
 
     return state.get("result") or {"error": "no_publish", "message": "Agent did not publish."}

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import Account, Instruction, Run, StagedPost
+from ..models import Account, Instruction, InstructionState, Run, StagedPost
 
 
 class Store(ABC):
@@ -53,6 +53,19 @@ class Store(ABC):
 
     @abstractmethod
     def delete_instruction(self, instruction_id: str) -> None: ...
+
+    # --- instruction state (agent memory + human note) --------------------- #
+    @abstractmethod
+    def get_state(self, instruction_id: str) -> InstructionState:
+        """Return the instruction's carry-over state, creating an empty one if absent."""
+
+    @abstractmethod
+    def set_memory(self, instruction_id: str, memory: str, *, compacted: bool = False) -> InstructionState:
+        """Replace the agent-written memory. ``compacted`` counts a summarization."""
+
+    @abstractmethod
+    def set_note(self, instruction_id: str, note: str) -> InstructionState:
+        """Replace the human-written standing note."""
 
     # --- runs -------------------------------------------------------------- #
     @abstractmethod

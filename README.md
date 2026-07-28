@@ -19,6 +19,8 @@ new platform or a new tool with a single file.
 - [Quick start](#quick-start)
 - [Configuration](#configuration) · [Azure vs APIM](#azure-openai-or-apim) · [Sora / images](#media-generation-sora-2--images) · [env reference](#environment-variable-reference)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
+- [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing)
+- [Storage: local or Azure Table + Blob](#storage-local-sqlite-or-azure-table--blob)
 - [The public-media-URL caveat (Instagram)](#the-public-media-url-caveat)
 - [Running it](#running-it) · [VS Code debugging](#debugging-in-vs-code) · [Deploying (systemd)](#deploying-on-a-server-systemd)
 - [Dashboard sign-in (SSO)](#dashboard-sign-in-sso)
@@ -216,6 +218,10 @@ configured, the same code simply retries in place.
 | `AZURE_OPENAI_API_KEY_DALLE` / `_ENDPOINT_DALLE` / `_MODEL_DALLE` | Image generation. |
 | `AISMM_TOKEN_KEY` | Fernet key for encrypting OAuth tokens (auto-generated to `tokens.key` if unset). |
 | `AISMM_DATA_DIR` | Where the SQLite DB + generated assets live (default `./data`). |
+| `STORE_BACKEND` | `auto` / `local` / `azure` — see [Storage](#storage-local-sqlite-or-azure-table--blob). |
+| `AZURE_STORAGE_CONNECTION_STRING` | Storage account for Table + Blob (SandBox's `connection_string` also accepted). |
+| `AISMM_TABLE_NAME` / `AISMM_BLOB_NAME` | Table and blob container names (default `aismm` / `aismm-media`). |
+| `MEMORY_MAX_CHARS` | Size at which an instruction's [carry-over memory](#continuity-memory-notes-and-browsing) is summarized (default 6000). |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` / `DASHBOARD_BASE_URL` / `FLASK_SECRET_KEY` | Dashboard. |
 | `AUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPES` | [Dashboard SSO](#dashboard-sign-in-sso) — any OIDC provider. |
 | `AUTH_ALLOWED_EMAILS` / `AUTH_ALLOWED_DOMAINS` | Who may sign in. Both empty = nobody. |
@@ -308,6 +314,136 @@ Uses the **Content Posting API** (Direct Post). **Video only.**
 **Important:** Direct Post requires passing **TikTok's audit**. Until approved, every post is forced
 to **`SELF_ONLY`** visibility (`TIKTOK_PRIVACY`), so only the creator can see it. AISMM sets the
 **AI-generated content flag** on every TikTok post (AIGC labelling is required for AI content).
+
+---
+
+## Continuity: memory, notes, and browsing
+
+A scheduled instruction that starts from scratch every run is useless for anything serial — "start
+at 1 March and work through this site" would post the same 1 March item forever. Three pieces fix
+that.
+
+### Agent memory (written by the agent)
+
+Each instruction carries a small working memory that persists **between runs**. The agent reads it
+before choosing a topic and rewrites it before publishing, via two tools:
+
+| Tool | What it does |
+|---|---|
+| `read_memory` | Returns the memory plus the operator note. |
+| `update_memory(memory, append=False)` | Saves where it got to and what comes next. |
+
+The memory is also **inlined into the next run's kickoff prompt**, not just left for the agent to
+fetch — a scheduled run has to continue previous work, and that only happens reliably when the
+previous position is in front of the model from the first turn. It looks like this:
+
+```
+CURRENT POSITION: covered news up to 2026-03-14.
+NEXT STEP: continue with 2026-03-15 onward.
+COVERED: 03-12 election piece, 03-13 budget piece, 03-14 weather.
+LEARNED: the archive paginates 20 per page; ?page=N works.
+```
+
+**Summarization.** Past `MEMORY_MAX_CHARS` (default 6000) a small summarizer agent compresses it
+after the run — instructed to preserve the position, next step, and learned facts *verbatim* and
+compress only the history behind them, because losing the cursor defeats the whole feature. If the
+summarizer fails, the memory is left exactly as it was. You can see and edit the memory (including
+emptying it to start over) on the instruction's edit page.
+
+### Operator note (written by you)
+
+A free-text box on every instruction, for correcting a running agent **without touching the brief or
+losing the memory**:
+
+> *Search for more up-to-date content — the last few posts were stale.*
+
+It is injected into every subsequent run and the agent is told to treat it as an override of its own
+judgement. It applies from the next run; clear the box to withdraw it. The agent cannot edit it.
+
+### Browsing real pages
+
+`browse_page` opens a URL in headless Chromium (**Playwright** — the engine SandBox/AIBlog uses;
+free, no API key) and returns the title, visible text, links, and image/video URLs. Because it runs
+JavaScript it works on pages a plain fetch returns empty. `save_media` then downloads one of those
+images or videos into the assets dir, so it can be passed to `publish` like generated media.
+
+Use it when the brief names a specific site; `web_search` remains better for open research.
+
+```bash
+pip install -r requirements.txt          # the playwright package
+playwright install --with-deps chromium  # the browser binary (setup_service.sh does this)
+```
+
+Without the browser binary the two tools disable themselves and the agent works without them, the
+same way the Sora tool does when unconfigured.
+
+> **Two safety notes.** The agent chooses the URL, so private, loopback and link-local addresses are
+> refused — on a cloud VM `169.254.169.254` would otherwise hand instance-metadata credentials to
+> the model. And media you download belongs to someone else: the agent is told to post it only when
+> the brief or your note says that source may be reused, and to credit it. Rights are your call, not
+> the model's.
+
+---
+
+## Storage: local SQLite, or Azure Table + Blob
+
+Two interchangeable backends behind the same `Store` interface:
+
+| Backend | State | Media |
+|---|---|---|
+| **local** (default) | SQLite at `AISMM_DATA_DIR/aismm.sqlite` | files under `AISMM_DATA_DIR/assets/`, served by the dashboard |
+| **azure** | one Azure **Table** | an Azure **Blob** container |
+
+```ini
+STORE_BACKEND=auto            # auto | local | azure  (auto = azure once a connection string is set)
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...
+AISMM_TABLE_NAME=aismm        # one table holds everything
+AISMM_BLOB_NAME=aismm-media   # container for generated/downloaded media
+```
+
+Get the connection string from **Storage account → Security + networking → Access keys**. The table
+and the container are **created on first use** — no manual provisioning. Already running SandBox?
+Its shared lowercase `connection_string` variable is accepted verbatim, so an existing SandBox `.env`
+works as-is.
+
+### How it is laid out (the SandBox convention)
+
+One table per project, entity type in the `PartitionKey`, id in the `RowKey` — the same shape
+`GenBox/azurestorage.py` and `ComicBook/azurestorage.py` use:
+
+| PartitionKey | RowKey | Contents |
+|---|---|---|
+| `account` | account id | connected profile + **encrypted** tokens |
+| `instruction` | instruction id | brief, schedule, publish mode |
+| `run` | run id | one execution |
+| `staged` | staged id | preview / approval-queue item |
+| `state` | instruction id | carry-over memory + operator note |
+| `lock` | lock key | single-flight lock |
+
+Locks use `create_entity` + `ResourceExistsError` with a TTL reclaim — `GenBox._try_acquire_lock`,
+ported. Tokens are Fernet-encrypted **before** they reach the table, exactly as with SQLite, so the
+storage account never holds a usable credential.
+
+### Blob storage solves the Instagram problem
+
+With blob storage configured, every generated or downloaded asset is uploaded to the container and
+`public_url()` returns the **blob URL**. Instagram fetches media from a public URL rather than
+accepting an upload, so this removes the need for the dashboard itself to be publicly reachable.
+
+> **Set the container access level to "Blob (anonymous read access for blobs only)"** — otherwise
+> uploads still succeed but Instagram gets a 403 fetching the media.
+
+A local copy is always written as well: X, YouTube and TikTok upload the bytes directly, and reads
+fall back to downloading from the blob when the local file is missing — so a second host, or a wiped
+data dir, doesn't break publishing.
+
+Two limits worth knowing: Table Storage caps a single property at 64 KB (AISMM raises a clear error
+past 32 000 characters rather than letting Azure return an opaque 400), and it cannot sort or
+paginate server-side, so listings are sorted in Python — the same thing `GenBox.get_last_n_rows`
+does. Neither matters at this scale.
+
+There is **no migration** between backends: switching points AISMM at empty storage. Connect
+accounts and recreate instructions there, or copy the rows yourself.
 
 ---
 

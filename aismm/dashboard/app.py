@@ -157,17 +157,19 @@ def create_app() -> Flask:
 
     @app.route("/instructions/new")
     def new_instruction():
-        return render_template("instruction_form.html", instruction=None,
+        return render_template("instruction_form.html", instruction=None, state=None,
                                accounts=get_store().list_accounts(),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions/<instruction_id>/edit")
     def edit_instruction(instruction_id):
-        instr = get_store().get_instruction(instruction_id)
+        store = get_store()
+        instr = store.get_instruction(instruction_id)
         if not instr:
             abort(404)
         return render_template("instruction_form.html", instruction=instr,
-                               accounts=get_store().list_accounts(),
+                               state=store.get_state(instruction_id),
+                               accounts=store.list_accounts(),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions", methods=["POST"])
@@ -186,6 +188,11 @@ def create_app() -> Flask:
         instr.enabled = f.get("enabled") == "on"
         instr.set_account_ids(request.form.getlist("account_ids"))
         store.upsert_instruction(instr)
+        # The note is the human's channel into a running instruction; the memory
+        # box is only rendered for an existing one, so leave it alone otherwise.
+        store.set_note(instr.id, f.get("note", "").strip())
+        if "memory" in f:
+            store.set_memory(instr.id, f.get("memory", "").strip())
         _refresh_scheduler()
         flash(f"Saved instruction '{instr.name}'.", "success")
         return redirect(url_for("instructions"))

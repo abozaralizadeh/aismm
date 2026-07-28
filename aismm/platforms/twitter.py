@@ -18,6 +18,7 @@ import os
 
 import httpx
 
+from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
@@ -54,7 +55,7 @@ class Twitter(SocialPlatform):
     async def _upload_media(self, client, access_token, path, media_kind) -> str:
         media_type = "video/mp4" if media_kind == "video" else "image/jpeg"
         category = "tweet_video" if media_kind == "video" else "tweet_image"
-        data = open(path, "rb").read()
+        data = read_bytes(path)   # blob-aware: falls back to Azure when local is gone
         headers = {"Authorization": f"Bearer {access_token}"}
         url = f"{API}/media/upload"
 
@@ -94,7 +95,8 @@ class Twitter(SocialPlatform):
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         payload: dict = {"text": caption[: self.capabilities.caption_limit]}
         async with httpx.AsyncClient(timeout=120) as client:
-            if media_kind in {"image", "video"} and asset_path and os.path.exists(asset_path):
+            # No os.path.exists gate: the bytes may live in blob storage.
+            if media_kind in {"image", "video"} and asset_path:
                 media_id = await self._upload_media(client, access_token, asset_path, media_kind)
                 payload["media"] = {"media_ids": [media_id]}
             r = await client.post(f"{API}/tweets", headers=headers, json=payload)
