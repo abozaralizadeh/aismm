@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 
 logger = logging.getLogger("aismm.media")
 
@@ -62,7 +63,12 @@ def _pad_color(image) -> tuple[int, int, int]:
 
 
 def _fit_ratio(image, min_ratio: float, max_ratio: float):
-    """Pad (never crop) until width/height sits inside the allowed range."""
+    """Pad (never crop) until width/height sits inside the allowed range.
+
+    Targets slightly INSIDE the bounds. Landing exactly on the limit (a 4:5 pad
+    computing to 0.79997 after integer rounding) is a coin flip on the
+    platform's own comparison, and the rejection tells you nothing.
+    """
     from PIL import Image
 
     width, height = image.size
@@ -72,10 +78,11 @@ def _fit_ratio(image, min_ratio: float, max_ratio: float):
     if min_ratio <= ratio <= max_ratio:
         return image
 
+    margin = 1.01                    # 1% inside the boundary
     if ratio < min_ratio:            # too tall -> widen
-        new_width, new_height = int(round(height * min_ratio)), height
+        new_width, new_height = int(math.ceil(height * min_ratio * margin)), height
     else:                            # too wide -> heighten
-        new_width, new_height = width, int(round(width / max_ratio))
+        new_width, new_height = width, int(math.ceil(width / max_ratio * margin))
 
     canvas = Image.new("RGB", (max(new_width, width), max(new_height, height)),
                        _pad_color(image))
@@ -89,8 +96,12 @@ def _encode(image, max_bytes: int | None) -> bytes:
     """Encode as JPEG, backing off on quality then size until it fits."""
     def _jpeg(img, quality) -> bytes:
         buffer = io.BytesIO()
+        # BASELINE, not progressive: Meta's media pipeline is unreliable with
+        # progressive JPEGs and reports it only as an opaque processing failure
+        # (container status ERROR / code 2207076). Baseline 4:2:0 is the format
+        # every platform's decoder handles.
         img.save(buffer, format="JPEG", quality=quality, optimize=True,
-                 progressive=True, subsampling="4:2:0")
+                 progressive=False, subsampling="4:2:0")
         return buffer.getvalue()
 
     data = _jpeg(image, _JPEG_QUALITIES[0])

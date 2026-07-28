@@ -45,6 +45,15 @@ _NOT_READY_CODES = {9007}
 _PUBLISH_RETRIES = 5
 _PUBLISH_RETRY_DELAY = 6.0
 
+# Meta's own processing failed on media it already fetched. Undocumented and
+# widely reported as intermittent, so the whole container is rebuilt once.
+_CONTAINER_RETRIES = 2
+_CONTAINER_RETRY_DELAY = 20.0
+
+
+class ContainerError(RuntimeError):
+    """Instagram accepted the request but its media processing failed."""
+
 
 def _auth(access_token: str) -> dict:
     """Graph accepts the token as a bearer header — keep it out of the URL."""
@@ -155,7 +164,8 @@ class Instagram(SocialPlatform):
         permissions problem. ``status`` carries Graph's explanation when the
         container errors.
         """
-        for _ in range(tries):
+        status = None
+        for attempt in range(tries):
             r = await client.get(f"{GRAPH}/{creation_id}",
                                  params={"fields": "status_code,status"},
                                  headers=_auth(token))
@@ -164,12 +174,16 @@ class Instagram(SocialPlatform):
             except httpx.HTTPStatusError as exc:
                 _raise_graph(exc)
             body = r.json()
-            status = body.get("status_code")
+            previous, status = status, body.get("status_code")
+            if status != previous:
+                logger.info("Instagram container %s: %s (%ds elapsed)",
+                            creation_id, status, int(attempt * delay))
             if status == "FINISHED":
                 return
             if status in {"ERROR", "EXPIRED"}:
-                raise RuntimeError(
-                    f"Instagram media container {status}: {body.get('status') or 'no detail'}")
+                detail = body.get("status") or "no detail"
+                logger.error("Instagram container %s failed: %s", creation_id, detail)
+                raise ContainerError(f"Instagram media container {status}: {detail}")
             await asyncio.sleep(delay)
         raise TimeoutError(
             f"Instagram container not FINISHED after {int(tries * delay)}s "
@@ -193,6 +207,45 @@ class Instagram(SocialPlatform):
             raise RuntimeError(message)
         raise RuntimeError("Instagram media never became publishable")
 
+    async def _log_media_preflight(self, client, media_url, asset_path, media_kind) -> None:
+        """Describe the media Instagram is about to fetch. Never fatal.
+
+        Answers the two questions a container failure can't: *is the URL actually
+        serving the file* (a private blob container returns 403 here), and *what
+        is the file* (format, dimensions, aspect ratio — the things Meta rejects
+        without saying so).
+        """
+        try:
+            from pathlib import Path
+
+            local = Path(asset_path)
+            size = local.stat().st_size if local.exists() else None
+            details = f"{local.name} kind={media_kind}"
+            if size is not None:
+                details += f" bytes={size:,}"
+            if media_kind == "image" and local.exists():
+                try:
+                    from PIL import Image
+
+                    with Image.open(local) as image:
+                        details += (f" format={image.format} mode={image.mode} "
+                                    f"size={image.width}x{image.height} "
+                                    f"ratio={image.width / image.height:.3f}")
+                except Exception as exc:  # noqa: BLE001
+                    details += f" (unreadable image: {exc})"
+            logger.info("Instagram media: %s", details)
+
+            head = await client.head(media_url, follow_redirects=True, timeout=30)
+            logger.info("Instagram media URL check: HTTP %s content-type=%s length=%s url=%s",
+                        head.status_code, head.headers.get("content-type", "?"),
+                        head.headers.get("content-length", "?"), media_url)
+            if head.status_code >= 400:
+                logger.error("Instagram cannot fetch the media URL (HTTP %s). If this is Azure "
+                             "Blob, set the container access level to 'Blob (anonymous read)'.",
+                             head.status_code)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never block a post
+            logger.warning("Media preflight check failed (continuing): %s", exc)
+
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
         ig_user_id = account.external_id
         media_url = public_url(asset_path)
@@ -204,24 +257,42 @@ class Instagram(SocialPlatform):
                 "public https address (e.g. an ngrok tunnel) so /assets/<file> is reachable."
             )
         async with httpx.AsyncClient(timeout=120) as client:
+            # Log exactly what Instagram is about to fetch. A container that
+            # errors during PROCESSING gives no clue about the file, so record
+            # the file's own properties before handing over the URL.
+            await self._log_media_preflight(client, media_url, asset_path, media_kind)
+
             create_data = {"caption": caption}
             if media_kind == "video":
                 create_data.update({"media_type": "REELS", "video_url": media_url})
             else:
                 create_data["image_url"] = media_url
-            r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=create_data,
-                                  headers=_auth(access_token))
-            try:
-                r.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                _raise_graph(exc)
-            creation_id = r.json()["id"]
-            logger.info("Instagram container %s created (%s)", creation_id, media_kind)
 
-            # Reels take minutes to transcode; images are usually instant but a
-            # container that isn't FINISHED cannot be published either way.
-            tries = 30 if media_kind == "video" else 10
-            await self._wait_finished(client, creation_id, access_token, tries=tries)
+            # Meta's processing failures (e.g. the undocumented 2207076) are
+            # widely reported as intermittent, so rebuild the container once.
+            for attempt in range(_CONTAINER_RETRIES):
+                r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=create_data,
+                                      headers=_auth(access_token))
+                try:
+                    r.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    _raise_graph(exc)
+                creation_id = r.json()["id"]
+                logger.info("Instagram container %s created (%s, caption %d chars)",
+                            creation_id, media_kind, len(caption))
+
+                # Reels take minutes to transcode; images are usually instant but
+                # a container that isn't FINISHED cannot be published either way.
+                tries = 30 if media_kind == "video" else 10
+                try:
+                    await self._wait_finished(client, creation_id, access_token, tries=tries)
+                    break
+                except ContainerError:
+                    if attempt == _CONTAINER_RETRIES - 1:
+                        raise
+                    logger.warning("Rebuilding the Instagram container after a processing "
+                                   "failure (attempt %d/%d)", attempt + 1, _CONTAINER_RETRIES)
+                    await asyncio.sleep(_CONTAINER_RETRY_DELAY)
 
             media_id = await self._publish_container(client, ig_user_id, creation_id, access_token)
 

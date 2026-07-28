@@ -161,6 +161,13 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   datetimes), and caps a property at 64 KB (`MAX_PROPERTY_CHARS` fails loudly first). Locks are
   `create_entity` + `ResourceExistsError` + TTL reclaim — `GenBox._try_acquire_lock`. RowKey forbids
   `/ \ # ?`, so lock keys are sanitized. Env vars accept SandBox's lowercase `connection_string`.
+- **Logging must be configured or nothing below WARNING is emitted** — Python's root logger defaults
+  to WARNING, so `logger.info(...)` is discarded unless `logging_setup.configure_logging()` ran.
+  Call it FIRST in any new entrypoint (CLI commands, [wsgi.py](aismm/wsgi.py)); `LOG_LEVEL` picks the
+  level and third-party loggers are pinned quieter unless it's DEBUG.
+- **JPEGs are written BASELINE, not progressive** ([media.py](aismm/media.py)) — Meta's pipeline is
+  unreliable with progressive JPEGs and only reports it as container status ERROR (2207076). Ratio
+  padding also targets ~1% inside the platform's bounds; landing exactly on 0.8 is a coin flip.
 - **Images are normalized before publishing** ([media.py](aismm/media.py), called from
   `perform_publish` so preview/approval/live share one converted file). Platform limits live on
   `Capabilities` (`image_formats`, `max_image_bytes`, `min/max_image_ratio`, `max_image_width`);

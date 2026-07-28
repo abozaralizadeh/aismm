@@ -81,10 +81,23 @@ def test_token_is_sent_as_a_bearer_header_not_in_the_url(account, monkeypatch):
     result, requests = _run(account, monkeypatch, _happy)
 
     assert not isinstance(result, Exception)
-    assert requests, "no Graph calls were made"
+    graph_calls = [r for r in requests if "graph.facebook.com" in str(r.url)]
+    assert graph_calls, "no Graph calls were made"
     for request in requests:
         assert TOKEN not in str(request.url), f"token leaked into URL: {request.url}"
+    for request in graph_calls:
         assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_the_media_preflight_check_does_not_leak_the_token(account, monkeypatch):
+    """The preflight HEAD goes to a PUBLIC media URL — it must carry no credentials."""
+    _result, requests = _run(account, monkeypatch, _happy)
+
+    preflight = [r for r in requests if "graph.facebook.com" not in str(r.url)]
+    assert preflight, "expected a preflight request to the media URL"
+    for request in preflight:
+        assert "authorization" not in request.headers
+        assert TOKEN not in str(request.url)
 
 
 def test_error_message_never_contains_the_token(account, monkeypatch):

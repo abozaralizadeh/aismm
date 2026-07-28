@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from .agent import run_for_account
 from .assets import kind_from_path
@@ -60,14 +61,21 @@ def _run_one(instruction: Instruction, account: Account, store) -> dict:
 
     run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
                             status=RunStatus.running))
+    started = time.monotonic()
     try:
-        logger.info("Running instruction '%s' for %s (%s)",
-                    instruction.name, account.handle, account.platform.value)
+        logger.info("RUN START %s | instruction='%s' account=%s (%s) mode=%s media_pref=%s",
+                    run.id[:8], instruction.name, account.handle or account.external_id,
+                    account.platform.value, instruction.publish_mode.value,
+                    instruction.media_pref.value)
         result = _run_async(run_for_account(account, instruction, store, run))
         result["account_id"] = account.id
+        logger.info("RUN DONE  %s | %.1fs | %s",
+                    run.id[:8], time.monotonic() - started, result)
         return result
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Run failed for %s / %s", instruction.name, account.handle)
+        logger.exception("RUN FAILED %s | %.1fs | instruction='%s' account=%s",
+                         run.id[:8], time.monotonic() - started, instruction.name,
+                         account.handle or account.external_id)
         run.status = RunStatus.failed
         run.error = str(exc)
         store.update_run(run)

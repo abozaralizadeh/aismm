@@ -63,6 +63,7 @@ def get_scheduler() -> BackgroundScheduler:
 
 
 def _job(instruction_id: str) -> None:
+    logger.info("Scheduled fire for instruction %s", instruction_id)
     try:
         run_instruction(instruction_id)
     except Exception:  # noqa: BLE001 - a bad run must not kill the scheduler
@@ -82,6 +83,7 @@ def refresh_jobs() -> None:
         wanted.add(job_id)
         sched.add_job(_job, trigger=trigger, id=job_id, args=[instr.id],
                       replace_existing=True, misfire_grace_time=3600, coalesce=True)
+        logger.info("Scheduled '%s' (%s) -> %s", instr.name, instr.schedule, trigger)
     # Drop jobs for instructions that were disabled/deleted.
     for job_id in existing - wanted:
         if job_id.startswith("instr:"):

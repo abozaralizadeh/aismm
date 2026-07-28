@@ -66,6 +66,9 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
     mode: PublishMode = instruction.publish_mode
 
     kind = media_kind if media_kind != "auto" else kind_from_path(asset_path)
+    logger.info("Publish requested: mode=%s platform=%s kind=%s caption=%d chars asset=%s",
+                mode.value, account.platform.value, kind, len(caption or ""),
+                asset_path or "(none)")
 
     # Capability check against the target platform.
     from ..platforms.registry import get_platform  # lazy

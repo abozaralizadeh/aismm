@@ -24,9 +24,12 @@ import logging
 from .config import ensure_dirs, settings
 from .dashboard import create_app
 from .llm import configure_tracing
+from .logging_setup import configure_logging
 
 logger = logging.getLogger("aismm.wsgi")
 
+# First thing: gunicorn gives us no app-level logging config of its own.
+configure_logging()
 ensure_dirs()
 # Always — the dashboard's "Run now" drives the agent too, so tracing must be
 # pointed somewhere valid even when the scheduler is off.

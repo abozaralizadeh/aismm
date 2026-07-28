@@ -14,6 +14,7 @@ import sys
 import time
 
 from .config import ensure_dirs, settings
+from .logging_setup import configure_logging
 
 
 def cmd_run(_args) -> int:
@@ -21,6 +22,7 @@ def cmd_run(_args) -> int:
     from .dashboard import create_app
     from .llm import configure_tracing
 
+    configure_logging()
     ensure_dirs()
     configure_tracing()
     scheduler.start()
@@ -35,6 +37,7 @@ def cmd_dashboard(_args) -> int:
     from .dashboard import create_app
     from .llm import configure_tracing
 
+    configure_logging()
     ensure_dirs()
     configure_tracing()   # "Run now" drives the agent from here too
     app = create_app()
@@ -48,6 +51,7 @@ def cmd_scheduler(_args) -> int:
     from . import scheduler
     from .llm import configure_tracing
 
+    configure_logging()
     ensure_dirs()
     configure_tracing()
     scheduler.start()
@@ -107,6 +111,7 @@ def cmd_post(args) -> int:
     from .llm import configure_tracing
     from . import orchestrator
 
+    configure_logging()
     ensure_dirs()
     configure_tracing()
     store = get_store()

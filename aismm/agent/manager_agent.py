@@ -49,6 +49,10 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     )
     kickoff = build_kickoff(account=account, instruction=instruction,
                             platform_caps=caps, state=instruction_state)
+    logger.info("Agent ready: %d tool(s) [%s], memory=%d chars, note=%s",
+                len(agent.tools), ", ".join(getattr(t, "name", "?") for t in agent.tools),
+                len(instruction_state.memory or ""),
+                "yes" if (instruction_state.note or "").strip() else "no")
 
     try:
         result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
@@ -79,7 +83,8 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         await close_browser(state)
 
     if not state.get("memory_written"):
-        logger.info("Agent did not update memory for instruction %s", instruction.id)
+        logger.warning("Agent did NOT update memory for instruction %s — the next run "
+                       "will not know where this one got to", instruction.id)
     # Summarize an overgrown memory now, so the next kickoff stays small. Never
     # fatal — a failed compaction leaves the memory untouched.
     await maybe_compact(instruction.id, store)

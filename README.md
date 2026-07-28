@@ -580,6 +580,37 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]   # run onc
 **Schedules** accept a 5-field cron expression (`0 9 * * *`) or an interval (`every 6h`, `30m`,
 `1d`). Editing an instruction in the dashboard live-reschedules its job.
 
+### Logs
+
+```bash
+journalctl -u aismm.service -f          # on the server
+LOG_LEVEL=DEBUG python -m aismm.cli run # locally, with httpx request lines
+```
+
+`LOG_LEVEL` (default `INFO`) is applied by [`logging_setup.py`](aismm/logging_setup.py), called from
+every entrypoint. At `INFO` a run narrates itself end to end:
+
+```
+RUN START a1b2c3d4 | instruction='Daily news' account=genaicomicbook (instagram) mode=live media_pref=auto
+Agent ready: 9 tool(s) [get_context, read_memory, …], memory=412 chars, note=yes
+Sora clip failed (attempt 1/3 on pocs-openai-gioak…): HTTP 401 … InsufficientQuota
+Padded image 1024x1536 -> 1242x1536 to reach an allowed aspect ratio
+Publish requested: mode=live platform=instagram kind=image caption=137 chars asset=…jpg
+Instagram media: 3f1df1be.jpg kind=image bytes=11,526 format=JPEG mode=RGB size=1242x1536 ratio=0.809
+Instagram media URL check: HTTP 200 content-type=image/jpeg length=11526 url=https://…/3f1df1be.jpg
+Instagram container 179000… created (image, caption 137 chars)
+Instagram container 179000…: FINISHED (6s elapsed)
+LIVE published to instagram: https://instagram.com/p/…
+RUN DONE  a1b2c3d4 | 84.3s | {'mode': 'live', 'url': …}
+```
+
+Third-party loggers (httpx, the Azure SDKs, APScheduler) are pinned quieter so they don't bury the
+run — `LOG_LEVEL=DEBUG` unpins them.
+
+> Before this existed, nothing below WARNING was ever emitted: Python's root logger defaults to
+> WARNING and nothing configured it, so every `logger.info(...)` in the codebase was discarded. If
+> you see only tracebacks in `journalctl`, you are running a build from before this change.
+
 ### Debugging in VS Code
 
 The repo ships a shared [`.vscode/`](.vscode) config (launch profiles, tasks, pytest wiring). Pick a
