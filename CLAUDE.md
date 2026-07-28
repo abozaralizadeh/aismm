@@ -88,6 +88,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/orchestrator.py](aismm/orchestrator.py) | per-account run + lock + `approve_staged`/`reject_staged` |
 | [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (adapter stub) |
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
+| [aismm/dashboard/sso.py](aismm/dashboard/sso.py) | generic OIDC sign-in guard + `/login`, `/auth/callback`, `/logout` |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
 | [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
@@ -112,7 +113,15 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Async from sync**: orchestrator/dashboard drive async agent+platform calls via `asyncio.run`
   (see `orchestrator._run_async`, dashboard OAuth callback). Keep platform methods async.
 - **Secrets**: `.env`, `tokens.key`, and `data/` are git-ignored. Never commit tokens or print
-  decrypted ones. The dashboard has no auth of its own.
+  decrypted ones.
+- **Dashboard SSO** ([dashboard/sso.py](aismm/dashboard/sso.py)): generic OIDC (Google/Entra/Okta —
+  endpoints come from the issuer's discovery doc), enabled as soon as `AUTH_OIDC_*` is set. A
+  `before_request` guard blocks every endpoint except `sso.PUBLIC_ENDPOINTS`. **Keep `asset` in that
+  set** — Instagram fetches media server-side with no cookie, so guarding `/assets` breaks
+  publishing. Authentication alone grants nothing: `AuthSettings.allows()` fails **closed** when the
+  allowlist is empty. ID token signatures are intentionally unverified (back-channel TLS fetch, OIDC
+  Core §3.1.3.7) — iss/aud/exp/nonce are checked; don't move ID tokens to the front channel without
+  adding JWKS verification.
 - **One worker only** when serving `aismm.wsgi:application`: the dashboard re-syncs APScheduler jobs
   *in-process* (`scheduler.refresh_jobs`), so extra workers each get their own scheduler that the
   dashboard never talks to. `setup_service.sh` pins `--workers 1 --threads N` for this reason. Set

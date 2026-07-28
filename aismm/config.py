@@ -129,6 +129,52 @@ class DashboardSettings:
 
 
 @dataclass(frozen=True)
+class AuthSettings:
+    """Single-sign-on for the dashboard itself (generic OpenID Connect).
+
+    Any OIDC provider works — Google, Microsoft Entra ID, Okta, Auth0, Keycloak —
+    because the endpoints are read from the issuer's discovery document. Access is
+    granted only to identities on the allowlist; a login that authenticates but
+    matches nothing is refused.
+    """
+
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    scopes: list[str] = field(default_factory=lambda: ["openid", "email", "profile"])
+    allowed_emails: list[str] = field(default_factory=list)
+    allowed_domains: list[str] = field(default_factory=list)
+    provider_name: str = "SSO"          # button label: "Sign in with <name>"
+    session_hours: int = 12
+    enabled_override: bool | None = None  # AUTH_ENABLED forces on/off; None = auto
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.issuer and self.client_id and self.client_secret)
+
+    @property
+    def enabled(self) -> bool:
+        """On by default as soon as an OIDC app is configured."""
+        if self.enabled_override is not None:
+            return self.enabled_override
+        return self.configured
+
+    @property
+    def has_allowlist(self) -> bool:
+        return bool(self.allowed_emails or self.allowed_domains)
+
+    def allows(self, email: str) -> bool:
+        """Is this identity allowed in? Fails closed when no allowlist is set."""
+        addr = (email or "").strip().lower()
+        if not addr or not self.has_allowlist:
+            return False
+        if addr in {e.lower() for e in self.allowed_emails}:
+            return True
+        domain = addr.rpartition("@")[2]
+        return bool(domain) and domain in {d.lower().lstrip("@") for d in self.allowed_domains}
+
+
+@dataclass(frozen=True)
 class PlatformCreds:
     """OAuth app credentials for one platform (client id/secret + extras)."""
 
@@ -151,6 +197,7 @@ class Settings:
     sora: SoraSettings
     dashboard: DashboardSettings
     platform_creds: dict[str, PlatformCreds]
+    auth: AuthSettings = field(default_factory=AuthSettings)
     # Whether a server process (see aismm/wsgi.py) also runs the scheduler.
     enable_scheduler: bool = True
 
@@ -168,6 +215,11 @@ class Settings:
 
     def redirect_uri(self, platform: str) -> str:
         return self.dashboard.external_url(f"oauth/{platform}/callback")
+
+    @property
+    def auth_redirect_uri(self) -> str:
+        """Redirect URI to register with the SSO provider."""
+        return self.dashboard.external_url("auth/callback")
 
 
 def _load_platform_creds() -> dict[str, PlatformCreds]:
@@ -233,6 +285,18 @@ def load_settings() -> Settings:
             reverse_proxy_prefix=_path_prefix(os.getenv("REVERSE_PROXY_PREFIX")),
         ),
         platform_creds=_load_platform_creds(),
+        auth=AuthSettings(
+            issuer=os.getenv("AUTH_OIDC_ISSUER", "").strip().rstrip("/"),
+            client_id=os.getenv("AUTH_OIDC_CLIENT_ID", "").strip(),
+            client_secret=os.getenv("AUTH_OIDC_CLIENT_SECRET", "").strip(),
+            scopes=_split_csv(os.getenv("AUTH_OIDC_SCOPES")) or ["openid", "email", "profile"],
+            allowed_emails=_split_csv(os.getenv("AUTH_ALLOWED_EMAILS")),
+            allowed_domains=_split_csv(os.getenv("AUTH_ALLOWED_DOMAINS")),
+            provider_name=os.getenv("AUTH_PROVIDER_NAME", "SSO").strip() or "SSO",
+            session_hours=int(os.getenv("AUTH_SESSION_HOURS", "12") or 12),
+            enabled_override=(None if not os.getenv("AUTH_ENABLED", "").strip()
+                              else _bool(os.getenv("AUTH_ENABLED"), True)),
+        ),
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
     )
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · AI Social Media Manager</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <h1>🤖 AISMM</h1>
+    <p class="login-sub">This dashboard is private. Sign in to continue.</p>
+
+    {% if signed_out %}
+      <div class="flash flash-success">You have been signed out.</div>
+    {% endif %}
+    {% if error %}
+      <div class="flash flash-error">{{ error }}</div>
+    {% endif %}
+
+    <a class="btn btn-primary login-btn" href="{{ url_for('login', go=1) }}">
+      Sign in with {{ provider }}
+    </a>
+  </main>
+</body>
+</html>

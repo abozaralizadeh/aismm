@@ -19,6 +19,7 @@ from ..config import settings
 from ..models import Account, Instruction, MediaPref, PlatformName, PublishMode
 from ..platforms.registry import get_platform
 from ..auth import oauth
+from . import sso
 from .. import orchestrator, scheduler
 from ..store import get_store
 
@@ -52,6 +53,11 @@ def create_app() -> Flask:
         # the middleware sets SCRIPT_NAME for normal proxied requests.
         app.config["APPLICATION_ROOT"] = prefix
         app.wsgi_app = ReverseProxyPrefixMiddleware(app.wsgi_app, prefix)
+
+    # SSO guard + /login, /auth/callback, /logout. Registered before the routes
+    # below so every one of them is behind the session check (except /assets,
+    # which Instagram must be able to fetch — see sso.PUBLIC_ENDPOINTS).
+    sso.init_app(app)
 
     # ---- helpers --------------------------------------------------------- #
     def _platforms_view():
@@ -219,9 +225,17 @@ def create_app() -> Flask:
         return redirect(url_for("runs"))
 
     # ---- assets (also the PUBLIC url Instagram fetches) ------------------ #
+    # Intentionally exempt from the SSO guard: Instagram fetches media from this
+    # URL server-side, with no session cookie. Filenames are uuid4, so the URL
+    # itself is the secret.
     @app.route("/assets/<path:filename>")
     def asset(filename):
         return send_from_directory(settings.assets_dir, filename)
+
+    @app.route("/healthz")
+    def healthz():
+        """Unauthenticated liveness probe for the reverse proxy / systemd."""
+        return {"status": "ok"}
 
     # ---- settings -------------------------------------------------------- #
     @app.route("/settings")

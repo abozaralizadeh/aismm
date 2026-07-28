@@ -21,6 +21,7 @@ new platform or a new tool with a single file.
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
 - [The public-media-URL caveat (Instagram)](#the-public-media-url-caveat)
 - [Running it](#running-it) · [VS Code debugging](#debugging-in-vs-code) · [Deploying (systemd)](#deploying-on-a-server-systemd)
+- [Dashboard sign-in (SSO)](#dashboard-sign-in-sso)
 - [Extending the framework](#extending-the-framework)
 - [Project layout](#project-layout)
 - [Security](#security) · [Caveats](#caveats--limitations) · [References](#references)
@@ -183,6 +184,9 @@ configured, the same code simply retries in place.
 | `AISMM_TOKEN_KEY` | Fernet key for encrypting OAuth tokens (auto-generated to `tokens.key` if unset). |
 | `AISMM_DATA_DIR` | Where the SQLite DB + generated assets live (default `./data`). |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` / `DASHBOARD_BASE_URL` / `FLASK_SECRET_KEY` | Dashboard. |
+| `AUTH_OIDC_ISSUER` / `_CLIENT_ID` / `_CLIENT_SECRET` / `_SCOPES` | [Dashboard SSO](#dashboard-sign-in-sso) — any OIDC provider. |
+| `AUTH_ALLOWED_EMAILS` / `AUTH_ALLOWED_DOMAINS` | Who may sign in. Both empty = nobody. |
+| `AUTH_PROVIDER_NAME` / `AUTH_SESSION_HOURS` / `AUTH_ENABLED` | Button label / session lifetime / force on-off. |
 | `REVERSE_PROXY_PREFIX` | Optional dashboard path prefix, such as `/aismm`; applied to links, forms, assets, and OAuth URLs. |
 | `INSTAGRAM_APP_ID` / `_APP_SECRET` | Meta app. |
 | `TWITTER_CLIENT_ID` / `_CLIENT_SECRET` (+ `TWITTER_API_KEY`/`_API_SECRET`) | X app. |
@@ -356,8 +360,9 @@ scheduler has to share a process with the dashboard for live re-scheduling to wo
 `--timeout 1800` is deliberate: an agent run plus a video upload can take many minutes.
 
 Put a TLS reverse proxy (nginx/Caddy) in front of it and set `DASHBOARD_BASE_URL` to that public
-https URL — OAuth callbacks and Instagram's media fetch both depend on it. The dashboard has **no
-authentication of its own**; do not expose it directly to the internet.
+https URL — OAuth callbacks and Instagram's media fetch both depend on it. Anything reachable from
+the internet must also turn on [dashboard sign-in](#dashboard-sign-in-sso); without it the dashboard
+is open to whoever finds the URL.
 
 To expose AISMM below a path, set `REVERSE_PROXY_PREFIX` as well. For example:
 
@@ -441,12 +446,100 @@ aismm/
 └── dashboard/           # Flask app + templates + static (the control center)
 ```
 
+## Dashboard sign-in (SSO)
+
+The dashboard controls connected social accounts and can publish on your behalf, so **any deployment
+reachable from the internet must be behind a login**. AISMM has no user database and no passwords:
+it delegates *who you are* to an **OpenID Connect** provider and decides *whether you may in* from an
+allowlist you control.
+
+Any OIDC provider works — **Google**, **Microsoft Entra ID**, Okta, Auth0, Keycloak — because every
+endpoint is read from the issuer's discovery document. Only three values differ between them:
+
+```dotenv
+AUTH_OIDC_ISSUER=https://accounts.google.com
+AUTH_OIDC_CLIENT_ID=<client id>
+AUTH_OIDC_CLIENT_SECRET=<client secret>
+
+AUTH_ALLOWED_EMAILS=you@example.com     # who may actually sign in
+AUTH_PROVIDER_NAME=Google               # button label only
+```
+
+The guard switches on as soon as those three `AUTH_OIDC_*` values are set. Signed-out visitors get a
+sign-in page; everything else 302s there until a session exists.
+
+### Register the redirect URI
+
+Whatever the provider, register exactly this callback (prefix included):
+
+```
+<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/auth/callback
+```
+
+For a deployment at `https://example.com/aismm/`, that is `https://example.com/aismm/auth/callback`.
+
+### Issuer values
+
+| Provider | `AUTH_OIDC_ISSUER` | Where the client id/secret come from |
+|---|---|---|
+| Google | `https://accounts.google.com` | Cloud Console → APIs & Services → Credentials → **OAuth client ID** (type *Web application*) |
+| Microsoft Entra ID | `https://login.microsoftonline.com/<tenant-id>/v2.0` | Entra admin center → App registrations → your app → **Certificates & secrets** |
+| Okta | `https://<org>.okta.com` | Okta admin → Applications → *OIDC Web Application* |
+
+**Entra ID works and is a good fit if you already use Azure** — it's the same code path, only the
+issuer differs. Two provider-specific notes AISMM already handles: Entra often sends
+`preferred_username`/`upn` instead of `email` (all three are accepted, with the userinfo endpoint as
+a fallback), and its multi-tenant discovery advertises a templated `{tenantid}` issuer that is
+resolved from the token's `tid` claim. Using your **tenant-specific** issuer URL (with the real
+tenant id, not `common`) is the stricter choice — it means only your own directory can issue tokens
+this app accepts.
+
+### Who gets in
+
+Authenticating is **not** enough — the identity must match the allowlist:
+
+```dotenv
+AUTH_ALLOWED_EMAILS=you@example.com,teammate@example.com
+AUTH_ALLOWED_DOMAINS=yourcompany.com          # exact domain match, no subdomains
+```
+
+> **Both empty means every login is refused.** That is deliberate. With a public issuer like Google,
+> "authenticated" means *any Google account on earth*, so an empty allowlist can't be treated as
+> "allow all". Set at least one entry.
+
+### What is and isn't protected
+
+| Path | Protected | Why |
+|---|---|---|
+| `/`, `/accounts`, `/instructions`, `/runs`, `/settings`, all POSTs | ✅ | The whole control surface |
+| `/oauth/<platform>/*` | ✅ | Connecting social accounts |
+| `/assets/<file>` | ❌ **public by design** | Instagram fetches media from this URL server-side, with no cookie — guarding it breaks publishing. Filenames are `uuid4`, so the URL is the secret. |
+| `/healthz` | ❌ | Liveness probe for the proxy |
+| `/login`, `/auth/callback`, `/logout` | ❌ | The sign-in flow itself |
+
+Other details worth knowing:
+
+- The session is a signed cookie — **set a strong `FLASK_SECRET_KEY`**, or a forged cookie is a valid
+  login. `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+- `Secure` is set automatically when `DASHBOARD_BASE_URL` is https; `HttpOnly` and `SameSite=Lax`
+  always. Sessions last `AUTH_SESSION_HOURS` (default 12).
+- ID token signatures are **not** verified, which is safe here specifically: the token is fetched by
+  the server directly from the provider's token endpoint over TLS, never accepted from the browser
+  ([OIDC Core §3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation)).
+  Issuer, audience, expiry and nonce are all checked. See [`sso.py`](aismm/dashboard/sso.py).
+- `AUTH_ENABLED=0` force-disables the guard for local development. It logs a loud warning.
+
+Implementation: [`aismm/dashboard/sso.py`](aismm/dashboard/sso.py), tests in
+[`tests/test_sso.py`](tests/test_sso.py).
+
+---
+
 ## Security
 
 - OAuth tokens are **encrypted at rest** (Fernet). Keep `tokens.key` and `.env` out of version
   control (both are git-ignored). Set `AISMM_TOKEN_KEY` to pin the key across machines.
-- Never commit real credentials. The dashboard has no auth of its own — run it on a trusted network
-  or put it behind your own reverse proxy / auth.
+- Never commit real credentials. **Put the dashboard behind [SSO](#dashboard-sign-in-sso)** whenever
+  it is reachable from anything but localhost, and terminate TLS in front of it.
 - Start every new instruction in `dry_run`, review the previews, then move to `approval` or `live`.
 
 ## Caveats & limitations

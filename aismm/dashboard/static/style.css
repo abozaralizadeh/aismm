@@ -25,6 +25,19 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; color: var(--text); }
 .topbar nav { display: flex; gap: 1.25rem; }
 .topbar nav a { color: var(--muted); font-weight: 500; }
 .topbar nav a:hover { color: var(--text); text-decoration: none; }
+.user-box { margin-left: auto; display: flex; align-items: center; gap: .75rem; font-size: .85rem; }
+.user-email { color: var(--muted); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-logout { color: var(--muted); }
+.user-logout:hover { color: var(--danger); text-decoration: none; }
+
+/* --- sign-in page --- */
+.login-page { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.login-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 2.5rem; width: min(400px, 92vw); text-align: center;
+}
+.login-sub { color: var(--muted); margin: 0 0 1.5rem; }
+.login-btn { display: inline-block; width: 100%; padding: .7rem 1rem; }
 
 main { max-width: 960px; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
 
