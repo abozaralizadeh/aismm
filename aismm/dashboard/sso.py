@@ -63,9 +63,9 @@ _discovery_cache: dict[str, dict] = {}
 
 # --- provider discovery ------------------------------------------------------ #
 
-def discovery() -> dict:
+def discovery(issuer: str | None = None) -> dict:
     """Fetch (and cache) the issuer's OIDC discovery document."""
-    issuer = settings.auth.issuer
+    issuer = issuer or settings.auth.issuer
     if issuer not in _discovery_cache:
         url = f"{issuer}/.well-known/openid-configuration"
         with httpx.Client(timeout=15) as client:
@@ -88,8 +88,10 @@ def decode_claims(id_token: str) -> dict:
         raise ValueError(f"Malformed ID token: {exc}") from exc
 
 
-def validate_claims(claims: dict, *, expected_nonce: str, issuer: str) -> None:
+def validate_claims(claims: dict, *, expected_nonce: str, issuer: str,
+                    client_id: str | None = None) -> None:
     """Check issuer, audience, expiry and nonce. Raises ValueError on mismatch."""
+    client_id = client_id or settings.auth.client_id
     iss = claims.get("iss", "")
     # Entra's multi-tenant discovery advertises a templated issuer; the token
     # carries the concrete tenant id in `tid`.
@@ -99,7 +101,7 @@ def validate_claims(claims: dict, *, expected_nonce: str, issuer: str) -> None:
 
     aud = claims.get("aud")
     audiences = aud if isinstance(aud, list) else [aud]
-    if settings.auth.client_id not in audiences:
+    if client_id not in audiences:
         raise ValueError("ID token audience does not match this client id")
 
     exp = claims.get("exp")
@@ -153,14 +155,20 @@ def _safe_next(target: str | None) -> str:
 
 # --- wiring ------------------------------------------------------------------ #
 
-def init_app(app: Flask) -> None:
-    """Register the login routes and the guard. A no-op when SSO is disabled."""
-    auth = settings.auth
+def init_app(app: Flask, cfg=None) -> None:
+    """Register the login routes and the guard. A no-op when SSO is disabled.
+
+    ``cfg`` is the ``Settings`` the app was built with — passed in rather than
+    read from this module, so there is a single source of truth (and tests that
+    patch the dashboard's settings reach the guard too).
+    """
+    cfg = cfg if cfg is not None else settings
+    auth = cfg.auth
 
     app.config.update(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",   # the provider redirects back via GET
-        SESSION_COOKIE_SECURE=settings.dashboard.public_base_url.startswith("https://"),
+        SESSION_COOKIE_SECURE=cfg.dashboard.public_base_url.startswith("https://"),
         PERMANENT_SESSION_LIFETIME=timedelta(hours=auth.session_hours),
     )
 
@@ -204,7 +212,7 @@ def init_app(app: Flask) -> None:
             return render_template("login.html", provider=auth.provider_name,
                                    error=request.args.get("error", ""))
         try:
-            disco = discovery()
+            disco = discovery(auth.issuer)
         except Exception as exc:  # noqa: BLE001 - show, don't crash
             logger.exception("OIDC discovery failed")
             return render_template("login.html", provider=auth.provider_name,
@@ -215,7 +223,7 @@ def init_app(app: Flask) -> None:
         params = {
             "client_id": auth.client_id,
             "response_type": "code",
-            "redirect_uri": settings.auth_redirect_uri,
+            "redirect_uri": cfg.auth_redirect_uri,
             "scope": " ".join(auth.scopes),
             "state": state,
             "nonce": nonce,
@@ -231,19 +239,20 @@ def init_app(app: Flask) -> None:
 
         nonce = session.pop(_NONCE_KEY, "")
         try:
-            disco = discovery()
+            disco = discovery(auth.issuer)
             with httpx.Client(timeout=30) as client:
                 resp = client.post(disco["token_endpoint"], data={
                     "grant_type": "authorization_code",
                     "code": request.args.get("code", ""),
-                    "redirect_uri": settings.auth_redirect_uri,
+                    "redirect_uri": cfg.auth_redirect_uri,
                     "client_id": auth.client_id,
                     "client_secret": auth.client_secret,
                 })
                 resp.raise_for_status()
                 tokens = resp.json()
             claims = decode_claims(tokens.get("id_token", ""))
-            validate_claims(claims, expected_nonce=nonce, issuer=disco.get("issuer", auth.issuer))
+            validate_claims(claims, expected_nonce=nonce,
+                            issuer=disco.get("issuer", auth.issuer), client_id=auth.client_id)
             email = resolve_email(claims, tokens.get("access_token", ""), disco)
         except Exception as exc:  # noqa: BLE001 - never leak a stack trace to the browser
             logger.warning("SSO login failed: %s", exc)

@@ -104,6 +104,19 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   body on failure (`format_http_error`); httpx's message alone omits the reason. Sora 2 has **no
   seed**; `input_reference` rejects human faces. The Videos API is announced for shutdown ~Sep 24
   2026 — the tool is behind the registry so a successor can replace it.
+- **APIM is an *Azure*-shaped client** ([llm.py](aismm/llm.py)): both providers build
+  `AsyncAzureOpenAI`; for APIM the gateway route is the `azure_endpoint` (trAIde's
+  `_build_openai_client`). A plain `AsyncOpenAI(base_url=…)` drops Azure's `/openai` segment and
+  posts to `{apim}/responses` — which the gateway doesn't route — and adds a bogus
+  `Authorization: Bearer`. `APIM_BASE_URL` therefore excludes `/openai`.
+  [tests/test_llm_client.py](tests/test_llm_client.py) pins the resulting request URL.
+- **Agent tracing must be pointed somewhere valid** — the SDK's exporter posts to `api.openai.com`
+  with the *default client's* key, so on Azure/APIM it 401s on every run until `configure_tracing()`
+  disables it. Call it from any entrypoint that can start a run (CLI `run`/`dashboard`/`scheduler`/
+  `post`, [wsgi.py](aismm/wsgi.py)).
+- **Tests must not read the developer's `.env`** — `tests/conftest.py` pins the env vars settings are
+  built from *before* `aismm` is imported (config reads env at import time). Add a pin there when a
+  new setting would change behavior under test.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

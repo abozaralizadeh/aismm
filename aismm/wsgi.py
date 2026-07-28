@@ -23,16 +23,18 @@ import logging
 
 from .config import ensure_dirs, settings
 from .dashboard import create_app
+from .llm import configure_tracing
 
 logger = logging.getLogger("aismm.wsgi")
 
 ensure_dirs()
+# Always — the dashboard's "Run now" drives the agent too, so tracing must be
+# pointed somewhere valid even when the scheduler is off.
+configure_tracing()
 
 if settings.enable_scheduler:
     from . import scheduler
-    from .llm import configure_tracing
 
-    configure_tracing()
     scheduler.start()
     logger.info("AISMM scheduler started in the WSGI process")
 else:

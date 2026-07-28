@@ -33,8 +33,10 @@ def cmd_run(_args) -> int:
 
 def cmd_dashboard(_args) -> int:
     from .dashboard import create_app
+    from .llm import configure_tracing
 
     ensure_dirs()
+    configure_tracing()   # "Run now" drives the agent from here too
     app = create_app()
     print(f"AISMM dashboard → {settings.dashboard.public_base_url}  (no scheduler)")
     app.run(host=settings.dashboard.host, port=settings.dashboard.port,
@@ -102,8 +104,11 @@ def cmd_list(_args) -> int:
 
 def cmd_post(args) -> int:
     from .store import get_store
+    from .llm import configure_tracing
     from . import orchestrator
 
+    ensure_dirs()
+    configure_tracing()
     store = get_store()
     instr = store.get_instruction(args.instruction)
     if not instr:

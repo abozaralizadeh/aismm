@@ -123,15 +123,34 @@ AZURE_OPENAI_MODEL=gpt-4o         # your chat deployment name
 
 ```ini
 LLM_PROVIDER=apim                 # talk through an Azure API Management gateway / balancer
-APIM_BASE_URL=https://<apim>.azure-api.net/<openai-path>
+APIM_BASE_URL=https://<apim>.azure-api.net/<openai-path>   # WITHOUT a trailing /openai
 APIM_SUBSCRIPTION_KEY=...
 APIM_KEY_HEADER=api-key           # or Ocp-Apim-Subscription-Key, per your APIM policy
 APIM_API_VERSION=2025-04-01-preview
 AZURE_OPENAI_MODEL=gpt-4o
 ```
 
+> **`APIM_BASE_URL` is the gateway route *without* `/openai`.** APIM fronts Azure OpenAI, so it
+> speaks the Azure URL shape and the client appends the rest: a base URL of
+> `https://<apim>.azure-api.net/openailb` produces
+> `https://<apim>.azure-api.net/openailb/openai/responses?api-version=…`. A value that already ends
+> in `/openai` is accepted and de-duplicated. If your gateway returns 404s or timeouts, check the
+> startup log line — it prints the exact URL calls go to.
+
 Both paths build one shared `OpenAIResponsesModel` and register it as the SDK default (so the hosted
-`WebSearchTool` routes through it too). Wiring lives in [`aismm/llm.py`](aismm/llm.py).
+`WebSearchTool` routes through it too). APIM uses the **same `AsyncAzureOpenAI` client** as the
+direct path (the trAIde pattern) precisely so the `/openai` segment and `api-key` header are right.
+Wiring lives in [`aismm/llm.py`](aismm/llm.py); [`tests/test_llm_client.py`](tests/test_llm_client.py)
+pins the request URL for both providers.
+
+### Tracing
+
+The Agents SDK uploads traces to `api.openai.com` using the **default client's** key. On Azure/APIM
+that isn't a platform.openai.com key, so every run would log
+`Tracing client error 401: Incorrect API key provided`. `configure_tracing()` handles it: traces go
+to LangSmith if `LANGCHAIN_API_KEY` is set, stay on the built-in exporter if a real `OPENAI_API_KEY`
+is present, and are otherwise **disabled**. The 401s are noise, not a failed run — but they should no
+longer appear.
 
 ### Media generation (Sora 2 + images)
 

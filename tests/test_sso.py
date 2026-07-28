@@ -42,7 +42,7 @@ def auth_app(monkeypatch, tmp_path):
         patched = dataclasses.replace(config_module.settings, auth=auth, data_dir=tmp_path)
         for module in (sso, app_module, config_module):
             monkeypatch.setattr(module, "settings", patched)
-        monkeypatch.setattr(sso, "discovery", lambda: DISCOVERY)
+        monkeypatch.setattr(sso, "discovery", lambda *a, **kw: DISCOVERY)
         # Never touch the developer's real SQLite file.
         store = LocalStore(db_url=f"sqlite:///{tmp_path/'test.sqlite'}")
         monkeypatch.setattr(app_module, "get_store", lambda: store)

@@ -57,7 +57,7 @@ def create_app() -> Flask:
     # SSO guard + /login, /auth/callback, /logout. Registered before the routes
     # below so every one of them is behind the session check (except /assets,
     # which Instagram must be able to fetch — see sso.PUBLIC_ENDPOINTS).
-    sso.init_app(app)
+    sso.init_app(app, settings)
 
     # ---- helpers --------------------------------------------------------- #
     def _platforms_view():
