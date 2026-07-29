@@ -10,6 +10,11 @@ Pillow>=10.0.0
 # --- Scheduling ---
 apscheduler>=3.10.0
 
+# --- Video merging (plan_video / create_video_sequence tools) ---
+# Bundles a static ffmpeg binary, so merging Sora clips needs no system package
+# (GenBox does the same). Used by aismm/video.py.
+imageio-ffmpeg>=0.5.0
+
 # --- Web browsing (browse_page / save_media tools) ---
 # Headless Chromium, same engine as SandBox/AIBlog. Free, no API key. The browser
 # BINARY is a separate download: `playwright install --with-deps chromium`

@@ -168,6 +168,14 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 - **AI disclosure is per instruction too** (`Instruction.disclose_ai` checkbox). The global
   `AI_DISCLOSURE_ENABLED` is the master — an instruction may opt out below it, never back on.
 
+- **Multi-clip video** ([tools/sequence_tool.py](aismm/tools/sequence_tool.py) +
+  [video.py](aismm/video.py)): Sora renders 4/8/12s, so longer videos are merged with
+  imageio-ffmpeg's bundled binary. Three consistency levers, all applied together because GenBox
+  applying one at a time still drifts: the `style` block is repeated in EVERY prompt, the reference
+  frame is explicitly described as the previous shot's final frame, and the sequence is **pinned to
+  one Sora resource** (remix is job-scoped — GenBox's per-clip failover destroyed it). `auto` falls
+  back to remixing shot 1 when `input_reference` is refused (faces). Always re-encode before concat
+  and add silence to mute clips, or the merged file loses audio from the first silent clip onward.
 - **Sora 2** ([tools/sora_client.py](aismm/tools/sora_client.py)): job-scoped — a job id only exists
   on the resource that created it, so create/poll/download must stay on one resource. The pool
   round-robins **at the job level** (`sora_config.next_resource`); never front it with a round-robin

@@ -137,6 +137,20 @@ async def create_clip(resource, prompt, seconds, size, ref_image_bytes=None) -> 
     return await download_video_bytes(resource, job_id), job_id
 
 
+async def remix_clip(resource, base_job_id, prompt) -> tuple[bytes, str]:
+    """remix -> poll -> download on the base clip's OWN resource.
+
+    Remix is the strongest consistency lever Sora 2 offers: it reuses the source
+    video's layout, subject and lighting and applies only what the prompt
+    changes. It is job-scoped, so ``resource`` MUST be the one that served the
+    base clip — a remix cannot be retried elsewhere.
+    """
+    logger.info("Sora remix of %s on %s", base_job_id, _host(resource))
+    job_id = await remix_video_job(resource, base_job_id, prompt)
+    await poll_until_complete(resource, job_id)
+    return await download_video_bytes(resource, job_id), job_id
+
+
 async def create_clip_with_failover(
     prompt: str, seconds: int, size: str, *,
     ref_image_bytes: bytes | None = None, max_attempts: int | None = None,

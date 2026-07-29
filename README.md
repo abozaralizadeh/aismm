@@ -189,6 +189,53 @@ AZURE_OPENAI_MODEL_DALLE=gpt-image-1
 
 Either can be left blank — the corresponding tool then disables itself and the agent works without it.
 
+### Videos longer than 12 seconds
+
+Sora 2 renders 4, 8 or 12 second clips, so **the agent decides the length and the system builds it
+from several clips**:
+
+| Tool | What it does |
+|---|---|
+| `plan_video(target_seconds)` | turns "a one-minute reel" into a segment plan — `60s → 5 × 12s` — and reports the total actually achievable |
+| `create_video_sequence(scenes, style, …)` | renders one shot per scene *with continuity*, then merges them into one MP4 |
+
+`30s` is not reachable with 4/8/12 clips, so the plan says so rather than quietly returning 32s.
+Merging uses **imageio-ffmpeg**'s bundled binary — `pip install`, no system ffmpeg (same as GenBox).
+
+#### Keeping the shots looking like one video
+
+This is where GenBox drifts even when a reference is passed. Three causes, each addressed:
+
+1. **The style text now goes into *every* shot's prompt**, verbatim. GenBox put its "bible" only in
+   the first clip of a speaker and trusted the reference to carry the look afterwards. Repetition is
+   the cheapest and most reliable lever Sora gives you — so `style` is a first-class argument and the
+   agent is told to keep it identical across the run.
+2. **The reference frame is now *described* as a continuation.** Sora treats `input_reference` as a
+   loose starting point, so a prompt that just describes the next action invites a new scene. Shot 2
+   receives:
+
+   ```
+   STYLE (keep identical in every shot): A calm 40-year-old presenter in a navy suit on a harbour wall at dawn, overcast light, 35mm lens…
+   CONTINUITY: the supplied reference image is the FINAL FRAME of the previous shot. Begin this shot
+   from that exact framing, lighting, subject and wardrobe, then perform the action below. Do not
+   restyle, recolour, relight or reframe the scene, and do not cut to a new location.
+   SHOT 2 of 5: she lifts the kite into the wind
+   ```
+3. **The whole sequence is pinned to one Sora resource.** A remix only exists on the resource that
+   made its base clip, so GenBox's per-clip failover silently destroyed the option. Here only shot 1
+   picks a resource; every later shot stays on it.
+
+`continuity="auto"` (default) chains frames and **falls back to remixing shot 1** if the reference is
+refused — Azure rejects `input_reference` containing human faces, which is exactly when GenBox loses
+continuity. `continuity="remix"` derives every shot from shot 1 (strongest when people are on
+camera); `"frame"` chains only; `"none"` makes independent clips.
+
+> **Sora 2 has no seed.** None of this makes shots identical — it makes them plausibly the same
+> scene. That ceiling is the model's. Keep `style` rich and shot-to-shot changes small.
+
+A shot that fails does not lose the ones already rendered: the video is merged from what succeeded
+and the result carries a `warning` naming the shortfall.
+
 **Load balancing across several Sora resources** (same scheme as SandBox/GenBox). List the endpoints
 and keys comma-separated and **aligned by index** — the *n*-th key belongs to the *n*-th endpoint. A
 single key or model is reused for every endpoint; that's only correct when the resources genuinely
