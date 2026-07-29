@@ -29,7 +29,7 @@ import logging
 
 import httpx
 
-from ..assets import public_url
+from ..assets import kind_from_path, public_url
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
@@ -116,12 +116,19 @@ class Instagram(SocialPlatform):
         min_image_ratio=0.8,       # 4:5
         max_image_ratio=1.91,      # 1.91:1
         max_image_width=1440,
+        supports_carousel=True,
+        supports_stories=True,
+        max_carousel_items=10,
+        supports_comments=True,
+        supports_insights=True,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
     token_endpoint = f"{GRAPH}/oauth/access_token"
     scopes = [
         "instagram_basic",
         "instagram_content_publish",
+        "instagram_manage_comments",   # read/reply/hide/delete comments
+        "instagram_manage_insights",   # media + account metrics
         "pages_show_list",
         "pages_read_engagement",
         "business_management",
@@ -246,9 +253,7 @@ class Instagram(SocialPlatform):
         except Exception as exc:  # noqa: BLE001 - diagnostics must never block a post
             logger.warning("Media preflight check failed (continuing): %s", exc)
 
-    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
-                      instruction=None) -> PublishResult:
-        ig_user_id = account.external_id
+    def _public_media_url(self, asset_path: str) -> str:
         media_url = public_url(asset_path)
         if not media_url:
             raise RuntimeError("Instagram needs a media asset; generate an image or reel first.")
@@ -257,34 +262,86 @@ class Instagram(SocialPlatform):
                 "Instagram must fetch media from a PUBLIC url. Set DASHBOARD_BASE_URL to a "
                 "public https address (e.g. an ngrok tunnel) so /assets/<file> is reachable."
             )
-        async with httpx.AsyncClient(timeout=120) as client:
-            # Log exactly what Instagram is about to fetch. A container that
-            # errors during PROCESSING gives no clue about the file, so record
-            # the file's own properties before handing over the URL.
-            await self._log_media_preflight(client, media_url, asset_path, media_kind)
+        return media_url
 
-            create_data = {"caption": caption}
-            if media_kind == "video":
-                create_data.update({"media_type": "REELS", "video_url": media_url})
+    async def _create_container(self, client, ig_user_id, token, data) -> str:
+        r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=data, headers=_auth(token))
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _raise_graph(exc)
+        return r.json()["id"]
+
+    async def _create_carousel_container(self, client, ig_user_id, token, caption,
+                                         asset_paths, media_kinds) -> str:
+        """Child container per item, then one CAROUSEL parent listing their ids.
+
+        Children carry ``is_carousel_item=true`` and NO caption — the caption
+        belongs to the parent. Video children use ``media_type=VIDEO`` (not
+        ``REELS``, which is a standalone placement).
+        """
+        children = []
+        for path, kind in zip(asset_paths, media_kinds):
+            url = self._public_media_url(path)
+            await self._log_media_preflight(client, url, path, kind)
+            data = {"is_carousel_item": "true"}
+            if kind == "video":
+                data.update({"media_type": "VIDEO", "video_url": url})
             else:
-                create_data["image_url"] = media_url
+                data["image_url"] = url
+            child_id = await self._create_container(client, ig_user_id, token, data)
+            await self._wait_finished(client, child_id, token,
+                                      tries=30 if kind == "video" else 10)
+            children.append(child_id)
+            logger.info("Instagram carousel item %d/%d ready (%s)",
+                        len(children), len(asset_paths), child_id)
 
+        return await self._create_container(client, ig_user_id, token, {
+            "media_type": "CAROUSEL", "children": ",".join(children), "caption": caption})
+
+    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
+                      instruction=None, asset_paths=None, placement="feed") -> PublishResult:
+        ig_user_id = account.external_id
+        paths = [p for p in (asset_paths or [asset_path]) if p]
+        if not paths:
+            raise RuntimeError("Instagram needs a media asset; generate an image or reel first.")
+        kinds = [kind_from_path(p) for p in paths]
+        placement = (placement or "feed").lower()
+
+        async with httpx.AsyncClient(timeout=120) as client:
             # Meta's processing failures (e.g. the undocumented 2207076) are
             # widely reported as intermittent, so rebuild the container once.
             for attempt in range(_CONTAINER_RETRIES):
-                r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=create_data,
-                                      headers=_auth(access_token))
-                try:
-                    r.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    _raise_graph(exc)
-                creation_id = r.json()["id"]
-                logger.info("Instagram container %s created (%s, caption %d chars)",
-                            creation_id, media_kind, len(caption))
+                if len(paths) > 1:
+                    creation_id = await self._create_carousel_container(
+                        client, ig_user_id, access_token, caption, paths, kinds)
+                    media_kind, tries = "carousel", 15
+                else:
+                    media_url = self._public_media_url(paths[0])
+                    # Log exactly what Instagram is about to fetch. A container that
+                    # errors during PROCESSING gives no clue about the file, so record
+                    # the file's own properties before handing over the URL.
+                    await self._log_media_preflight(client, media_url, paths[0], kinds[0])
+                    if placement == "story":
+                        # Stories take no caption — Graph ignores/rejects it.
+                        data = {"media_type": "STORIES"}
+                        data["video_url" if kinds[0] == "video" else "image_url"] = media_url
+                    elif kinds[0] == "video":
+                        data = {"caption": caption, "media_type": "REELS",
+                                "video_url": media_url}
+                    else:
+                        data = {"caption": caption, "image_url": media_url}
+                    creation_id = await self._create_container(
+                        client, ig_user_id, access_token, data)
+                    tries = 30 if kinds[0] == "video" else 10
 
-                # Reels take minutes to transcode; images are usually instant but
-                # a container that isn't FINISHED cannot be published either way.
-                tries = 30 if media_kind == "video" else 10
+                logger.info("Instagram container %s created (%s, placement=%s, %d item(s), "
+                            "caption %d chars)", creation_id, media_kind, placement,
+                            len(paths), len(caption or ""))
+
+                # `tries` was set per placement above: Reels take minutes to
+                # transcode, images are usually instant, and a carousel parent
+                # only assembles already-finished children.
                 try:
                     await self._wait_finished(client, creation_id, access_token, tries=tries)
                     break
@@ -302,6 +359,110 @@ class Instagram(SocialPlatform):
             url = perma.json().get("permalink", "") if perma.status_code == 200 else ""
         logger.info("Instagram published media %s", media_id)
         return PublishResult(url=url, external_id=media_id, raw={"media_id": media_id})
+
+
+    # ------------------------------------------------------------------ #
+    # Reading and engagement
+    #
+    # These are what turn the agent from a publisher into a manager: it can see
+    # what it already posted (so it doesn't repeat itself), read and answer
+    # comments, check how a post performed, and — importantly — check the
+    # publishing quota BEFORE spending a Sora clip on a post that cannot be
+    # published for another 20 hours.
+    # ------------------------------------------------------------------ #
+    async def _graph_get(self, access_token: str, path: str, params: dict) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{GRAPH}/{path}", params=params, headers=_auth(access_token))
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise_graph(exc)
+            return r.json()
+
+    async def _graph_post(self, access_token: str, path: str, data: dict) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(f"{GRAPH}/{path}", data=data, headers=_auth(access_token))
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise_graph(exc)
+            return r.json()
+
+    MEDIA_FIELDS = ("id,caption,media_type,media_product_type,permalink,timestamp,"
+                    "like_count,comments_count,thumbnail_url,media_url")
+    COMMENT_FIELDS = ("id,text,username,timestamp,like_count,hidden,"
+                      "replies{id,text,username,timestamp}")
+    # Metric names churn (v21 deprecated video_views for non-Reels, profile_views,
+    # website_clicks…), so keep the default set small and let callers override.
+    DEFAULT_MEDIA_METRICS = "reach,likes,comments,saved,shares"
+    DEFAULT_ACCOUNT_METRICS = "reach,follower_count"
+
+    async def list_media(self, access_token: str, account: Account, *, limit: int = 10,
+                         fields: str = "") -> list[dict]:
+        """Recent posts on this account, with their captions and counts."""
+        payload = await self._graph_get(access_token, f"{account.external_id}/media", {
+            "fields": fields or self.MEDIA_FIELDS, "limit": max(1, min(limit, 100))})
+        return payload.get("data", [])
+
+    async def list_comments(self, access_token: str, media_id: str, *,
+                            limit: int = 25) -> list[dict]:
+        """Comments on one post, with their replies."""
+        payload = await self._graph_get(access_token, f"{media_id}/comments", {
+            "fields": self.COMMENT_FIELDS, "limit": max(1, min(limit, 100))})
+        return payload.get("data", [])
+
+    async def reply_to_comment(self, access_token: str, comment_id: str, message: str) -> dict:
+        """Post a public reply under a comment."""
+        return await self._graph_post(access_token, f"{comment_id}/replies",
+                                      {"message": message})
+
+    async def set_comment_hidden(self, access_token: str, comment_id: str,
+                                 hidden: bool = True) -> dict:
+        """Hide (or unhide) a comment — moderation without deleting it."""
+        return await self._graph_post(access_token, comment_id,
+                                      {"hide": "true" if hidden else "false"})
+
+    async def delete_comment(self, access_token: str, comment_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.delete(f"{GRAPH}/{comment_id}", headers=_auth(access_token))
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise_graph(exc)
+            return r.json()
+
+    async def media_insights(self, access_token: str, media_id: str,
+                             metrics: str = "") -> list[dict]:
+        payload = await self._graph_get(access_token, f"{media_id}/insights", {
+            "metric": metrics or self.DEFAULT_MEDIA_METRICS})
+        return payload.get("data", [])
+
+    async def account_insights(self, access_token: str, account: Account, *,
+                               metrics: str = "", period: str = "day") -> list[dict]:
+        payload = await self._graph_get(access_token, f"{account.external_id}/insights", {
+            "metric": metrics or self.DEFAULT_ACCOUNT_METRICS, "period": period,
+            "metric_type": "total_value"})
+        return payload.get("data", [])
+
+    async def account_profile(self, access_token: str, account: Account) -> dict:
+        return await self._graph_get(access_token, account.external_id, {
+            "fields": "id,username,name,biography,followers_count,follows_count,media_count,"
+                      "profile_picture_url"})
+
+    async def publishing_limit(self, access_token: str, account: Account) -> dict:
+        """How much of the rolling 24h publishing quota is already used."""
+        payload = await self._graph_get(
+            access_token, f"{account.external_id}/content_publishing_limit",
+            {"fields": "config,quota_usage"})
+        rows = payload.get("data", [])
+        return rows[0] if rows else {}
+
+    async def list_mentions(self, access_token: str, account: Account, *,
+                            limit: int = 10) -> list[dict]:
+        """Media where this account was tagged — the other half of engagement."""
+        payload = await self._graph_get(access_token, f"{account.external_id}/tags", {
+            "fields": self.MEDIA_FIELDS, "limit": max(1, min(limit, 50))})
+        return payload.get("data", [])
 
 
 register(PlatformName.instagram, Instagram)

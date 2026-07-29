@@ -152,9 +152,23 @@ class StagedPost(SQLModel, table=True):
     caption: str = ""
     asset_path: str = ""
     media_kind: str = "text"                 # text | image | video
+    # A carousel has several files; asset_path keeps the first for previews.
+    asset_paths_json: str = "[]"
+    placement: str = "feed"                  # feed | story | reel
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def asset_paths(self) -> list[str]:
+        try:
+            paths = list(json.loads(self.asset_paths_json or "[]"))
+        except json.JSONDecodeError:
+            paths = []
+        return paths or ([self.asset_path] if self.asset_path else [])
+
+    def set_asset_paths(self, paths: list[str]) -> None:
+        self.asset_paths_json = json.dumps(list(paths or []))
 
 
 class PlatformApp(SQLModel, table=True):

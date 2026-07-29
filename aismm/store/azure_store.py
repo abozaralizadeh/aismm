@@ -226,6 +226,7 @@ class AzureStore(Store):
         return {
             "instruction_id": s.instruction_id, "account_id": s.account_id, "run_id": s.run_id,
             "caption": s.caption, "asset_path": s.asset_path, "media_kind": s.media_kind,
+            "asset_paths_json": s.asset_paths_json, "placement": s.placement,
             "status": s.status.value, "external_url": s.external_url, "created_at": s.created_at,
         }
 
@@ -236,6 +237,8 @@ class AzureStore(Store):
             account_id=e.get("account_id", ""), run_id=e.get("run_id", ""),
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
             media_kind=e.get("media_kind", "text"),
+            asset_paths_json=e.get("asset_paths_json", "[]"),
+            placement=e.get("placement", "feed"),
             status=StagedStatus(e.get("status", "preview")),
             external_url=e.get("external_url", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),

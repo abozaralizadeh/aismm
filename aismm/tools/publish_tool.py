@@ -90,7 +90,9 @@ def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
     return new_path
 
 
-async def perform_publish(state: dict, caption: str, asset_path: str = "", media_kind: str = "auto") -> dict:
+async def perform_publish(state: dict, caption: str, asset_path: str = "",
+                          media_kind: str = "auto", asset_paths: list[str] | None = None,
+                          placement: str = "feed") -> dict:
     """Mode-gated publish logic (extracted from the tool so it is unit-testable).
 
     Reads ``account`` / ``instruction`` / ``store`` / ``run`` from ``state``,
@@ -103,10 +105,14 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
     run = state["run"]
     mode: PublishMode = instruction.publish_mode
 
+    # One asset or many (a carousel). asset_path stays the primary, for previews.
+    paths = [p for p in (asset_paths or []) if p] or ([asset_path] if asset_path else [])
+    asset_path = paths[0] if paths else ""
+    placement = (placement or "feed").lower()
     kind = media_kind if media_kind != "auto" else kind_from_path(asset_path)
-    logger.info("Publish requested: mode=%s platform=%s kind=%s caption=%d chars asset=%s",
-                mode.value, account.platform.value, kind, len(caption or ""),
-                asset_path or "(none)")
+    logger.info("Publish requested: mode=%s platform=%s kind=%s placement=%s items=%d "
+                "caption=%d chars asset=%s", mode.value, account.platform.value, kind,
+                placement, len(paths), len(caption or ""), asset_path or "(none)")
 
     # Capability check against the target platform.
     from ..platforms.registry import get_platform  # lazy
@@ -121,6 +127,20 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         return {"error": "unsupported_media",
                 "message": f"{account.platform.value} requires media; generate a "
                            f"{'video' if caps.supports_video else 'image'} first."}
+    if len(paths) > 1 and not caps.supports_carousel:
+        return {"error": "unsupported_placement",
+                "message": f"{account.platform.value} cannot post several items in one post; "
+                           f"publish one asset, or one post per item."}
+    if len(paths) > caps.max_carousel_items:
+        return {"error": "too_many_items",
+                "message": f"{account.platform.value} allows at most "
+                           f"{caps.max_carousel_items} items per post; you passed {len(paths)}."}
+    if placement == "story" and not caps.supports_stories:
+        return {"error": "unsupported_placement",
+                "message": f"{account.platform.value} has no stories placement."}
+    if placement not in {"feed", "story", "reel"}:
+        return {"error": "unknown_placement",
+                "message": f"placement must be feed, story or reel — got {placement!r}."}
 
     # Refuse to post the agent's own error message. Checked on the RAW caption,
     # before the AI disclosure is appended.
@@ -139,8 +159,10 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
     # Convert the image locally if this platform won't accept it as-is. Done
     # here (before staging) so the preview, the approval queue and the live post
     # all reference the SAME converted file.
-    if kind == "image" and asset_path:
-        asset_path = _normalize_image_for(asset_path, caps, account.platform.value)
+    # Every image in the post needs converting, not just the first.
+    paths = [_normalize_image_for(p, caps, account.platform.value)
+             if kind_from_path(p) == "image" else p for p in paths]
+    asset_path = paths[0] if paths else ""
 
     # AI-content disclosure, applied HERE so it reaches every path — the dry-run
     # preview and the approval queue show exactly what would be posted, and the
@@ -152,8 +174,9 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
     run.asset_path = asset_path
     staged = StagedPost(
         instruction_id=instruction.id, account_id=account.id, run_id=run.id,
-        caption=caption, asset_path=asset_path, media_kind=kind,
+        caption=caption, asset_path=asset_path, media_kind=kind, placement=placement,
     )
+    staged.set_asset_paths(paths)
 
     # --- dry-run: preview only -------------------------------------------- #
     if mode == PublishMode.dry_run:
@@ -185,7 +208,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         result = await platform.publish(
             access_token=access_token, account=account,
             caption=caption, asset_path=asset_path, media_kind=kind,
-            instruction=instruction,
+            instruction=instruction, asset_paths=paths, placement=placement,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Live publish failed")
@@ -208,21 +231,24 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
 
 def _make_publish(state: dict):
     @function_tool
-    async def publish(caption: str, asset_path: str = "", media_kind: str = "auto") -> dict:
+    async def publish(caption: str, asset_path: str = "", media_kind: str = "auto",
+                      asset_paths: list[str] | None = None, placement: str = "feed") -> dict:
         """Publish (or stage) the finished post to the account this run targets.
 
         Call this exactly once, at the end, with the final caption and (optionally)
         an ``asset_path`` returned by ``generate_video`` / ``generate_image``.
 
         Args:
-            caption: The post text / caption / title+description.
+            caption: The post text / caption / title+description. Instagram
+                stories carry no caption — put the words in the image instead.
             asset_path: Path to a generated media asset, or "" for a text-only post.
             media_kind: "auto" (infer from asset), or "text"/"image"/"video".
 
         Returns a status dict. The publish mode (dry-run / approval / live) is set
         on the instruction and enforced here — you do not control it.
         """
-        return await perform_publish(state, caption, asset_path, media_kind)
+        return await perform_publish(state, caption, asset_path, media_kind,
+                                     asset_paths=asset_paths, placement=placement)
 
     return publish
 

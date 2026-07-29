@@ -225,6 +225,19 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   comes back as a misleading "Media download has failed". Flatten alpha before JPEG (Pillow raises
   otherwise), and **pad, never crop**, to fix a ratio. Conversion is best-effort: on failure pass
   the original through so the platform's error surfaces. Video isn't re-encoded (no ffmpeg dep).
+- **Instagram placements** ([platforms/instagram.py](aismm/platforms/instagram.py)): carousel =
+  child containers with `is_carousel_item=true` and NO caption, then a `CAROUSEL` parent carrying the
+  caption + `children=<ids>`; a video child is `media_type=VIDEO` (**not** `REELS`, which is
+  standalone); a story is `media_type=STORIES` and takes no caption. `publish` validates placements
+  against `Capabilities` (`supports_carousel`/`supports_stories`/`max_carousel_items`) before calling
+  the platform.
+- **Instagram engagement tools** ([tools/instagram_tools.py](aismm/tools/instagram_tools.py)) return
+  `None` from their factories unless the run targets an Instagram account, so other platforms aren't
+  handed them. Reply/moderate act on the live account IMMEDIATELY — they are not behind
+  `publish_mode`, which gates posts. Insight metric names churn (v21 dropped `impressions`,
+  `profile_views`, non-Reels `video_views`), so `DEFAULT_*_METRICS` stays minimal and overridable.
+  Comments/insights need the `instagram_manage_comments` / `instagram_manage_insights` scopes — an
+  account connected before those were added must be reconnected.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

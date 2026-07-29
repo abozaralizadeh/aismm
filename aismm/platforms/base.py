@@ -31,6 +31,13 @@ class Capabilities:
     # 8 MB, 4:5–1.91:1, width <=1440) and a mismatch there surfaces as an
     # opaque "Media download has failed", so we normalize first.
     # See aismm/media.py.
+    # --- placements beyond a single feed post -------------------------------- #
+    supports_carousel: bool = False          # multi-item post
+    supports_stories: bool = False
+    max_carousel_items: int = 10
+    supports_comments: bool = False          # read/reply/moderate
+    supports_insights: bool = False
+
     image_formats: tuple[str, ...] = ()      # () = anything
     max_image_bytes: int | None = None
     min_image_ratio: float | None = None     # width / height
@@ -116,10 +123,16 @@ class SocialPlatform(ABC):
         asset_path: str,
         media_kind: str,
         instruction=None,
+        asset_paths: list[str] | None = None,
+        placement: str = "feed",
     ) -> PublishResult:
         """Publish a post. ``media_kind`` is one of text|image|video.
 
         ``instruction`` is passed so a platform can honour per-instruction
         settings — today the AI-disclosure toggle that drives the native
         platform flags (see :mod:`aismm.disclosure`).
+
+        ``asset_paths`` carries more than one file (a carousel); ``placement`` is
+        ``feed`` / ``story`` / ``reel``. Platforms that support neither can ignore
+        both — the publish tool checks ``Capabilities`` before calling.
         """

@@ -644,6 +644,55 @@ a file Pillow can't read is passed through unchanged so the platform's own error
 Video is **not** re-encoded — that needs ffmpeg, which is not a dependency. Sora outputs MP4, which
 every target accepts; a WebM saved from a web page will be rejected by the platform.
 
+### What the agent can do on Instagram
+
+Beyond a single feed post, the Instagram integration covers the rest of the account. The engagement
+tools appear **only on runs that target an Instagram account** — a TikTok run gets 10 tools, an
+Instagram run 18 — so other platforms aren't handed irrelevant ones.
+
+**Publishing**, all through the one gated `publish` tool:
+
+| Post | How |
+|---|---|
+| Feed image / video (Reel) | as before |
+| **Carousel** (2–10 items) | `asset_paths=[…]` — child containers, then a `CAROUSEL` parent |
+| **Story** | `placement="story"` |
+
+Mixed carousels work (images + video); a video *inside* a carousel is `media_type=VIDEO`, not `REELS`
+— that's Meta's rule and getting it wrong is a rejected container. Stories carry **no caption**, so
+words have to be in the image; the agent is told this.
+
+**Reading and engagement:**
+
+| Tool | What it's for |
+|---|---|
+| `instagram_recent_posts` | the existing feed with captions + like/comment counts — stops the agent repeating itself and lets it match its own voice |
+| `instagram_comments` | comments on a post, with replies |
+| `instagram_reply_to_comment` | answer publicly, in the account's voice |
+| `instagram_moderate_comment` | hide (preferred), unhide, or delete abuse/spam |
+| `instagram_insights` | how a post or the account performed, so "post what works" has numbers |
+| `instagram_publishing_limit` | how much of the rolling 24h quota is left |
+| `instagram_profile` | bio, follower and post counts |
+| `instagram_mentions` | posts that tagged this account |
+
+Two of these earn their keep in ways worth calling out. **`instagram_publishing_limit`** is checked
+*before* generating media: Instagram caps API posts per rolling 24 hours (a carousel counts as one),
+and a container you can't publish is a wasted Sora clip — if the quota is gone, the agent finishes
+with `report_failure` rather than posting. **`instagram_insights`** uses a deliberately small default
+metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `profile_views`,
+`website_clicks` and non-Reels `video_views` in v21, so asking for them fails the whole call. Pass
+`metrics=` to override, and a rejected name is reported back so the agent can pick another.
+
+> **New scopes.** Comments and insights need `instagram_manage_comments` and
+> `instagram_manage_insights` on top of the publishing scopes. They're in the requested set now, but
+> an **already-connected account has to be reconnected** to grant them — until then those tools will
+> return a permissions error. Reconnect from **Accounts → Connect**.
+
+> **Replies are not covered by the publish mode.** `dry_run`/`approval` gate *posts*; a reply or a
+> moderation action happens immediately. That's deliberate — an approval queue for comment replies
+> would make them useless — but it means an instruction with comment duties acts on the live account
+> even in `dry_run`. Keep that in mind when writing the brief.
+
 ### When an Instagram publish fails
 
 Failures surface Graph's own error body — message, `code`, `error_subcode`, `error_user_msg` and

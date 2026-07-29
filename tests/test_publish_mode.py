@@ -38,7 +38,7 @@ def test_live_calls_platform(store, monkeypatch):
         capabilities = Capabilities(True, True, True, False, "landscape", 280)
 
         async def publish(self, *, access_token, account, caption, asset_path, media_kind,
-                          instruction=None):
+                          instruction=None, asset_paths=None, placement="feed"):
             published["called"] = (access_token, caption, media_kind)
             return PublishResult(url="https://x.com/bot/status/1")
 
