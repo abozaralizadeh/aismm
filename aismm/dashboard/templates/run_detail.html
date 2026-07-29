@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.id[:8] }} · AISMM{% endblock %}
+{% block content %}
+
+<p class="small"><a href="{{ url_for('runs') }}">← all runs</a></p>
+<h1>
+  Run <span class="mono">{{ run.id[:8] }}</span>
+  <span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span>
+</h1>
+
+<div class="split">
+  <section class="split-main">
+    {% if run.error %}
+      <h2>Error</h2>
+      <pre class="logbox logbox-error">{{ run.error }}</pre>
+    {% endif %}
+
+    <h2>Log</h2>
+    {% if run.log %}
+      <pre class="logbox">{{ run.log }}</pre>
+    {% else %}
+      <p class="muted">No log recorded for this run.</p>
+    {% endif %}
+
+    {% if run.caption %}
+      <h2>Caption</h2>
+      <pre class="logbox">{{ run.caption }}</pre>
+    {% endif %}
+
+    {% if run.asset_path %}
+      <h2>Media</h2>
+      <div class="detail-media">
+        {% set filename = run.asset_path.split('/')[-1] %}
+        {% if filename.lower().endswith(('.mp4', '.mov', '.webm')) %}
+          <video controls src="{{ url_for('asset', filename=filename) }}"></video>
+        {% else %}
+          <img src="{{ url_for('asset', filename=filename) }}" alt="run media">
+        {% endif %}
+      </div>
+      <p class="small muted mono">{{ run.asset_path }}</p>
+      {% if asset_url %}<p class="small"><a href="{{ asset_url }}" target="_blank">public URL ↗</a></p>{% endif %}
+    {% endif %}
+
+    {% if staged %}
+      <h2>Staged posts</h2>
+      <table>
+        <thead><tr><th>Status</th><th>Kind</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+        {% for s in staged %}
+          <tr>
+            <td><span class="badge badge-{{ s.status.value }}">{{ s.status.value }}</span></td>
+            <td class="small">{{ s.media_kind }}</td>
+            <td class="small">{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td>{% if s.external_url %}<a href="{{ s.external_url }}" target="_blank">open ↗</a>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  <aside class="split-aside">
+    <h3>Details</h3>
+    <table class="kv">
+      <tr><td>Started</td><td>{{ run.created_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td></tr>
+      <tr><td>Status</td><td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td></tr>
+      <tr>
+        <td>Instruction</td>
+        <td>
+          {% if instruction %}
+            <a href="{{ url_for('edit_instruction', instruction_id=instruction.id) }}">{{ instruction.name }}</a>
+          {% else %}<span class="muted">deleted</span>{% endif %}
+        </td>
+      </tr>
+      {% if instruction %}
+        <tr><td>Publish mode</td><td><span class="badge badge-{{ instruction.publish_mode.value }}">{{ instruction.publish_mode.value }}</span></td></tr>
+      {% endif %}
+      <tr>
+        <td>Account</td>
+        <td>
+          {% if account %}{{ account.platform.value }} · {{ account.handle or account.external_id }}
+          {% else %}<span class="muted">deleted</span>{% endif %}
+        </td>
+      </tr>
+      {% if run.external_url %}
+        <tr><td>Published</td><td><a href="{{ run.external_url }}" target="_blank">open ↗</a></td></tr>
+      {% endif %}
+      <tr><td>Run id</td><td class="mono small">{{ run.id }}</td></tr>
+    </table>
+
+    <h4>Filter runs like this</h4>
+    <p class="small">
+      {% if instruction %}
+        <a href="{{ url_for('runs', instruction=instruction.id) }}">Same instruction</a><br>
+      {% endif %}
+      {% if account %}
+        <a href="{{ url_for('runs', account=account.id) }}">Same account</a><br>
+      {% endif %}
+      <a href="{{ url_for('runs', status=run.status.value) }}">Same status</a>
+    </p>
+
+    <p class="hint note-block">
+      The service log has the full picture for this run — search it for the run id:
+      <code class="copyable">journalctl -u aismm.service | grep {{ run.id[:8] }}</code>
+    </p>
+  </aside>
+</div>
+{% endblock %}

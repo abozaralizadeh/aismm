@@ -18,8 +18,9 @@ from flask import (
 from markupsafe import Markup, escape
 
 from ..config import settings
+from ..assets import public_url
 from ..models import (
-    Account, Instruction, MediaPref, PlatformApp, PlatformName, PublishMode,
+    Account, Instruction, MediaPref, PlatformApp, PlatformName, PublishMode, RunStatus,
 )
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
@@ -299,13 +300,90 @@ def create_app() -> Flask:
         return redirect(url_for("runs"))
 
     # ---- runs / approvals ------------------------------------------------ #
+    RUN_SORTS = {"created_at": "When", "status": "Status",
+                 "instruction_id": "Instruction", "account_id": "Account"}
+    PER_PAGE_CHOICES = (25, 50, 100, 200)
+
     @app.route("/runs")
     def runs():
         store = get_store()
-        return render_template("runs.html", runs=store.list_runs(limit=100),
-                               pending=store.list_staged(pending_only=True),
-                               accounts={a.id: a for a in store.list_accounts()},
-                               instructions={i.id: i for i in store.list_instructions()})
+        args = request.args
+        search = args.get("q", "").strip()
+        status = args.get("status", "").strip()
+        instruction_id = args.get("instruction", "").strip()
+        account_id = args.get("account", "").strip()
+        sort = args.get("sort", "created_at")
+        if sort not in RUN_SORTS:
+            sort = "created_at"
+        descending = args.get("dir", "desc") != "asc"
+        try:
+            per_page = int(args.get("per_page", 25))
+        except ValueError:
+            per_page = 25
+        per_page = per_page if per_page in PER_PAGE_CHOICES else 25
+        try:
+            page = max(int(args.get("page", 1)), 1)
+        except ValueError:
+            page = 1
+
+        status_filter = None
+        if status:
+            try:
+                status_filter = RunStatus(status)
+            except ValueError:
+                status_filter = None
+
+        filters = {"status": status_filter, "instruction_id": instruction_id or None,
+                   "account_id": account_id or None, "search": search}
+        total = store.count_runs(**filters)
+        pages = max((total + per_page - 1) // per_page, 1)
+        page = min(page, pages)
+        rows = store.list_runs(limit=per_page, offset=(page - 1) * per_page,
+                               sort=sort, descending=descending, **filters)
+
+        current = {"q": search, "status": status, "instruction": instruction_id,
+                   "account": account_id, "sort": sort,
+                   "dir": "desc" if descending else "asc", "per_page": per_page}
+
+        def runs_url(**overrides):
+            """A /runs URL that keeps the current filters, changing only what's given.
+
+            Built here because Jinja macros can't take ``**kwargs``.
+            """
+            params = {**current, "page": page, **overrides}
+            return url_for("runs", **{k: v for k, v in params.items() if v not in ("", None)})
+
+        return render_template(
+            "runs.html",
+            runs=rows,
+            pending=store.list_staged(pending_only=True),
+            accounts={a.id: a for a in store.list_accounts()},
+            instructions={i.id: i for i in store.list_instructions()},
+            all_instructions=store.list_instructions(),
+            all_accounts=store.list_accounts(),
+            statuses=list(RunStatus),
+            sorts=RUN_SORTS,
+            per_page_choices=PER_PAGE_CHOICES,
+            filters=current,
+            runs_url=runs_url,
+            page=page, pages=pages, total=total,
+        )
+
+    @app.route("/runs/<run_id>")
+    def run_detail(run_id):
+        store = get_store()
+        run = store.get_run(run_id)
+        if not run:
+            abort(404)
+        staged = [s for s in store.list_staged(limit=500) if s.run_id == run.id]
+        return render_template(
+            "run_detail.html",
+            run=run,
+            instruction=store.get_instruction(run.instruction_id),
+            account=store.get_account(run.account_id),
+            staged=staged,
+            asset_url=public_url(run.asset_path) if run.asset_path else "",
+        )
 
     @app.route("/staged/<staged_id>/approve", methods=["POST"])
     def approve(staged_id):

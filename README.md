@@ -670,6 +670,29 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]   # run onc
 **Schedules** accept a 5-field cron expression (`0 9 * * *`) or an interval (`every 6h`, `30m`,
 `1d`). Editing an instruction in the dashboard live-reschedules its job.
 
+### The Runs page
+
+Built to stay usable as the table grows — filtering, sorting and paging all happen in the **store**,
+so the page loads one page of rows however many runs exist.
+
+- **Search** across captions, errors, run logs, published URLs, *and* the instruction's name (the run
+  row only stores its id, but that isn't what you'd type).
+- **Filter** by status, instruction, and account; combine freely.
+- **Sort** by when / instruction / account / status, ascending or descending — click a column header.
+  Sort links keep the active filters.
+- **Page** at 25 / 50 / 100 / 200 per page.
+
+Every row links to a **run detail page** with the full log and error, the caption, the media it
+produced, the staged posts it created, its instruction (with publish mode) and account, one-click
+links to "all runs for this instruction / account / status", and the `journalctl` incantation for the
+full service log:
+
+```bash
+journalctl -u aismm.service | grep <run-id-prefix>
+```
+
+which works because the orchestrator tags every run's log lines with that prefix.
+
 ### Logs
 
 ```bash

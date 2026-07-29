@@ -79,6 +79,11 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is
   inherited; override only when a platform differs (TikTok uses `client_key`, so it overrides them).
+- **Run listing is paged/filtered/sorted in the STORE** (`list_runs` + `count_runs`), never in the
+  view — the run table grows without bound. Sort keys are whitelisted (a query param must not reach
+  arbitrary columns), search covers caption/error/log/url plus the instruction *name*, and
+  LocalStore does it in SQL while AzureStore does it in Python (Table Storage can't). Fetch one run
+  with `get_run`, not by scanning a list.
 - **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Two
   implementations: `LocalStore` (SQLite) and `AzureStore` (Table storage), chosen by
   `settings.use_azure_store`. Never read/write the DB directly from routes/agent code — call the

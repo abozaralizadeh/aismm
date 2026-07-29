@@ -1,5 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Runs · AISMM{% endblock %}
+
+{# `runs_url` comes from the view: it keeps the current filters and overrides
+   only what is passed (Jinja macros can't take **kwargs). #}
+{% macro sort_header(key, label, filters, runs_url) -%}
+  {% set active = filters.sort == key %}
+  {% set next_dir = 'asc' if active and filters.dir == 'desc' else 'desc' %}
+  <a class="sort {% if active %}sort-active{% endif %}"
+     href="{{ runs_url(sort=key, dir=next_dir, page=1) }}">
+    {{ label }}{% if active %} <span class="sort-arrow">{{ '▾' if filters.dir == 'desc' else '▴' }}</span>{% endif %}
+  </a>
+{%- endmacro %}
+
 {% block content %}
 <h1>Runs &amp; approvals</h1>
 
@@ -40,22 +52,64 @@
 <p class="muted">Nothing waiting for approval.</p>
 {% endif %}
 
-<h2>Recent runs</h2>
+<h2>Runs <span class="muted small">({{ total }})</span></h2>
+
+<form method="get" action="{{ url_for('runs') }}" class="filters">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="Search captions, errors, logs, instruction…">
+  <select name="status">
+    <option value="">Any status</option>
+    {% for s in statuses %}
+      <option value="{{ s.value }}" {% if filters.status == s.value %}selected{% endif %}>{{ s.value }}</option>
+    {% endfor %}
+  </select>
+  <select name="instruction">
+    <option value="">Any instruction</option>
+    {% for i in all_instructions %}
+      <option value="{{ i.id }}" {% if filters.instruction == i.id %}selected{% endif %}>{{ i.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="account">
+    <option value="">Any account</option>
+    {% for a in all_accounts %}
+      <option value="{{ a.id }}" {% if filters.account == a.id %}selected{% endif %}>
+        {{ a.platform.value }} · {{ a.handle or a.external_id }}</option>
+    {% endfor %}
+  </select>
+  <select name="per_page">
+    {% for n in per_page_choices %}
+      <option value="{{ n }}" {% if filters.per_page == n %}selected{% endif %}>{{ n }}/page</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="sort" value="{{ filters.sort }}">
+  <input type="hidden" name="dir" value="{{ filters.dir }}">
+  <button class="btn btn-primary">Filter</button>
+  {% if filters.q or filters.status or filters.instruction or filters.account %}
+    <a class="btn" href="{{ url_for('runs') }}">Clear</a>
+  {% endif %}
+</form>
+
 {% if runs %}
 <table>
-  <thead><tr><th>When</th><th>Instruction</th><th>Account</th><th>Status</th><th>Caption</th><th>Link</th></tr></thead>
+  <thead><tr>
+    <th>{{ sort_header('created_at', 'When', filters, runs_url) }}</th>
+    <th>{{ sort_header('instruction_id', 'Instruction', filters, runs_url) }}</th>
+    <th>{{ sort_header('account_id', 'Account', filters, runs_url) }}</th>
+    <th>{{ sort_header('status', 'Status', filters, runs_url) }}</th>
+    <th>Caption / error</th>
+    <th></th>
+  </tr></thead>
   <tbody>
   {% for r in runs %}
     {% set instr = instructions.get(r.instruction_id) %}
     {% set acct = accounts.get(r.account_id) %}
     <tr>
-      <td class="small">{{ r.created_at.strftime('%m-%d %H:%M') }}</td>
+      <td class="small nowrap">
+        <a href="{{ url_for('run_detail', run_id=r.id) }}">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</a>
+      </td>
       <td class="small">
         {% if instr %}
           <a href="{{ url_for('edit_instruction', instruction_id=instr.id) }}">{{ instr.name }}</a>
-        {% else %}
-          <span class="muted" title="{{ r.instruction_id }}">deleted instruction</span>
-        {% endif %}
+        {% else %}<span class="muted">deleted instruction</span>{% endif %}
       </td>
       <td class="small">
         {% if acct %}{{ acct.platform.value }} · {{ acct.handle or acct.external_id }}
@@ -63,12 +117,34 @@
       </td>
       <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value }}</span></td>
       <td class="small">{{ (r.caption or r.error or '')[:90] }}</td>
-      <td>{% if r.external_url %}<a href="{{ r.external_url }}" target="_blank">open ↗</a>{% endif %}</td>
+      <td class="nowrap">
+        <a class="small" href="{{ url_for('run_detail', run_id=r.id) }}">details →</a>
+        {% if r.external_url %} <a class="small" href="{{ r.external_url }}" target="_blank">open ↗</a>{% endif %}
+      </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}
+    <a class="btn" href="{{ runs_url(page=1) }}">« first</a>
+    <a class="btn" href="{{ runs_url(page=page-1) }}">‹ prev</a>
+  {% endif %}
+  <span class="muted small">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a class="btn" href="{{ runs_url(page=page+1) }}">next ›</a>
+    <a class="btn" href="{{ runs_url(page=pages) }}">last »</a>
+  {% endif %}
+</div>
+{% endif %}
+
 {% else %}
-<p class="muted">No runs yet.</p>
+<p class="muted">
+  {% if filters.q or filters.status or filters.instruction or filters.account %}
+    No runs match these filters. <a href="{{ url_for('runs') }}">Clear them</a>.
+  {% else %}No runs yet.{% endif %}
+</p>
 {% endif %}
 {% endblock %}

@@ -378,10 +378,48 @@ class AzureStore(Store):
         self._upsert(PK_RUN, run.id, self._run_to_entity(run))
         return run
 
-    def list_runs(self, *, limit=100):
+    def get_run(self, run_id):
+        entity = self._get(PK_RUN, run_id)
+        return self._run_from_entity(entity) if entity else None
+
+    def _matching_runs(self, *, status, instruction_id, account_id, search):
+        """Filter in Python — Table Storage has no LIKE and no server-side sort."""
         runs = [self._run_from_entity(e) for e in self._query(PK_RUN)]
-        runs.sort(key=lambda r: r.created_at, reverse=True)
-        return runs[:limit]
+        if status:
+            wanted = status.value if hasattr(status, "value") else str(status)
+            runs = [r for r in runs if r.status.value == wanted]
+        if instruction_id:
+            runs = [r for r in runs if r.instruction_id == instruction_id]
+        if account_id:
+            runs = [r for r in runs if r.account_id == account_id]
+        term = (search or "").strip().lower()
+        if term:
+            # Match the instruction NAME too, which is what a human searches for.
+            named = {i.id for i in self.list_instructions() if term in i.name.lower()}
+            runs = [r for r in runs
+                    if term in (r.caption or "").lower()
+                    or term in (r.error or "").lower()
+                    or term in (r.log or "").lower()
+                    or term in (r.external_url or "").lower()
+                    or r.instruction_id in named]
+        return runs
+
+    def list_runs(self, *, limit=100, offset=0, status=None, instruction_id=None,
+                  account_id=None, search="", sort="created_at", descending=True):
+        runs = self._matching_runs(status=status, instruction_id=instruction_id,
+                                   account_id=account_id, search=search)
+        keys = {
+            "created_at": lambda r: r.created_at,
+            "status": lambda r: r.status.value,
+            "instruction_id": lambda r: r.instruction_id,
+            "account_id": lambda r: r.account_id,
+        }
+        runs.sort(key=keys.get(sort, keys["created_at"]), reverse=descending)
+        return runs[offset:offset + limit]
+
+    def count_runs(self, *, status=None, instruction_id=None, account_id=None, search=""):
+        return len(self._matching_runs(status=status, instruction_id=instruction_id,
+                                       account_id=account_id, search=search))
 
     # --- staged posts ------------------------------------------------------ #
     def add_staged(self, staged):

@@ -128,11 +128,16 @@ def reject_staged(staged_id: str) -> dict:
 
 
 def _record_published_run(store, staged: StagedPost, url: str) -> None:
-    """Attach the published permalink to the originating run (best-effort)."""
-    for run in store.list_runs(limit=200):
-        if run.id == staged.run_id:
-            run.status = RunStatus.published
-            run.external_url = url
-            run.log = (run.log + f"\nApproved & published: {url}").strip()
-            store.update_run(run)
-            return
+    """Attach the published permalink to the originating run (best-effort).
+
+    Fetches the run by id: scanning the most recent N runs used to miss anything
+    approved after enough newer runs had piled up.
+    """
+    run = store.get_run(staged.run_id) if staged.run_id else None
+    if not run:
+        logger.warning("Approved post %s has no matching run (%s)", staged.id, staged.run_id)
+        return
+    run.status = RunStatus.published
+    run.external_url = url
+    run.log = (run.log + f"\nApproved & published: {url}").strip()
+    store.update_run(run)
