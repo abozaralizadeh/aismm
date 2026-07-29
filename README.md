@@ -760,6 +760,18 @@ sudo ./setup_service.sh
 Re-running is cheap: pip runs **only when `requirements.txt` has changed** (a hash is stamped into
 the venv), and Chromium is downloaded only when it's missing. `FORCE_INSTALL=1` reinstalls anyway.
 
+**A broken deploy no longer takes the service down.** Before restarting anything,
+[`scripts/preflight.py`](scripts/preflight.py) checks that the new code can actually boot — both
+`Store` backends concrete, every module importable, credentials present for the selected LLM
+provider. If it fails, the deploy aborts and the **running service is left untouched**:
+
+```
+PREFLIGHT FAILED:
+  ✗ AzureStore does not implement 2 method(s) declared in Store: count_runs, get_run.
+```
+
+Run it any time with `python scripts/preflight.py`; `SKIP_PREFLIGHT=1` overrides it.
+
 It creates `.venv` and installs the deps if missing, creates `.env` from the example on first run
 (then stops so you can fill it in), fixes ownership on `data/` and `tokens.key`, writes
 `/etc/systemd/system/aismm.service`, and enables + (re)starts it. Overrides:

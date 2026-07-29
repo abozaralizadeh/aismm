@@ -87,7 +87,9 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Two
   implementations: `LocalStore` (SQLite) and `AzureStore` (Table storage), chosen by
   `settings.use_azure_store`. Never read/write the DB directly from routes/agent code — call the
-  store, and add new methods to `base.py` + **both** backends. Tokens cross this boundary in
+  store, and add new methods to `base.py` + **both** backends — a backend missing one only fails at
+  `get_store()`, i.e. at gunicorn worker boot, as a crash loop. `tests/test_store_interface.py` and
+  `scripts/preflight.py` both catch it; `setup_service.sh` runs the latter before restarting. Tokens cross this boundary in
   plaintext; the store encrypts (Fernet) internally.
 - **Media goes through [assets.py](aismm/assets.py)**, never `open()`/`Path.read_bytes` on an
   `asset_path`: with Azure configured the bytes may live only in blob storage. `save_bytes` writes

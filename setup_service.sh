@@ -140,6 +140,20 @@ if grep -qE '^DASHBOARD_BASE_URL=.*(127\.0\.0\.1|localhost)' "$PROJECT_ROOT/.env
   echo "         and the OAuth callbacks will fail." >&2
 fi
 
+# --- preflight --------------------------------------------------------------- #
+# Check the code can actually boot BEFORE touching the running service. A worker
+# that dies on import makes gunicorn crash-loop, and systemd's restart policy
+# turns one bad commit into an outage; failing here leaves the old service up.
+if [[ "${SKIP_PREFLIGHT:-0}" != "1" ]]; then
+  echo "Preflight ..."
+  if ! run_as_service_user "cd '$WORKDIR' && '$VENV_PATH/bin/python' scripts/preflight.py"; then
+    echo "" >&2
+    echo "Deploy ABORTED — the new code failed preflight. The running service was" >&2
+    echo "left untouched. Fix the problems above, or SKIP_PREFLIGHT=1 to override." >&2
+    exit 1
+  fi
+fi
+
 # --- systemd unit ------------------------------------------------------------ #
 cat > "$UNIT_PATH" <<EOF
 [Unit]
