@@ -10,6 +10,8 @@ Four entities drive the whole system:
                      approval-queue item awaiting a human click in the dashboard).
 * ``InstructionState`` — an instruction's carry-over memory (agent-written) and
                      note (human-written); see the class docstring.
+* ``PlatformApp``  — a developer app's OAuth credentials, editable in the
+                     dashboard so one deployment can serve several apps/brands.
 
 Plus a ``Lock`` table used for single-flight de-duplication (ported from the
 SandBox ``_try_acquire_lock`` pattern) so a schedule firing twice never
@@ -149,6 +151,45 @@ class StagedPost(SQLModel, table=True):
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+
+class PlatformApp(SQLModel, table=True):
+    """A developer app's OAuth credentials, managed from the dashboard.
+
+    Credentials used to live only in ``.env``, which allowed exactly one app per
+    platform and required a redeploy to change. Several apps per platform are
+    normal — a separate Meta app per brand, a second X app for a client — and
+    each connected account remembers which app authorised it.
+
+    ``.env`` still works: when no app row exists for a platform, the
+    ``PlatformCreds`` from settings are used, so existing deployments keep
+    running untouched.
+
+    The secret is Fernet-encrypted by the store, exactly like account tokens.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    platform: PlatformName = Field(index=True)
+    name: str = ""                           # label, e.g. "Brand A — Meta app"
+    client_id: str = ""
+    client_secret_enc: str = ""
+    extra_json: str = "{}"                   # per-platform extras (X's API key/secret)
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def extra(self) -> dict:
+        try:
+            return json.loads(self.extra_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    def set_extra(self, value: dict) -> None:
+        self.extra_json = json.dumps(value or {})
+
+    @property
+    def label(self) -> str:
+        return self.name or f"{self.platform.value} app {self.id[:8]}"
 
 
 class InstructionState(SQLModel, table=True):

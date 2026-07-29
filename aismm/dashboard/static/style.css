@@ -88,7 +88,7 @@ form { margin: 0; }
 
 .form { display: flex; flex-direction: column; gap: 1.1rem; max-width: 680px; }
 .form label { display: flex; flex-direction: column; gap: .35rem; font-weight: 600; }
-.form input[type=text], .form textarea, .form select {
+.form input[type=text], .form input[type=password], .form textarea, .form select {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); padding: .55rem .7rem; font: inherit; font-weight: 400;
 }
@@ -108,3 +108,34 @@ form { margin: 0; }
 .caption { white-space: pre-wrap; margin: .5rem 0 .9rem; }
 
 @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* --- platform apps page --- */
+.tabs { display: flex; gap: .5rem; margin: 1rem 0 1.5rem; flex-wrap: wrap; }
+.tab {
+  padding: .45rem .9rem; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--muted); font-size: .9rem;
+}
+.tab:hover { color: var(--text); text-decoration: none; border-color: var(--accent); }
+.tab-active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.badge-count {
+  background: var(--accent); color: #0b0e14; border-radius: 999px;
+  padding: 0 .4rem; font-size: .75rem; font-weight: 700;
+}
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 22rem); gap: 2rem; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+.split-aside {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1.25rem; align-self: start; position: sticky; top: 4.5rem;
+}
+.split-aside h3 { margin-top: 0; }
+.split-aside h4 { margin: 1.25rem 0 .4rem; font-size: .9rem; }
+.split-aside .steps { padding-left: 1.1rem; color: var(--muted); font-size: .88rem; line-height: 1.6; }
+.split-aside .steps li { margin-bottom: .5rem; }
+.copyable {
+  display: block; word-break: break-all; background: var(--panel-2); padding: .5rem .6rem;
+  border-radius: 8px; font-size: .8rem; border: 1px solid var(--border);
+}
+.note-block { border-left: 2px solid var(--warn); padding-left: .7rem; margin-top: 1rem; }
+.split-main .card { margin-bottom: .75rem; }
+.split-main hr { border: 0; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+.btn.small { padding: .3rem .6rem; font-size: .8rem; }

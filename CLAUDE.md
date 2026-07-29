@@ -70,6 +70,11 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   (`{account, instruction, store, run, assets, result}`). Return `None` to disable a tool for a run
   (e.g. Sora when unconfigured). **No LLM calls inside a tool** — tools do deterministic work only;
   the tool docstring is what the model sees.
+- **App credentials come from `platforms/apps.resolve_creds`**, not `settings` — a `PlatformApp` row
+  (dashboard-managed, several per platform, secret Fernet-encrypted) falls back to `.env`. Only the
+  OAuth connect needs them; publishing uses the stored token, so `get_platform(name)` without creds
+  is fine there. Add a platform → add a `setup_guides.GUIDES` entry too, or its Apps page shows a
+  bare placeholder.
 - **Platforms subclass `SocialPlatform`** ([platforms/base.py](aismm/platforms/base.py)): declare
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is
@@ -99,6 +104,8 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/agent/prompts.py](aismm/agent/prompts.py) | inline system prompt + kickoff builder |
 | [aismm/tools/](aismm/tools/) | registry + web_search, sora_client/config, video/image/publish/context tools |
 | [aismm/platforms/](aismm/platforms/) | base + registry + instagram/twitter/youtube/tiktok |
+| [aismm/platforms/apps.py](aismm/platforms/apps.py) | which OAuth app credentials a connect uses (DB app → `.env` fallback) |
+| [aismm/platforms/setup_guides.py](aismm/platforms/setup_guides.py) | per-platform "where to get these credentials" text shown on the Apps page |
 | [aismm/orchestrator.py](aismm/orchestrator.py) | per-account run + lock + `approve_staged`/`reject_staged` |
 | [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (Table) + blob_media (Blob) |
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |

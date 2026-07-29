@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Platform apps · AISMM{% endblock %}
+{% block content %}
+<h1>Platform apps</h1>
+<p class="muted">
+  OAuth credentials for the developer apps AISMM connects through. Add more than one per platform to
+  run several brands or clients from this deployment — each connected account remembers which app
+  authorised it. Secrets are encrypted at rest and never shown again after saving.
+</p>
+
+<div class="tabs">
+  {% for p in platforms %}
+    <a class="tab {% if selected and selected == p %}tab-active{% endif %}"
+       href="{{ url_for('platform_apps_page', platform=p.value) }}">
+      {{ p.value }}{% if apps[p] %} <span class="badge-count">{{ apps[p]|length }}</span>{% endif %}
+    </a>
+  {% endfor %}
+</div>
+
+{% if not selected %}
+  <p class="muted">Pick a platform above to add or edit its credentials.</p>
+{% else %}
+  {% set guide = guides[selected.value] %}
+  {% set env = env_creds[selected.value] %}
+
+  <div class="split">
+    <section class="split-main">
+      <h2>{{ guide.title }}</h2>
+
+      {% for a in apps[selected] %}
+        <form method="post" action="{{ url_for('save_platform_app') }}" class="form card">
+          <input type="hidden" name="id" value="{{ a.id }}">
+          <input type="hidden" name="platform" value="{{ selected.value }}">
+          <label>Label
+            <input type="text" name="name" value="{{ a.name }}" placeholder="e.g. Brand A">
+          </label>
+          <label>{{ guide.id_label }}
+            <input type="text" name="client_id" value="{{ a.client_id }}" required>
+          </label>
+          <label>{{ guide.secret_label }}
+            <input type="password" name="client_secret" placeholder="•••••••• (unchanged)"
+                   autocomplete="new-password">
+            <span class="hint">Leave blank to keep the stored secret.</span>
+          </label>
+          {% for field in guide.get('extra_fields', []) %}
+            <label>{{ field.label }}
+              <input type="text" name="extra_{{ field.key }}" value="{{ a.extra.get(field.key, '') }}">
+              {% if field.help %}<span class="hint">{{ field.help }}</span>{% endif %}
+            </label>
+          {% endfor %}
+          <label class="check inline">
+            <input type="checkbox" name="enabled" {% if a.enabled %}checked{% endif %}> Enabled
+          </label>
+          <div class="row">
+            <button class="btn btn-primary">Save</button>
+            <a class="btn" href="{{ url_for('oauth_start', platform=selected.value, app=a.id) }}">
+              Connect an account with this app →
+            </a>
+          </div>
+        </form>
+        <form method="post" action="{{ url_for('delete_platform_app', app_id=a.id) }}"
+              onsubmit="return confirm('Delete these credentials?')">
+          <button class="btn btn-danger small">Delete “{{ a.label }}”</button>
+        </form>
+        <hr>
+      {% endfor %}
+
+      <h3>Add {{ 'another' if apps[selected] else 'an' }} app</h3>
+      <form method="post" action="{{ url_for('save_platform_app') }}" class="form card">
+        <input type="hidden" name="platform" value="{{ selected.value }}">
+        <label>Label
+          <input type="text" name="name" placeholder="e.g. Brand A — {{ selected.value }} app">
+        </label>
+        <label>{{ guide.id_label }}
+          <input type="text" name="client_id" required>
+        </label>
+        <label>{{ guide.secret_label }}
+          <input type="password" name="client_secret" required autocomplete="new-password">
+        </label>
+        {% for field in guide.get('extra_fields', []) %}
+          <label>{{ field.label }}
+            <input type="text" name="extra_{{ field.key }}">
+            {% if field.help %}<span class="hint">{{ field.help }}</span>{% endif %}
+          </label>
+        {% endfor %}
+        <label class="check inline">
+          <input type="checkbox" name="enabled" checked> Enabled
+        </label>
+        <button class="btn btn-primary">Add app</button>
+      </form>
+
+      {% if env.configured %}
+        <p class="muted small">
+          Credentials for {{ selected.value }} are also present in <code>.env</code>
+          (client id <code>{{ env.client_id[:6] }}…</code>). They are used only while no app above
+          is enabled.
+        </p>
+      {% endif %}
+    </section>
+
+    <aside class="split-aside">
+      <h3>Where to get these</h3>
+      {% if guide.requires %}<p class="hint">{{ guide.requires|md_inline }}</p>{% endif %}
+      {% if guide.console %}
+        <p><a href="{{ guide.console }}" target="_blank" rel="noopener">{{ guide.console_label }} ↗</a></p>
+      {% endif %}
+      <ol class="steps">
+        {% for step in guide.steps %}<li>{{ step|md_inline }}</li>{% endfor %}
+      </ol>
+
+      <h4>Redirect / callback URL</h4>
+      <p class="hint">Register this exactly, in the app's OAuth settings:</p>
+      <code class="copyable">{{ redirect_uris[selected.value] }}</code>
+
+      {% if guide.notes %}<p class="hint note-block">ℹ️ {{ guide.notes|md_inline }}</p>{% endif %}
+      {% if guide.docs %}
+        <p><a href="{{ guide.docs }}" target="_blank" rel="noopener">Platform documentation ↗</a></p>
+      {% endif %}
+    </aside>
+  </div>
+{% endif %}
+{% endblock %}

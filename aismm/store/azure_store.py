@@ -40,8 +40,8 @@ from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, Instruction, InstructionState, MediaPref, PlatformName, PublishMode, Run,
-    RunStatus, StagedPost, StagedStatus,
+    Account, Instruction, InstructionState, MediaPref, PlatformApp, PlatformName, PublishMode,
+    Run, RunStatus, StagedPost, StagedStatus,
 )
 from .base import Store
 
@@ -52,6 +52,7 @@ PK_INSTRUCTION = "instruction"
 PK_RUN = "run"
 PK_STAGED = "staged"
 PK_STATE = "state"
+PK_APP = "app"
 PK_LOCK = "lock"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
@@ -270,6 +271,47 @@ class AzureStore(Store):
         if not account:
             return "", ""
         return decrypt(account.access_token_enc), decrypt(account.refresh_token_enc)
+
+    # --- platform apps ------------------------------------------------------ #
+    def upsert_platform_app(self, app, *, client_secret=None):
+        existing = self._get(PK_APP, app.id)
+        if client_secret:
+            app.client_secret_enc = encrypt(client_secret)
+        elif existing is not None:
+            app.client_secret_enc = app.client_secret_enc or existing.get("client_secret_enc", "")
+        self._upsert(PK_APP, app.id, {
+            "platform": app.platform.value, "name": app.name, "client_id": app.client_id,
+            "client_secret_enc": app.client_secret_enc, "extra_json": app.extra_json,
+            "enabled": app.enabled, "created_at": app.created_at,
+        })
+        return app
+
+    @staticmethod
+    def _app_from_entity(e) -> PlatformApp:
+        return PlatformApp(
+            id=e["RowKey"], platform=PlatformName(e["platform"]), name=e.get("name", ""),
+            client_id=e.get("client_id", ""),
+            client_secret_enc=e.get("client_secret_enc", ""),
+            extra_json=e.get("extra_json", "{}"), enabled=bool(e.get("enabled", True)),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def get_platform_app(self, app_id):
+        entity = self._get(PK_APP, app_id)
+        return self._app_from_entity(entity) if entity else None
+
+    def list_platform_apps(self, platform=None):
+        apps = [self._app_from_entity(e) for e in self._query(PK_APP)]
+        if platform is not None:
+            apps = [a for a in apps if a.platform == platform]
+        return sorted(apps, key=lambda a: a.created_at)
+
+    def delete_platform_app(self, app_id):
+        self._delete(PK_APP, app_id)
+
+    def get_app_secret(self, app_id):
+        app = self.get_platform_app(app_id)
+        return decrypt(app.client_secret_enc) if app else ""
 
     # --- instructions ------------------------------------------------------ #
     def upsert_instruction(self, instruction):

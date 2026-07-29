@@ -8,15 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import re
 import threading
 from collections.abc import Callable
 
 from flask import (
     Flask, abort, flash, redirect, render_template, request, send_from_directory, session, url_for,
 )
+from markupsafe import Markup, escape
 
 from ..config import settings
-from ..models import Account, Instruction, MediaPref, PlatformName, PublishMode
+from ..models import (
+    Account, Instruction, MediaPref, PlatformApp, PlatformName, PublishMode,
+)
+from ..platforms import apps as platform_apps
+from ..platforms import setup_guides
 from ..platforms.registry import get_platform
 from ..auth import oauth
 from . import sso
@@ -59,13 +65,29 @@ def create_app() -> Flask:
     # which Instagram must be able to fetch — see sso.PUBLIC_ENDPOINTS).
     sso.init_app(app, settings)
 
+    # The setup guides are written with light markdown so they stay readable in
+    # the source file; render just bold / italic / code, escaping first.
+    _MD_PATTERNS = (
+        (re.compile(r"\*\*(.+?)\*\*"), r"<strong>\1</strong>"),
+        (re.compile(r"`(.+?)`"), r"<code>\1</code>"),
+        (re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])"), r"<em>\1</em>"),
+    )
+
+    @app.template_filter("md_inline")
+    def _md_inline(text):
+        rendered = escape(text or "")
+        for pattern, replacement in _MD_PATTERNS:
+            rendered = pattern.sub(replacement, str(rendered))
+        return Markup(rendered)
+
     # ---- helpers --------------------------------------------------------- #
     def _platforms_view():
+        store = get_store()
         view = []
         for p in PlatformName:
-            creds = settings.platform_creds.get(p.value)
             view.append({"name": p.value,
-                         "configured": bool(creds and creds.configured),
+                         "configured": platform_apps.is_configured(p, store),
+                         "options": platform_apps.connection_options(p, store),
                          "capabilities": get_platform(p).capabilities})
         return view
 
@@ -94,12 +116,17 @@ def create_app() -> Flask:
             name = PlatformName(platform)
         except ValueError:
             abort(404)
-        integ = get_platform(name)
+        app_id = request.args.get("app", "")
+        creds = platform_apps.resolve_creds(name, get_store(), app_id)
+        integ = get_platform(name, creds)
         if not (integ.creds and integ.creds.configured):
-            flash(f"{platform} app credentials are not set. Add them to your .env.", "error")
-            return redirect(url_for("accounts"))
+            flash(f"No credentials for {platform} yet — add an app first.", "error")
+            return redirect(url_for("platform_apps_page", platform=platform))
         state = oauth.random_state()
         session[f"oauth_state_{platform}"] = state
+        # Remember which app authorised this, so the callback exchanges the code
+        # with the SAME credentials and the account records its origin.
+        session[f"oauth_app_{platform}"] = app_id
         code_challenge = None
         if integ.use_pkce:
             verifier, code_challenge = oauth.generate_pkce()
@@ -121,7 +148,8 @@ def create_app() -> Flask:
             flash("OAuth state mismatch — please retry the connection.", "error")
             return redirect(url_for("accounts"))
         code = request.args.get("code", "")
-        integ = get_platform(name)
+        app_id = session.pop(f"oauth_app_{platform}", "")
+        integ = get_platform(name, platform_apps.resolve_creds(name, get_store(), app_id))
         verifier = session.get(f"oauth_verifier_{platform}")
         try:
             token = asyncio.run(integ.exchange_code(
@@ -132,6 +160,8 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
 
         meta = dict(identity.meta)
+        if app_id:
+            meta["app_id"] = app_id
         access = meta.pop("access_token", token.access_token)   # platforms may override (e.g. IG page token)
         refresh = meta.pop("refresh_token", token.refresh_token)
         expires_at = None
@@ -149,6 +179,63 @@ def create_app() -> Flask:
         get_store().delete_account(account_id)
         flash("Account disconnected.", "success")
         return redirect(url_for("accounts"))
+
+    # ---- platform apps (OAuth credentials + setup guides) ---------------- #
+    @app.route("/apps")
+    @app.route("/apps/<platform>")
+    def platform_apps_page(platform=None):
+        store = get_store()
+        selected = None
+        if platform:
+            try:
+                selected = PlatformName(platform)
+            except ValueError:
+                abort(404)
+        return render_template(
+            "apps.html",
+            platforms=list(PlatformName),
+            selected=selected,
+            apps={p: store.list_platform_apps(p) for p in PlatformName},
+            guides={p.value: setup_guides.guide_for(p) for p in PlatformName},
+            env_creds={p.value: platform_apps.env_creds(p) for p in PlatformName},
+            redirect_uris={p.value: settings.redirect_uri(p.value) for p in PlatformName},
+        )
+
+    @app.route("/apps", methods=["POST"])
+    def save_platform_app():
+        store = get_store()
+        f = request.form
+        try:
+            name = PlatformName(f.get("platform", ""))
+        except ValueError:
+            abort(400)
+        app_id = f.get("id") or None
+        record = store.get_platform_app(app_id) if app_id else None
+        if record is None:
+            record = PlatformApp(platform=name)
+        record.platform = name
+        record.name = f.get("name", "").strip()
+        record.client_id = f.get("client_id", "").strip()
+        record.enabled = f.get("enabled") == "on"
+        extra = {key[6:]: f.get(key, "").strip()
+                 for key in f if key.startswith("extra_") and f.get(key, "").strip()}
+        if extra:
+            record.set_extra(extra)
+        # An empty secret box means "leave the stored one alone" — the form never
+        # shows a secret back, so blanking it must not wipe it.
+        store.upsert_platform_app(record, client_secret=f.get("client_secret", "").strip() or None)
+        flash(f"Saved {name.value} app '{record.label}'.", "success")
+        return redirect(url_for("platform_apps_page", platform=name.value))
+
+    @app.route("/apps/<app_id>/delete", methods=["POST"])
+    def delete_platform_app(app_id):
+        store = get_store()
+        record = store.get_platform_app(app_id)
+        store.delete_platform_app(app_id)
+        flash("App credentials deleted. Accounts connected with it keep working "
+              "until their token expires.", "success")
+        return redirect(url_for("platform_apps_page",
+                                platform=record.platform.value if record else None))
 
     # ---- instructions ---------------------------------------------------- #
     @app.route("/instructions")

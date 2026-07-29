@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import Account, Instruction, InstructionState, Run, StagedPost
+from ..models import Account, Instruction, InstructionState, PlatformApp, Run, StagedPost
 
 
 class Store(ABC):
@@ -40,6 +40,24 @@ class Store(ABC):
     @abstractmethod
     def get_tokens(self, account_id: str) -> tuple[str, str]:
         """Return decrypted ``(access_token, refresh_token)`` for an account."""
+
+    # --- platform apps (OAuth developer-app credentials) ------------------- #
+    @abstractmethod
+    def upsert_platform_app(self, app: PlatformApp, *, client_secret: str | None = None) -> PlatformApp:
+        """Insert/update an app. A plaintext ``client_secret`` is encrypted here."""
+
+    @abstractmethod
+    def get_platform_app(self, app_id: str) -> PlatformApp | None: ...
+
+    @abstractmethod
+    def list_platform_apps(self, platform=None) -> list[PlatformApp]: ...
+
+    @abstractmethod
+    def delete_platform_app(self, app_id: str) -> None: ...
+
+    @abstractmethod
+    def get_app_secret(self, app_id: str) -> str:
+        """Return the decrypted client secret for an app."""
 
     # --- instructions ------------------------------------------------------ #
     @abstractmethod
@@ -75,7 +93,32 @@ class Store(ABC):
     def update_run(self, run: Run) -> Run: ...
 
     @abstractmethod
-    def list_runs(self, *, limit: int = 100) -> list[Run]: ...
+    def get_run(self, run_id: str) -> Run | None: ...
+
+    @abstractmethod
+    def list_runs(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        status=None,
+        instruction_id: str | None = None,
+        account_id: str | None = None,
+        search: str = "",
+        sort: str = "created_at",
+        descending: bool = True,
+    ) -> list[Run]:
+        """A page of runs, filtered and sorted.
+
+        Filtering/sorting/paging belong here rather than in the view: the run
+        table grows without bound, and the Azure backend cannot sort or page
+        server-side, so each implementation does what its storage allows.
+        """
+
+    @abstractmethod
+    def count_runs(self, *, status=None, instruction_id: str | None = None,
+                   account_id: str | None = None, search: str = "") -> int:
+        """How many runs match these filters (for pagination)."""
 
     # --- staged posts ------------------------------------------------------ #
     @abstractmethod

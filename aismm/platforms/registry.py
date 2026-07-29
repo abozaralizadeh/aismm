@@ -26,12 +26,19 @@ def get_platform_class(name: PlatformName) -> type[SocialPlatform]:
     return _PLATFORMS[name]
 
 
-def get_platform(name: PlatformName) -> SocialPlatform:
-    """Instantiate a platform with its OAuth app credentials from settings."""
+def get_platform(name: PlatformName, creds=None) -> SocialPlatform:
+    """Instantiate a platform integration.
+
+    ``creds`` overrides the ``.env`` credentials — the dashboard passes the
+    credentials of the specific app being connected with (see
+    :mod:`aismm.platforms.apps`). Publishing does not need them (it uses the
+    stored access token), so callers that only publish can omit them.
+    """
     cls = get_platform_class(name)
-    creds = settings.platform_creds.get(
-        name.value if isinstance(name, PlatformName) else str(name)
-    )
+    if creds is None:
+        creds = settings.platform_creds.get(
+            name.value if isinstance(name, PlatformName) else str(name)
+        )
     from ..config import PlatformCreds
 
     return cls(creds or PlatformCreds())

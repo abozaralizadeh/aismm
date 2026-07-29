@@ -10,12 +10,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import func as sa_func
+from sqlalchemy import or_ as sa_or
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, Instruction, InstructionState, Lock, Run, StagedPost, StagedStatus,
+    Account, Instruction, InstructionState, Lock, PlatformApp, Run, StagedPost,
+    StagedStatus,
 )
 from .base import Store
 
@@ -73,6 +76,41 @@ class LocalStore(Store):
         if not acct:
             return "", ""
         return decrypt(acct.access_token_enc), decrypt(acct.refresh_token_enc)
+
+    # --- platform apps ------------------------------------------------------ #
+    def upsert_platform_app(self, app, *, client_secret=None):
+        with Session(self._engine) as s:
+            existing = s.get(PlatformApp, app.id)
+            if client_secret:
+                app.client_secret_enc = encrypt(client_secret)
+            elif existing is not None:
+                app.client_secret_enc = app.client_secret_enc or existing.client_secret_enc
+            merged = s.merge(app)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def get_platform_app(self, app_id):
+        with Session(self._engine) as s:
+            return s.get(PlatformApp, app_id)
+
+    def list_platform_apps(self, platform=None):
+        with Session(self._engine) as s:
+            stmt = select(PlatformApp)
+            if platform is not None:
+                stmt = stmt.where(PlatformApp.platform == platform)
+            return list(s.exec(stmt.order_by(PlatformApp.created_at)).all())
+
+    def delete_platform_app(self, app_id):
+        with Session(self._engine) as s:
+            obj = s.get(PlatformApp, app_id)
+            if obj:
+                s.delete(obj)
+                s.commit()
+
+    def get_app_secret(self, app_id):
+        app = self.get_platform_app(app_id)
+        return decrypt(app.client_secret_enc) if app else ""
 
     # --- instructions ------------------------------------------------------ #
     def upsert_instruction(self, instruction):
@@ -148,11 +186,57 @@ class LocalStore(Store):
             s.refresh(merged)
             return merged
 
-    def list_runs(self, *, limit=100):
+    def get_run(self, run_id):
         with Session(self._engine) as s:
-            return list(
-                s.exec(select(Run).order_by(Run.created_at.desc()).limit(limit)).all()
-            )
+            return s.get(Run, run_id)
+
+    # Sortable columns, whitelisted so a query parameter can't reach arbitrary
+    # attributes.
+    _RUN_SORTS = {"created_at": Run.created_at, "status": Run.status,
+                  "instruction_id": Run.instruction_id, "account_id": Run.account_id}
+
+    def _run_filters(self, session, *, status, instruction_id, account_id, search):
+        clauses = []
+        if status:
+            clauses.append(Run.status == status)
+        if instruction_id:
+            clauses.append(Run.instruction_id == instruction_id)
+        if account_id:
+            clauses.append(Run.account_id == account_id)
+        term = (search or "").strip()
+        if term:
+            like = f"%{term}%"
+            # Also match the instruction's NAME, which is what a human searches
+            # for — the run row only stores its id.
+            named = session.exec(
+                select(Instruction.id).where(Instruction.name.ilike(like))).all()
+            text_match = [Run.caption.ilike(like), Run.error.ilike(like),
+                          Run.log.ilike(like), Run.external_url.ilike(like)]
+            if named:
+                text_match.append(Run.instruction_id.in_(list(named)))
+            clauses.append(sa_or(*text_match))
+        return clauses
+
+    def list_runs(self, *, limit=100, offset=0, status=None, instruction_id=None,
+                  account_id=None, search="", sort="created_at", descending=True):
+        with Session(self._engine) as s:
+            column = self._RUN_SORTS.get(sort, Run.created_at)
+            stmt = select(Run).where(*self._run_filters(
+                s, status=status, instruction_id=instruction_id,
+                account_id=account_id, search=search))
+            stmt = stmt.order_by(column.desc() if descending else column.asc())
+            # A stable tiebreaker keeps paging consistent when sorting by a
+            # column with many equal values (status, instruction).
+            if sort != "created_at":
+                stmt = stmt.order_by(Run.created_at.desc())
+            return list(s.exec(stmt.offset(offset).limit(limit)).all())
+
+    def count_runs(self, *, status=None, instruction_id=None, account_id=None, search=""):
+        with Session(self._engine) as s:
+            stmt = select(sa_func.count()).select_from(Run).where(*self._run_filters(
+                s, status=status, instruction_id=instruction_id,
+                account_id=account_id, search=search))
+            return int(s.exec(stmt).one())
 
     # --- staged posts ------------------------------------------------------ #
     def add_staged(self, staged):

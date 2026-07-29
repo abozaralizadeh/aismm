@@ -14,9 +14,14 @@
       {% if p.capabilities.supports_text %} · text{% endif %}
     </div>
     {% if p.configured %}
-      <a class="btn" href="{{ url_for('oauth_start', platform=p.name) }}">Connect →</a>
+      {% for opt in p.options if opt.configured %}
+        <a class="btn" href="{{ url_for('oauth_start', platform=p.name, app=opt.app_id) }}">
+          Connect{% if p.options|selectattr('configured')|list|length > 1 %} · {{ opt.label }}{% endif %} →
+        </a>
+      {% endfor %}
     {% else %}
-      <span class="badge badge-off">app creds missing</span>
+      <span class="badge badge-off">no app yet</span>
+      <a class="small" href="{{ url_for('platform_apps_page', platform=p.name) }}">Set one up →</a>
     {% endif %}
   </div>
   {% endfor %}

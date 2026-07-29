@@ -18,6 +18,7 @@ new platform or a new tool with a single file.
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [Configuration](#configuration) · [Azure vs APIM](#azure-openai-or-apim) · [Sora / images](#media-generation-sora-2--images) · [env reference](#environment-variable-reference)
+- [Platform apps (credentials in the UI)](#platform-apps-credentials-in-the-dashboard)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
 - [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing)
 - [AI-content disclosure](#ai-content-disclosure)
@@ -239,6 +240,37 @@ Every account's OAuth **redirect/callback URL** is:
 `<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/oauth/<platform>/callback` (for example,
 `https://your-host/aismm/oauth/twitter/callback` when the prefix is `/aismm`). Omit the prefix when
 `REVERSE_PROXY_PREFIX` is empty. Register exactly this in each developer portal.
+
+---
+
+## Platform apps: credentials in the dashboard
+
+**Apps → pick a platform** holds the OAuth credentials AISMM connects through, so you no longer need
+to edit `.env` and redeploy to change them — and you can register **several apps per platform**, one
+per brand or client. Each connected account records which app authorised it.
+
+The page shows the setup steps beside the form: where the credentials live in that platform's
+console, links to the console and its docs, the exact redirect URI to register (with your
+reverse-proxy prefix already applied), and the platform-specific traps — for Instagram, that the
+*Instagram app ID* is **not** the value the login dialog wants.
+
+Secrets are Fernet-encrypted at rest, exactly like account tokens, and are never rendered back into
+the form; leaving the secret box empty when editing keeps the stored one.
+
+`.env` still works. When a platform has no app row, its `PlatformCreds` from the environment are
+used, so existing deployments keep running untouched — the Apps page tells you when that is
+happening.
+
+### Connecting more than one account per platform
+
+With two apps configured, the Accounts page shows a **Connect** button per app. Two brands that live
+under different developer accounts (or different Facebook logins) can therefore both be connected
+here.
+
+> One caveat for Instagram specifically: `fetch_identity` picks the **first** Facebook Page that has
+> an Instagram business account attached. If one login administers several such Pages, only the first
+> is reachable today — connect the second through its own Meta app / Facebook login, or ask for a
+> Page picker to be added.
 
 ---
 
