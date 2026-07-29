@@ -91,7 +91,8 @@ class Twitter(SocialPlatform):
             raise RuntimeError(f"X media processing failed: {processing.get('error')}")
         return media_id
 
-    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
+    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
+                      instruction=None) -> PublishResult:
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         payload: dict = {"text": caption[: self.capabilities.caption_limit]}
         async with httpx.AsyncClient(timeout=120) as client:

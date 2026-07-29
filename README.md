@@ -512,10 +512,13 @@ would be posted. A caption that already discloses ("made with AI", "#ai", …) i
 than double-labelled.
 
 ```ini
-AI_DISCLOSURE_ENABLED=1
+AI_DISCLOSURE_ENABLED=1                 # global master switch
 AI_DISCLOSURE_TEXT=🤖 AI-generated      # e.g. "Contenuto generato dall'IA"
 AI_DISCLOSURE_SEPARATOR=\n\n
 ```
+
+**Per instruction**, a checkbox — *"Add the AI-generated label"* — turns it off for that instruction
+alone. The global switch is the master: an instruction can opt *out* below it, never back on.
 
 ### Why it defaults to on
 
@@ -673,8 +676,26 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]   # run onc
 
 (If you `pip install -e .`, the same commands are available as the `aismm` console script.)
 
-**Schedules** accept a 5-field cron expression (`0 9 * * *`) or an interval (`every 6h`, `30m`,
-`1d`). Editing an instruction in the dashboard live-reschedules its job.
+### Schedules
+
+Times of day, weekday filters, intervals and cron — combined freely. Everything is UTC, and the
+instruction form shows a **readback** of how your text was understood.
+
+| You type | It means |
+|---|---|
+| `09:00` | daily at 09:00 UTC |
+| `9am, 6pm` | twice a day |
+| `09:00 mon-fri` | weekdays only |
+| `09:30 and 17:45 weekends` | two times, Saturday and Sunday |
+| `every 6h` · `30m` · `every 2 days` | intervals (floor: 1 minute) |
+| `hourly` · `daily` · `weekly` · `@daily` | named cadences |
+| `0 */4 * * *` | raw cron still works |
+| `every 6h; 08:00 mon` | mix them — `;` or a newline starts a new rule |
+
+An instruction can therefore produce **several triggers**, and the scheduler registers one job per
+trigger. A schedule it cannot parse logs a warning and never fires, rather than guessing — a bare
+`6` is ambiguous (06:00? every 6 hours?) and is refused for that reason. Editing an instruction
+live-reschedules its jobs.
 
 ### The Runs page
 

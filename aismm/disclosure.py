@@ -46,8 +46,17 @@ _EXISTING = re.compile(
 )
 
 
-def enabled() -> bool:
-    return settings.disclosure.enabled
+def enabled(instruction=None) -> bool:
+    """Is disclosure on for this post?
+
+    The global switch is the master (``AI_DISCLOSURE_ENABLED``); an instruction
+    can opt *out* below it, never override it back on.
+    """
+    if not settings.disclosure.enabled:
+        return False
+    if instruction is not None and not getattr(instruction, "disclose_ai", True):
+        return False
+    return True
 
 
 def already_disclosed(caption: str) -> bool:
@@ -58,14 +67,15 @@ def label() -> str:
     return settings.disclosure.text.strip()
 
 
-def apply_to_caption(caption: str, *, caption_limit: int | None = None) -> str:
+def apply_to_caption(caption: str, *, caption_limit: int | None = None,
+                     instruction=None) -> str:
     """Append the AI disclosure to a caption, fitting it inside the limit.
 
-    Returns the caption unchanged when disclosure is off or the text already
-    carries a disclosure.
+    Returns the caption unchanged when disclosure is off (globally or for this
+    instruction) or the text already carries a disclosure.
     """
     text = (caption or "").strip()
-    if not enabled():
+    if not enabled(instruction):
         return text
     suffix = label()
     if not suffix or already_disclosed(text):
@@ -85,13 +95,13 @@ def apply_to_caption(caption: str, *, caption_limit: int | None = None) -> str:
     return f"{text}{addition}"
 
 
-def native_flags(platform_name: str) -> dict:
+def native_flags(platform_name: str, instruction=None) -> dict:
     """Publishing-API fields that carry the platform's own AI label.
 
     Empty for platforms whose API has no such field — there the caption suffix
     is the disclosure.
     """
-    if not enabled():
+    if not enabled(instruction):
         return {}
     return {
         "tiktok": {"is_aigc": True},

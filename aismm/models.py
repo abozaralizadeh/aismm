@@ -112,6 +112,10 @@ class Instruction(SQLModel, table=True):
     schedule: str = ""                       # cron ("0 9 * * *") or interval ("every 6h")
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
+    # Label this instruction's posts as AI-generated. On by default (EU AI Act
+    # Art. 50 + platform rules — see aismm/disclosure.py); turn it off per
+    # instruction when you have a reason to.
+    disclose_ai: bool = True
     enabled: bool = True
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

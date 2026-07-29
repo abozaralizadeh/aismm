@@ -58,7 +58,8 @@ class YouTube(SocialPlatform):
         ch = items[0]
         return Identity(external_id=ch["id"], handle=ch["snippet"].get("title", ""))
 
-    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
+    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
+                      instruction=None) -> PublishResult:
         if media_kind != "video" or not asset_path:
             raise RuntimeError("YouTube requires a video asset; generate a video first.")
         # Read up front: the bytes may live in blob storage rather than on disk.
@@ -70,7 +71,7 @@ class YouTube(SocialPlatform):
                        "selfDeclaredMadeForKids": False,
                        # containsSyntheticMedia drives YouTube's altered/synthetic
                        # content disclosure ("How this content was made").
-                       **disclosure.native_flags("youtube")},
+                       **disclosure.native_flags("youtube", instruction)},
         }
         size = len(video_bytes)
         async with httpx.AsyncClient(timeout=None) as client:

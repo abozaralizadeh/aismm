@@ -246,7 +246,8 @@ class Instagram(SocialPlatform):
         except Exception as exc:  # noqa: BLE001 - diagnostics must never block a post
             logger.warning("Media preflight check failed (continuing): %s", exc)
 
-    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
+    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
+                      instruction=None) -> PublishResult:
         ig_user_id = account.external_id
         media_url = public_url(asset_path)
         if not media_url:

@@ -56,8 +56,17 @@
   <div class="grid-2">
     <label>Schedule
       <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
-             placeholder="0 9 * * *  or  every 6h">
-      <span class="hint">Cron (min hr dom mon dow) or interval ("every 6h", "30m", "1d").</span>
+             placeholder="09:00,18:00 mon-fri">
+      <span class="hint">
+        Times of day, weekdays, intervals or cron — combined freely. All times UTC.<br>
+        <code>09:00</code> · <code>9am, 6pm</code> · <code>09:00 mon-fri</code> ·
+        <code>09:30 and 17:45 weekends</code> · <code>every 6h</code> ·
+        <code>hourly</code>/<code>daily</code>/<code>weekly</code> ·
+        <code>0 9 * * *</code> · <code>every 6h; 08:00 mon</code>
+        {% if instruction and instruction.schedule %}
+          <br><strong>Reads as:</strong> {{ schedule_readback }}
+        {% endif %}
+      </span>
     </label>
 
     <label>Publish mode
@@ -84,6 +93,20 @@
         {% endfor %}
       </select>
     </label>
+
+    <label class="check inline">
+      <input type="checkbox" name="disclose_ai"
+             {% if not instruction or instruction.disclose_ai %}checked{% endif %}>
+      Add the AI-generated label
+    </label>
+    <span class="hint">
+      Appends “{{ settings.disclosure.text }}” to the caption and sets the platform's own AI flag
+      (TikTok AIGC, YouTube synthetic-media). Required in the EU from 2 Aug 2026 and by every major
+      platform's own rules — untick only if you have a specific reason.
+      {% if not settings.disclosure.enabled %}
+        <br><strong>Disabled globally</strong> by AI_DISCLOSURE_ENABLED=0, so this box has no effect.
+      {% endif %}
+    </span>
 
     <label class="check inline">
       <input type="checkbox" name="enabled" {% if not instruction or instruction.enabled %}checked{% endif %}>

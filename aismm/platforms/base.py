@@ -115,5 +115,11 @@ class SocialPlatform(ABC):
         caption: str,
         asset_path: str,
         media_kind: str,
+        instruction=None,
     ) -> PublishResult:
-        """Publish a post. ``media_kind`` is one of text|image|video."""
+        """Publish a post. ``media_kind`` is one of text|image|video.
+
+        ``instruction`` is passed so a platform can honour per-instruction
+        settings — today the AI-disclosure toggle that drives the native
+        platform flags (see :mod:`aismm.disclosure`).
+        """

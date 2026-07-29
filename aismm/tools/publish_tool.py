@@ -145,7 +145,8 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
     # AI-content disclosure, applied HERE so it reaches every path — the dry-run
     # preview and the approval queue show exactly what would be posted, and the
     # model cannot skip it. See aismm/disclosure.py for the legal/platform basis.
-    caption = disclosure.apply_to_caption(caption, caption_limit=caps.caption_limit)
+    caption = disclosure.apply_to_caption(caption, caption_limit=caps.caption_limit,
+                                          instruction=instruction)
 
     run.caption = caption
     run.asset_path = asset_path
@@ -184,6 +185,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "", media
         result = await platform.publish(
             access_token=access_token, account=account,
             caption=caption, asset_path=asset_path, media_kind=kind,
+            instruction=instruction,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Live publish failed")

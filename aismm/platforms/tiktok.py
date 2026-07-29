@@ -88,7 +88,8 @@ class TikTok(SocialPlatform):
             user = r.json().get("data", {}).get("user", {})
         return Identity(external_id=user.get("open_id", ""), handle=user.get("display_name", ""))
 
-    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind) -> PublishResult:
+    async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
+                      instruction=None) -> PublishResult:
         if media_kind != "video" or not asset_path:
             raise RuntimeError("TikTok requires a video asset; generate a video first.")
         # Read up front: the bytes may live in blob storage rather than on disk.
@@ -106,7 +107,7 @@ class TikTok(SocialPlatform):
                 # AI disclosure: the field is `is_aigc` (NOT `is_ai_generated`,
                 # which the API silently ignores). True renders TikTok's
                 # "Creator labeled as AI-generated" tag on the video.
-                **disclosure.native_flags("tiktok"),
+                **disclosure.native_flags("tiktok", instruction),
             },
             "source_info": {
                 "source": "FILE_UPLOAD",

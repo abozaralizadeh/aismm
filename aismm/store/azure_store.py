@@ -185,6 +185,7 @@ class AzureStore(Store):
             "name": i.name, "brief": i.brief, "account_ids_json": i.account_ids_json,
             "schedule": i.schedule, "publish_mode": i.publish_mode.value,
             "media_pref": i.media_pref.value, "enabled": i.enabled,
+            "disclose_ai": i.disclose_ai,
             "created_at": i.created_at, "updated_at": i.updated_at,
         }
 
@@ -196,6 +197,7 @@ class AzureStore(Store):
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
             media_pref=MediaPref(e.get("media_pref", "auto")),
             enabled=bool(e.get("enabled", True)),
+            disclose_ai=bool(e.get("disclose_ai", True)),
             created_at=_parse_dt(e.get("created_at")) or _now(),
             updated_at=_parse_dt(e.get("updated_at")) or _now(),
         )

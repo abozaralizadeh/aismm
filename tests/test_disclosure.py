@@ -146,3 +146,62 @@ def test_disclosure_respects_the_platform_caption_limit(store):
     staged = _publish(store, PublishMode.dry_run, "y" * 400)
     assert len(staged.caption) <= 280
     assert staged.caption.endswith("🤖 AI-generated")
+
+
+# --- per-instruction opt-out (the dashboard checkbox) ------------------------------- #
+
+def test_instruction_can_opt_out(store):
+    """A checkbox on the instruction, so one account can post unlabelled."""
+    off = Instruction(name="no label", publish_mode=PublishMode.dry_run, disclose_ai=False)
+    assert disclosure.enabled(off) is False
+    assert disclosure.apply_to_caption("A post", instruction=off) == "A post"
+    assert disclosure.native_flags("tiktok", off) == {}
+
+
+def test_instruction_opted_in_still_gets_the_label():
+    on = Instruction(name="labelled", disclose_ai=True)
+    assert disclosure.enabled(on) is True
+    assert "AI-generated" in disclosure.apply_to_caption("A post", instruction=on)
+    assert disclosure.native_flags("tiktok", on) == {"is_aigc": True}
+
+
+def test_the_global_switch_still_wins(monkeypatch):
+    """AI_DISCLOSURE_ENABLED=0 turns everything off, whatever an instruction says."""
+    monkeypatch.setattr(disclosure, "settings",
+                        dataclasses.replace(config_module.settings,
+                                            disclosure=DisclosureSettings(enabled=False)))
+    assert disclosure.enabled(Instruction(name="x", disclose_ai=True)) is False
+
+
+def test_defaults_to_on_for_a_new_instruction():
+    assert Instruction(name="new").disclose_ai is True
+
+
+def test_publish_respects_the_instruction_flag(store):
+    from aismm.models import Account, PlatformName, Run
+
+    account = store.upsert_account(Account(platform=PlatformName.twitter, handle="t",
+                                           external_id="1"), access_token="x")
+    instruction = store.upsert_instruction(Instruction(
+        name="quiet", publish_mode=PublishMode.dry_run, disclose_ai=False))
+    run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
+    state = {"account": account, "instruction": instruction, "store": store, "run": run,
+             "assets": []}
+    asyncio.run(perform_publish(state, "A clean caption"))
+    assert store.list_staged()[0].caption == "A clean caption"
+
+
+def test_the_form_round_trips_the_checkbox(store, monkeypatch):
+    from aismm.dashboard import app as app_module
+
+    monkeypatch.setattr(app_module, "get_store", lambda: store)
+    app = app_module.create_app()
+    app.secret_key = "test"
+    instruction = store.upsert_instruction(Instruction(name="i"))
+
+    base = {"id": instruction.id, "name": "i", "brief": "b", "schedule": "",
+            "publish_mode": "dry_run", "media_pref": "auto", "note": ""}
+    app.test_client().post("/instructions", data=base)                     # unticked
+    assert store.get_instruction(instruction.id).disclose_ai is False
+    app.test_client().post("/instructions", data={**base, "disclose_ai": "on"})
+    assert store.get_instruction(instruction.id).disclose_ai is True

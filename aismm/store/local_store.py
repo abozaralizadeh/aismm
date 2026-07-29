@@ -7,6 +7,7 @@ lock acquisition, and a row older than the TTL is reclaimed.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete as sa_delete
@@ -21,6 +22,9 @@ from ..models import (
     StagedStatus,
 )
 from .base import Store
+
+
+logger = logging.getLogger("aismm.store.local")
 
 
 def _now() -> datetime:
@@ -38,6 +42,39 @@ class LocalStore(Store):
 
     def init(self) -> None:
         SQLModel.metadata.create_all(self._engine)
+        self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """Add columns the models declare but an existing database lacks.
+
+        ``create_all`` creates missing *tables* and nothing else, so widening a
+        model used to break every deployment that already had the table — which
+        is why per-instruction state was pushed into a side table. This closes
+        that gap: SQLite's ``ALTER TABLE ADD COLUMN`` is cheap and non-locking,
+        and Azure Table Storage needs no equivalent (it is schemaless).
+        """
+        from sqlalchemy import inspect as sa_inspect
+        from sqlalchemy import text as sa_text
+
+        inspector = sa_inspect(self._engine)
+        existing_tables = set(inspector.get_table_names())
+        for table in SQLModel.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" ' \
+                      f'{column.type.compile(self._engine.dialect)}'
+                default = column.default.arg if column.default is not None else None
+                if isinstance(default, (str, int, float, bool)):
+                    literal = f"'{default}'" if isinstance(default, str) else int(default) \
+                        if isinstance(default, bool) else default
+                    ddl += f" DEFAULT {literal}"
+                with self._engine.begin() as conn:
+                    conn.execute(sa_text(ddl))
+                logger.info("Added missing column %s.%s", table.name, column.name)
 
     # --- accounts ---------------------------------------------------------- #
     def upsert_account(self, account, *, access_token=None, refresh_token=None):

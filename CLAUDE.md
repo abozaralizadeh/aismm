@@ -121,6 +121,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
 | [aismm/dashboard/sso.py](aismm/dashboard/sso.py) | generic OIDC sign-in guard + `/login`, `/auth/callback`, `/logout` |
 | [aismm/agent/memory.py](aismm/agent/memory.py) | post-run summarizer for an oversized carry-over memory |
+| [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
 | [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
@@ -151,6 +152,21 @@ disclosure there. When trimming to a caption limit, cut the caption, never the l
 Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_ENABLED=0` opts out.
 
 ## Gotchas
+
+- **Widening a table is now safe**: `LocalStore._add_missing_columns` runs `ALTER TABLE ADD COLUMN`
+  for any column the models declare and the DB lacks (Azure Table is schemaless, so it needs
+  nothing). Prefer a real column over a side table for new per-instruction fields; `InstructionState`
+  stays a side table because memory/note are large, mutable and semantically separate.
+- **One schedule → SEVERAL triggers** ([schedules.py](aismm/schedules.py)): `parse_schedule` returns a
+  list and `refresh_jobs` registers one job per trigger (`instr:<id>`, `instr:<id>:1`, …). Ambiguous
+  input is REFUSED, not guessed — a bare `6` could be 06:00 or every 6h. `describe()` is the
+  dashboard readback; keep it defensive, cron fields can be `*/4`.
+- **gpt-image-2 ≠ gpt-image-1** ([tools/image_tool.py](aismm/tools/image_tool.py)): image-2 takes
+  arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
+  transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a
+  size instead of letting the API fail with an unexplained error.
+- **AI disclosure is per instruction too** (`Instruction.disclose_ai` checkbox). The global
+  `AI_DISCLOSURE_ENABLED` is the master — an instruction may opt out below it, never back on.
 
 - **Sora 2** ([tools/sora_client.py](aismm/tools/sora_client.py)): job-scoped — a job id only exists
   on the resource that created it, so create/poll/download must stay on one resource. The pool

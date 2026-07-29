@@ -25,6 +25,7 @@ from ..models import (
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
 from ..platforms.registry import get_platform
+from ..schedules import describe as describe_schedule
 from ..auth import oauth
 from . import sso
 from .. import orchestrator, scheduler
@@ -247,7 +248,7 @@ def create_app() -> Flask:
     @app.route("/instructions/new")
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
-                               accounts=get_store().list_accounts(),
+                               accounts=get_store().list_accounts(), settings=settings,
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions/<instruction_id>/edit")
@@ -258,7 +259,8 @@ def create_app() -> Flask:
             abort(404)
         return render_template("instruction_form.html", instruction=instr,
                                state=store.get_state(instruction_id),
-                               accounts=store.list_accounts(),
+                               accounts=store.list_accounts(), settings=settings,
+                               schedule_readback=describe_schedule(instr.schedule),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions", methods=["POST"])
@@ -274,6 +276,7 @@ def create_app() -> Flask:
         instr.schedule = f.get("schedule", "").strip()
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
+        instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
         instr.set_account_ids(request.form.getlist("account_ids"))
         store.upsert_instruction(instr)
