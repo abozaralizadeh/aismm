@@ -38,6 +38,13 @@ _TEST_ENV = {
     "AZURE_STORAGE_CONNECTION_STRING": "",
     "connection_string": "",
     "STORE_BACKEND": "local",
+    # Platform app credentials: a developer's real .env would otherwise decide
+    # whether ".env is configured", which changes credential resolution.
+    "INSTAGRAM_APP_ID": "", "INSTAGRAM_APP_SECRET": "",
+    "TWITTER_CLIENT_ID": "", "TWITTER_CLIENT_SECRET": "",
+    "TWITTER_API_KEY": "", "TWITTER_API_SECRET": "",
+    "GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": "",
+    "TIKTOK_CLIENT_KEY": "", "TIKTOK_CLIENT_SECRET": "",
 }
 os.environ.update(_TEST_ENV)
 

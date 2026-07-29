@@ -257,15 +257,21 @@ reverse-proxy prefix already applied), and the platform-specific traps — for I
 Secrets are Fernet-encrypted at rest, exactly like account tokens, and are never rendered back into
 the form; leaving the secret box empty when editing keeps the stored one.
 
-`.env` still works. When a platform has no app row, its `PlatformCreds` from the environment are
-used, so existing deployments keep running untouched — the Apps page tells you when that is
-happening.
+**`.env` and dashboard apps work side by side — both are always offered.** The environment
+credentials are the *default* (an account connected before the Apps page existed still resolves to
+them, so reconnecting one never silently switches it to a different app), and every dashboard app is
+listed alongside. The Apps page shows the `.env` credentials as their own card with a Connect button.
 
 ### Connecting more than one account per platform
 
-With two apps configured, the Accounts page shows a **Connect** button per app. Two brands that live
-under different developer accounts (or different Facebook logins) can therefore both be connected
-here.
+The Accounts page shows one **Connect** button per credential source — `from .env (default)` plus
+each configured app — so you can keep an existing `.env`-connected account and add more through the
+UI:
+
+```
+Connect · from .env (default) →
+Connect · Brand B — Meta app →
+```
 
 > One caveat for Instagram specifically: `fetch_identity` picks the **first** Facebook Page that has
 > an Instagram business account attached. If one login administers several such Pages, only the first

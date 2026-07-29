@@ -199,6 +199,7 @@ def create_app() -> Flask:
             apps={p: store.list_platform_apps(p) for p in PlatformName},
             guides={p.value: setup_guides.guide_for(p) for p in PlatformName},
             env_creds={p.value: platform_apps.env_creds(p) for p in PlatformName},
+            env_app_id=platform_apps.ENV_APP_ID,
             redirect_uris={p.value: settings.redirect_uri(p.value) for p in PlatformName},
         )
 

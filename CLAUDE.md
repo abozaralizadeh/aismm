@@ -70,8 +70,11 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   (`{account, instruction, store, run, assets, result}`). Return `None` to disable a tool for a run
   (e.g. Sora when unconfigured). **No LLM calls inside a tool** — tools do deterministic work only;
   the tool docstring is what the model sees.
-- **App credentials come from `platforms/apps.resolve_creds`**, not `settings` — a `PlatformApp` row
-  (dashboard-managed, several per platform, secret Fernet-encrypted) falls back to `.env`. Only the
+- **App credentials come from `platforms/apps.resolve_creds`**, not `settings` — `.env` and
+  dashboard-managed `PlatformApp` rows (several per platform, secret Fernet-encrypted) coexist and
+  are BOTH always offered; `.env` is the default so a pre-existing account keeps resolving to the
+  credentials that created it. `ENV_APP_ID` ("env") requests `.env` explicitly, since an empty
+  `app_id` can't distinguish "no preference" from "the .env one". Only the
   OAuth connect needs them; publishing uses the stored token, so `get_platform(name)` without creds
   is fine there. Add a platform → add a `setup_guides.GUIDES` entry too, or its Apps page shows a
   bare placeholder.

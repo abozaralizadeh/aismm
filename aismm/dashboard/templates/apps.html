@@ -90,11 +90,17 @@
       </form>
 
       {% if env.configured %}
-        <p class="muted small">
-          Credentials for {{ selected.value }} are also present in <code>.env</code>
-          (client id <code>{{ env.client_id[:6] }}…</code>). They are used only while no app above
-          is enabled.
-        </p>
+        <h3>From <code>.env</code> <span class="muted small">— the default</span></h3>
+        <div class="card">
+          <p class="muted small">
+            {{ guide.id_label }} <code>{{ env.client_id[:8] }}…</code>, set in the environment
+            (<code>{{ selected.value|upper }}_APP_ID</code> / <code>_SECRET</code>). Edit it in
+            <code>.env</code> and restart the service — or add it above as an app to manage it here.
+          </p>
+          <a class="btn" href="{{ url_for('oauth_start', platform=selected.value, app=env_app_id) }}">
+            Connect an account with the .env app →
+          </a>
+        </div>
       {% endif %}
     </section>
 

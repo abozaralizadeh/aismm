@@ -1,20 +1,27 @@
 """Resolving which OAuth app credentials to use for a connect.
 
-Credentials can come from two places:
+Credentials come from two places, and **both stay available at the same time**:
 
-* a :class:`~aismm.models.PlatformApp` row, managed in the dashboard — several
-  per platform, so one deployment can serve several brands or clients;
 * ``.env`` (:class:`~aismm.config.PlatformCreds`) — the original single-app
-  setup, still honoured so existing deployments keep working untouched.
+  setup, and the default;
+* :class:`~aismm.models.PlatformApp` rows, managed in the dashboard — several
+  per platform, so one deployment can serve several brands or clients.
 
-The dashboard offers every configured app when connecting an account, and the
+The dashboard lists every configured source when connecting an account, and the
 account records which one authorised it (in its ``meta``), so it is always clear
-where a connection came from.
+where a connection came from. An earlier version hid the ``.env`` option once a
+dashboard app existed; that stranded accounts connected through ``.env`` with no
+way to reconnect them.
 """
 from __future__ import annotations
 
 from ..config import PlatformCreds, settings
 from ..models import PlatformApp, PlatformName
+
+# Pseudo app-id meaning "the credentials in .env", so a connect can ask for them
+# explicitly rather than by absence (which would be indistinguishable from "no
+# preference" once dashboard apps exist).
+ENV_APP_ID = "env"
 
 
 def env_creds(platform: PlatformName) -> PlatformCreds:
@@ -39,35 +46,51 @@ def available_apps(platform: PlatformName, store) -> list[PlatformApp]:
 def resolve_creds(platform: PlatformName, store, app_id: str | None = None) -> PlatformCreds:
     """Pick the credentials for a connect.
 
-    An explicit ``app_id`` wins; otherwise the first enabled app for the
-    platform; otherwise ``.env``. Returns empty creds when nothing is set up, so
-    callers can report "not configured" rather than crash.
+    ``app_id`` may be:
+
+    * a :class:`~aismm.models.PlatformApp` id — use that app;
+    * :data:`ENV_APP_ID` — use ``.env`` explicitly, even when apps exist;
+    * empty/None — no preference: ``.env`` if configured, else the first app.
+
+    ``.env`` wins the no-preference case because it is the pre-existing setup:
+    accounts connected before the Apps page existed came from there, and
+    reconnecting one must not silently switch it to a different app.
     """
+    if app_id == ENV_APP_ID:
+        return env_creds(platform)
     if app_id:
         app = store.get_platform_app(app_id)
         if app and app.platform == platform:
             return app_creds(app, store)
+
+    env = env_creds(platform)
+    if env.configured:
+        return env
     apps = available_apps(platform, store)
-    if apps:
-        return app_creds(apps[0], store)
-    return env_creds(platform)
+    return app_creds(apps[0], store) if apps else PlatformCreds()
 
 
 def connection_options(platform: PlatformName, store) -> list[dict]:
-    """Everything the dashboard can offer as a "connect with…" choice.
+    """Every "connect with…" choice the dashboard can offer, ``.env`` included.
 
-    Each entry is ``{app_id, label, configured}``. ``app_id`` is empty for the
-    ``.env`` credentials, which appear only when no dashboard app exists (having
-    both would be a confusing duplicate).
+    Each entry is ``{app_id, label, configured, is_env}``. Both sources are
+    always listed: an account connected through ``.env`` still needs that route
+    to reconnect after its token expires, and hiding it once the first dashboard
+    app appeared left no way back to it.
     """
-    options = [
-        {"app_id": app.id, "label": app.label, "configured": bool(app.client_id)}
+    options = []
+    env = env_creds(platform)
+    if env.configured:
+        options.append({"app_id": ENV_APP_ID, "label": "from .env (default)",
+                        "configured": True, "is_env": True})
+    options.extend(
+        {"app_id": app.id, "label": app.label, "configured": bool(app.client_id),
+         "is_env": False}
         for app in available_apps(platform, store)
-    ]
-    if not options:
-        creds = env_creds(platform)
-        options.append({"app_id": "", "label": f"{platform.value} app (from .env)",
-                        "configured": creds.configured})
+    )
+    if not options:                       # nothing configured anywhere
+        options.append({"app_id": ENV_APP_ID, "label": "from .env", "configured": False,
+                        "is_env": True})
     return options
 
 

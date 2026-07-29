@@ -81,10 +81,26 @@ def test_env_is_used_when_no_app_exists(store, monkeypatch):
     assert creds.client_id == "env-id"
 
 
-def test_a_dashboard_app_wins_over_env(store, monkeypatch):
+def test_env_stays_the_default_when_apps_also_exist(store, monkeypatch):
+    """An account connected through .env must keep resolving to .env."""
     monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
         config_module.settings,
         platform_creds={"instagram": PlatformCreds(client_id="env-id", client_secret="env-s")}))
+    _add(store, client_id="db-id")
+    assert platform_apps.resolve_creds(PlatformName.instagram, store).client_id == "env-id"
+
+
+def test_env_can_be_requested_explicitly(store, monkeypatch):
+    monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
+        config_module.settings,
+        platform_creds={"instagram": PlatformCreds(client_id="env-id", client_secret="env-s")}))
+    _add(store, client_id="db-id")
+    creds = platform_apps.resolve_creds(PlatformName.instagram, store,
+                                        platform_apps.ENV_APP_ID)
+    assert creds.client_id == "env-id"
+
+
+def test_a_dashboard_app_is_used_when_env_is_empty(store):
     _add(store, client_id="db-id")
     assert platform_apps.resolve_creds(PlatformName.instagram, store).client_id == "db-id"
 
@@ -98,9 +114,9 @@ def test_an_explicit_app_id_selects_that_app(store):
 
 def test_an_app_id_from_another_platform_is_ignored(store):
     tiktok_app = _add(store, platform=PlatformName.tiktok, client_id="tt")
-    ig = _add(store, client_id="ig")
+    _add(store, client_id="ig")
     creds = platform_apps.resolve_creds(PlatformName.instagram, store, tiktok_app.id)
-    assert creds.client_id == "ig"
+    assert creds.client_id == "ig"          # falls back, never crosses platforms
 
 
 def test_disabled_apps_are_not_offered(store):
@@ -116,12 +132,31 @@ def test_connection_options_lists_every_enabled_app(store):
     assert all(o["configured"] for o in options)
 
 
-def test_connection_options_falls_back_to_env_only_when_empty(store, monkeypatch):
+def test_env_and_apps_are_offered_together(store, monkeypatch):
+    """Both routes must stay reachable — hiding .env stranded its accounts."""
+    monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
+        config_module.settings,
+        platform_creds={"instagram": PlatformCreds(client_id="env-id", client_secret="s")}))
+    _add(store, name="Brand B", client_id="b")
+    options = platform_apps.connection_options(PlatformName.instagram, store)
+    assert [o["app_id"] for o in options] == [platform_apps.ENV_APP_ID, options[1]["app_id"]]
+    assert options[0]["is_env"] is True and options[1]["label"] == "Brand B"
+    assert all(o["configured"] for o in options)
+
+
+def test_env_alone_is_offered_when_no_apps_exist(store, monkeypatch):
     monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
         config_module.settings,
         platform_creds={"twitter": PlatformCreds(client_id="e", client_secret="s")}))
     options = platform_apps.connection_options(PlatformName.twitter, store)
-    assert len(options) == 1 and options[0]["app_id"] == "" and options[0]["configured"]
+    assert len(options) == 1
+    assert options[0]["app_id"] == platform_apps.ENV_APP_ID and options[0]["configured"]
+
+
+def test_nothing_configured_reports_an_unconfigured_env_option(store):
+    options = platform_apps.connection_options(PlatformName.youtube, store)
+    assert len(options) == 1 and options[0]["configured"] is False
+    assert platform_apps.is_configured(PlatformName.youtube, store) is False
 
 
 def test_extra_fields_survive(store):
@@ -220,3 +255,46 @@ def test_unknown_platform_gets_a_placeholder_guide():
 
     guide = guide_for(Fake())
     assert guide["steps"]
+
+
+# --- .env and dashboard apps coexist in the UI ------------------------------------- #
+
+def _with_env(monkeypatch, **creds):
+    monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
+        config_module.settings, platform_creds=creds))
+
+
+def test_accounts_page_offers_env_and_apps_side_by_side(dash, store, monkeypatch):
+    """The reported bug: adding an app made the .env connect button vanish."""
+    _with_env(monkeypatch, instagram=PlatformCreds(client_id="env-id", client_secret="s"))
+    _add(store, name="Brand B", client_id="b")
+    page = dash.test_client().get("/accounts").get_data(as_text=True)
+    assert "from .env (default)" in page
+    assert "Brand B" in page
+    assert f"app={platform_apps.ENV_APP_ID}" in page
+
+
+def test_apps_page_shows_the_env_credentials_with_a_connect_link(dash, store, monkeypatch):
+    _with_env(monkeypatch, instagram=PlatformCreds(client_id="env-id-123", client_secret="s"))
+    page = dash.test_client().get("/apps/instagram").get_data(as_text=True)
+    assert "env-id-1" in page                       # truncated client id, never the secret
+    assert "s3cret" not in page
+    assert f"app={platform_apps.ENV_APP_ID}" in page
+
+
+def test_connecting_with_env_records_that_choice(dash, store, monkeypatch):
+    _with_env(monkeypatch, instagram=PlatformCreds(client_id="env-id", client_secret="s"))
+    _add(store, name="Brand B", client_id="b")
+    client = dash.test_client()
+    client.get(f"/oauth/instagram/start?app={platform_apps.ENV_APP_ID}")
+    with client.session_transaction() as session:
+        assert session["oauth_app_instagram"] == platform_apps.ENV_APP_ID
+
+
+def test_connecting_with_an_app_still_uses_that_app(dash, store, monkeypatch):
+    _with_env(monkeypatch, instagram=PlatformCreds(client_id="env-id", client_secret="s"))
+    app = _add(store, name="Brand B", client_id="b")
+    client = dash.test_client()
+    client.get(f"/oauth/instagram/start?app={app.id}")
+    with client.session_transaction() as session:
+        assert session["oauth_app_instagram"] == app.id
