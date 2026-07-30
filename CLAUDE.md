@@ -57,6 +57,13 @@ DO THE JOB" section, the recovery nudge offering both endings, `meta_caption_rea
 (refuses first-person failure captions; keep it narrow — blocking real copy is worse), and the
 no-terminal-call fallback that marks the run failed.
 
+`perform_publish` validates before it calls a platform, in this order: capability (can it post this
+kind?) → placement (carousel/story allowed? item cap? known placement?) → **media actually present
+and on disk/blob**. That last check exists because `media_kind="image"` with no `asset_path` used to
+sail through the image branch and fail inside Instagram with a generic "needs a media asset". Keep the
+cheap declarative checks first — "this platform has no stories" beats "asset missing" when both are
+true. Errors name the tool to call, since the agent acts on the message.
+
 The publish gate is the core design point (autonomy + guardrail): the agent always "publishes", but
 `perform_publish` in [tools/publish_tool.py](aismm/tools/publish_tool.py) does:
 `dry_run` → StagedPost(preview) · `approval` → StagedPost(pending) → dashboard Approve → platform API

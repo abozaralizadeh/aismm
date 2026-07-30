@@ -740,6 +740,16 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 > would make them useless — but it means an instruction with comment duties acts on the live account
 > even in `dry_run`. Keep that in mind when writing the brief.
 
+### Media never carries over between runs
+
+Asset files outlive the run that made them, but the agent cannot publish a path it merely *remembers*:
+`publish` verifies every asset exists (locally or in blob storage) before calling the platform, and
+refuses a `media_kind` with no file attached at all. Both errors name the tool to call instead.
+
+The memory prompt reinforces it: record what was **published**, not what was created — a run that made
+media but failed to post it has covered nothing, and writing it down as done makes the next run skip
+work it never did.
+
 ### When an Instagram publish fails
 
 Failures surface Graph's own error body — message, `code`, `error_subcode`, `error_user_msg` and

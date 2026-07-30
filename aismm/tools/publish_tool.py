@@ -18,6 +18,7 @@ import re
 from agents import function_tool
 
 from .. import disclosure, media
+from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
 from ..models import PublishMode, RunStatus, StagedPost, StagedStatus
@@ -141,6 +142,29 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     if placement not in {"feed", "story", "reel"}:
         return {"error": "unknown_placement",
                 "message": f"placement must be feed, story or reel — got {placement!r}."}
+
+    # Declaring media_kind="image" proves nothing — the file has to be there. This
+    # used to fall through to the platform, which failed with a generic "needs a
+    # media asset" that gave the agent nothing to act on.
+    wanted = "video" if caps.supports_video and not caps.supports_image else (
+        "image or video" if caps.supports_image else "media")
+    if kind != "text" and not paths:
+        return {"error": "no_media_attached",
+                "message": (f"You asked to publish {kind} but attached no file. Call "
+                            f"generate_{'video' if kind == 'video' else 'image'} (or save_media) "
+                            f"in THIS run, then pass the asset_path it returns — media from a "
+                            f"previous run is not available here.")}
+    if not paths and not caps.supports_text:
+        return {"error": "no_media_attached",
+                "message": (f"{account.platform.value} cannot post without {wanted}. Produce it "
+                            f"in this run and pass its asset_path.")}
+    missing = [p for p in paths if not asset_exists(p)]
+    if missing:
+        return {"error": "asset_missing",
+                "message": (f"{len(missing)} of {len(paths)} asset(s) do not exist: "
+                            f"{', '.join(m.rsplit('/', 1)[-1] for m in missing[:3])}. Media is not "
+                            f"carried over between runs — generate it again in this run rather "
+                            f"than reusing a path you remember.")}
 
     # Refuse to post the agent's own error message. Checked on the RAW caption,
     # before the AI disclosure is appended.

@@ -318,3 +318,55 @@ def test_a_tool_without_a_token_reports_rather_than_crashing(store):
         Account(platform=PlatformName.instagram, external_id="x"), access_token="")
     state = _tool_state(store, account)
     assert instagram_tools._instagram_context(state) is None
+
+
+# --- media must exist, and must come from THIS run ---------------------------------- #
+
+def test_declaring_a_kind_without_a_file_is_rejected(store, account):
+    """The live failure: media_kind="image" with items=0 reached Instagram."""
+    result, _ = _gate(store, account, media_kind="image")
+    assert result["error"] == "no_media_attached"
+    assert "generate_image" in result["message"]
+    assert "previous run" in result["message"]
+
+
+def test_a_video_kind_without_a_file_names_the_video_tool(store, account):
+    result, _ = _gate(store, account, media_kind="video")
+    assert result["error"] == "no_media_attached"
+    assert "generate_video" in result["message"]
+
+
+def test_text_only_on_a_media_platform_still_reports_the_media_requirement(store, account):
+    result, _ = _gate(store, account, media_kind="text")
+    assert result["error"] == "unsupported_media"
+    assert "requires media" in result["message"]
+
+
+def test_a_remembered_path_that_no_longer_exists_is_rejected(store, account):
+    """Reusing an asset path from an earlier run is the mistake that caused this."""
+    result, _ = _gate(store, account, asset_path="/gone/from-last-run.jpg",
+                      media_kind="image")
+    assert result["error"] == "asset_missing"
+    assert "from-last-run.jpg" in result["message"]
+    assert "not carried over between runs" in result["message"]
+
+
+def test_a_carousel_with_one_missing_item_is_rejected(store, account, tmp_path):
+    real = tmp_path / "there.jpg"
+    real.write_bytes(b"\xff\xd8\xffx")
+    result, _ = _gate(store, account, media_kind="image",
+                      asset_paths=[str(real), "/gone/missing.jpg"])
+    assert result["error"] == "asset_missing"
+    assert "1 of 2" in result["message"]
+
+
+def test_nothing_is_staged_when_the_media_check_fails(store, account):
+    _gate(store, account, media_kind="image")
+    assert store.list_staged() == []
+
+
+def test_placement_errors_still_win_over_the_existence_check(store, account):
+    """A wrong placement is a clearer message than 'asset missing' when both apply."""
+    result, _ = _gate(store, account, asset_path="/nope.jpg", media_kind="image",
+                      placement="billboard")
+    assert result["error"] == "unknown_placement"

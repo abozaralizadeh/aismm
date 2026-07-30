@@ -63,6 +63,26 @@ def read_bytes(asset_path: str) -> bytes:
     raise FileNotFoundError(f"Asset not found: {asset_path}")
 
 
+def exists(asset_path: str | None) -> bool:
+    """Is this asset actually available — locally, or in blob storage?
+
+    Asset files outlive the run that made them, but a path the agent remembers
+    from a previous run can still be gone (a wiped data dir, a different host, a
+    path it only *believed* it had). Publishing a path that resolves to nothing
+    produces a confusing platform-side failure, so callers check first.
+    """
+    if not asset_path:
+        return False
+    if Path(asset_path).exists():
+        return True
+    if blob_media.enabled():
+        try:
+            return blob_media.exists(Path(asset_path).name)
+        except Exception:  # noqa: BLE001 - treat an unreachable blob as absent
+            return False
+    return False
+
+
 def public_url(asset_path: str | None) -> str:
     """Public URL an asset is reachable at (for Instagram + dashboard previews)."""
     if not asset_path:
