@@ -816,6 +816,25 @@ journalctl -u aismm.service | grep <run-id-prefix>
 
 which works because the orchestrator tags every run's log lines with that prefix.
 
+### On a phone
+
+The dashboard is responsive — it's meant to be usable from a phone when a run fails at an awkward
+hour. What that took, measured at a 375px viewport:
+
+| Problem | Fix |
+|---|---|
+| page scrolled sideways by 468px | wide tables scroll inside a `.table-scroll` box; the page never does |
+| nav clipped off the right edge | the topbar wraps and the nav scrolls horizontally |
+| form controls at 13–14px | 16px on any touch device — below that, iOS Safari zooms in on focus and never zooms back |
+| filters squeezed onto one line | stacked full-width below 720px |
+| sticky sidebar ate the viewport | static on short screens |
+| run ids / asset paths widened the page | `overflow-wrap: anywhere` |
+| small tap targets | 44px minimum |
+
+Verified at 375 / 768 / 1280px across every page: zero horizontal overflow.
+[`tests/test_responsive.py`](tests/test_responsive.py) guards the essentials — notably that every
+table stays wrapped and every control stays at 16px on touch.
+
 ### Logs
 
 ```bash

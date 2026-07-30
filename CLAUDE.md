@@ -153,6 +153,12 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 
 ## Gotchas
 
+- **Dashboard mobile rules** ([static/style.css](aismm/dashboard/static/style.css)): a new `<table>`
+  must be wrapped in `<div class="table-scroll">` or the whole page scrolls sideways on a phone, and
+  form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus
+  and never returns. `tests/test_responsive.py` enforces both; it also covers the viewport tag, the
+  scrollable nav, and 44px tap targets.
+
 - **Widening a table is now safe**: `LocalStore._add_missing_columns` runs `ALTER TABLE ADD COLUMN`
   for any column the models declare and the DB lacks (Azure Table is schemaless, so it needs
   nothing). Prefer a real column over a side table for new per-instruction fields; `InstructionState`

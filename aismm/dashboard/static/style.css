@@ -1,3 +1,7 @@
+html {
+  -webkit-text-size-adjust: 100%;   /* iOS otherwise inflates text in landscape */
+}
+
 :root {
   --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #9aa3b2; --accent: #6ea8fe; --accent-2: #7c5cff;
@@ -17,12 +21,18 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; color: var(--text); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .topbar {
-  display: flex; align-items: center; gap: 1.5rem;
+  display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
   padding: .8rem 1.5rem; background: var(--panel); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 10;
 }
 .brand { font-weight: 700; font-size: 1.1rem; }
-.topbar nav { display: flex; gap: 1.25rem; }
+/* The nav scrolls sideways rather than being clipped when it doesn't fit. */
+.topbar nav {
+  display: flex; gap: 1.25rem; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; min-width: 0;
+}
+.topbar nav::-webkit-scrollbar { display: none; }
+.topbar nav a { white-space: nowrap; }
 .topbar nav a { color: var(--muted); font-weight: 500; }
 .topbar nav a:hover { color: var(--text); text-decoration: none; }
 .user-box { margin-left: auto; display: flex; align-items: center; gap: .75rem; font-size: .85rem; }
@@ -60,6 +70,11 @@ main { max-width: 960px; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
 }
 .platform-name { font-weight: 600; font-size: 1.05rem; }
 
+/* Wide tables scroll INSIDE their own box; the page itself never does. */
+.table-scroll {
+  overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
+  border-radius: var(--radius);
+}
 table { width: 100%; border-collapse: collapse; background: var(--panel);
         border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 th, td { text-align: left; padding: .65rem .8rem; border-bottom: 1px solid var(--border); }
@@ -166,4 +181,78 @@ th .sort-active { color: var(--accent); }
 .logbox-error { border-color: var(--danger); background: rgba(240,97,109,.08); }
 .detail-media video, .detail-media img {
   max-width: 100%; border-radius: 8px; background: #000; max-height: 26rem;
+}
+
+/* ===================================================================== *
+ * Small screens
+ *
+ * Measured problems this fixes, at a 375px viewport:
+ *   • the page scrolled sideways by 468px (nav + a 842px-wide table)
+ *   • nav items were clipped off the right edge and unreachable
+ *   • inputs rendered at 13–14px, so iOS Safari ZOOMS the page on focus
+ *     and never zooms back — the single worst thing about the old layout
+ *   • tap targets were well under the 44px guideline
+ * ===================================================================== */
+@media (max-width: 720px) {
+  main { padding: 1.25rem 1rem 3rem; }
+  h1 { font-size: 1.35rem; }
+  h2 { font-size: 1.05rem; margin: 1.5rem 0 .6rem; }
+
+  .topbar { gap: .6rem 1rem; padding: .6rem .9rem; }
+  .topbar nav { gap: 1rem; order: 3; width: 100%; padding-bottom: .15rem; }
+  .topbar nav a { padding: .3rem 0; }
+  .user-box { margin-left: auto; font-size: .8rem; }
+  .user-email { max-width: 12ch; }
+
+  /* 16px minimum: anything smaller makes iOS zoom in on focus. */
+  .form input[type=text], .form input[type=password], .form textarea, .form select,
+  .filters input[type=search], .filters select, input, select, textarea {
+    font-size: 16px;
+  }
+
+  /* Filters stack full-width instead of squeezing onto one line. */
+  .filters { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .filters input[type=search], .filters select, .filters .btn, .filters button { width: 100%; }
+  .filters input[type=search] { flex: none; }
+
+  /* Comfortable tap targets. */
+  .btn, .topbar nav a, .tab { min-height: 44px; display: inline-flex;
+                              align-items: center; justify-content: center; }
+  .btn { padding: .55rem .9rem; }
+  .row, .actions { flex-wrap: wrap; }
+  .row > form, .row > .btn { flex: 1 1 auto; }
+
+  /* Nothing sticky on a short screen — it eats the viewport. */
+  .split-aside { position: static; padding: 1rem; }
+  .split { gap: 1.25rem; }
+
+  table { font-size: .85rem; }
+  th, td { padding: .5rem .6rem; }
+  .table-scroll table { min-width: 34rem; }   /* keep columns legible while scrolling */
+  table.kv { min-width: 0; }
+  .table-scroll:has(table.kv) table { min-width: 0; }
+
+  .staged-list { grid-template-columns: 1fr; }
+  .pager { flex-wrap: wrap; }
+  .logbox { font-size: .78rem; max-height: 18rem; }
+  .tabs { gap: .4rem; }
+  .platform-grid { grid-template-columns: 1fr; }
+  .form { max-width: 100%; }
+  /* Long ids/paths/URLs must wrap rather than widen the page. */
+  .mono, .copyable, .caption { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 420px) {
+  main { padding: 1rem .75rem 3rem; }
+  .brand { font-size: 1rem; }
+  .table-scroll table { min-width: 30rem; }
+}
+
+/* Any TOUCH device gets 16px form controls, not just narrow ones: iPadOS Safari
+ * is 768px wide in portrait and zooms on focus for anything smaller, which the
+ * max-width:720px block above would have missed. */
+@media (pointer: coarse) {
+  .form input[type=text], .form input[type=password], .form textarea, .form select,
+  .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
+  .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }

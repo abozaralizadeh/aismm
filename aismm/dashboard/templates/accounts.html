@@ -29,6 +29,7 @@
 
 <h2>Connected</h2>
 {% if accounts %}
+<div class="table-scroll">
 <table>
   <thead><tr><th>Platform</th><th>Handle</th><th>Account ID</th><th>Token expires</th><th></th></tr></thead>
   <tbody>
@@ -48,6 +49,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">No accounts connected yet.</p>
 {% endif %}

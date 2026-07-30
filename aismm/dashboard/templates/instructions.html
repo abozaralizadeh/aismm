@@ -7,6 +7,7 @@
 </div>
 
 {% if instructions %}
+<div class="table-scroll">
 <table>
   <thead>
     <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
@@ -33,6 +34,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">No instructions yet. <a href="{{ url_for('new_instruction') }}">Create one</a>.</p>
 {% endif %}

@@ -6,6 +6,7 @@
 edit <code>.env</code> and restart to change it.</p>
 
 <h2>LLM</h2>
+<div class="table-scroll">
 <table class="kv">
   <tr><td>Provider</td><td><span class="badge">{{ settings.llm.provider }}</span></td></tr>
   <tr><td>Model / deployment</td><td class="mono">{{ settings.llm.model }}</td></tr>
@@ -17,14 +18,18 @@ edit <code>.env</code> and restart to change it.</p>
   <tr><td>API version</td><td class="mono">{{ settings.llm.azure_api_version }}</td></tr>
   {% endif %}
 </table>
+</div>
 
 <h2>Media tools</h2>
+<div class="table-scroll">
 <table class="kv">
   <tr><td>Sora 2 video</td><td>{{ "✓ enabled" if sora_enabled else "— not configured" }}</td></tr>
   <tr><td>Image (gpt-image-2)</td><td>{{ "✓ enabled" if image_enabled else "— not configured" }}</td></tr>
 </table>
+</div>
 
 <h2>Platform apps</h2>
+<div class="table-scroll">
 <table class="kv">
   {% for p in platforms %}
   <tr>
@@ -34,12 +39,15 @@ edit <code>.env</code> and restart to change it.</p>
   </tr>
   {% endfor %}
 </table>
+</div>
 
 <h2>Dashboard</h2>
+<div class="table-scroll">
 <table class="kv">
   <tr><td>Public base URL</td><td class="mono small">{{ settings.dashboard.public_base_url }}</td></tr>
   <tr><td>Reverse proxy prefix</td><td class="mono small">{{ settings.dashboard.reverse_proxy_prefix or '—' }}</td></tr>
   <tr><td>OAuth redirect pattern</td><td class="mono small">{{ settings.dashboard.public_base_url }}/oauth/&lt;platform&gt;/callback</td></tr>
   <tr><td>Data dir</td><td class="mono small">{{ settings.data_dir }}</td></tr>
 </table>
+</div>
 {% endblock %}

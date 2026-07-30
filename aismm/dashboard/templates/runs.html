@@ -89,6 +89,7 @@
 </form>
 
 {% if runs %}
+<div class="table-scroll">
 <table>
   <thead><tr>
     <th>{{ sort_header('created_at', 'When', filters, runs_url) }}</th>
@@ -125,6 +126,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 
 {% if pages > 1 %}
 <div class="pager">
