@@ -277,12 +277,18 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     except RateLimited as exc:
         # A volume refusal, not a content problem. Stop this account from trying
         # again on the next scheduled run — repeated attempts extend the block.
+        # start() escalates on each strike, since a flat cooldown that keeps
+        # expiring right before the next scheduled fire is not actually helping.
         held = cooldown.start(account, store, exc.retry_after_seconds,
                               reason=f"{account.platform.value} rate limit")
         advice = _schedule_advice(instruction)
+        strikes = cooldown.strike_count(account)
+        streak = (f" This is strike {strikes} — the cooldown doubles each time this "
+                  f"recurs, capped at {cooldown.MAX_COOLDOWN_SECONDS // 3600}h."
+                  if strikes > 1 else "")
         message = (f"{exc} — {account.platform.value} is refusing posts for volume reasons, "
                    f"not because of this content. Publishing is paused for "
-                   f"{held // 60} minutes.{advice}")
+                   f"{held // 60} minutes.{streak}{advice}")
         logger.error("Publish rate-limited: %s", message)
         run.status = RunStatus.failed
         run.error = message
@@ -314,6 +320,12 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
                        "at %s", account.handle or account.external_id, publish_error, result.url)
         cooldown.start(account, store, RECONCILED_COOLDOWN_SECONDS,
                        reason="published, but Instagram reported a rate limit")
+    else:
+        # A genuinely clean publish — no rate-limit signal at all — is what tells
+        # us the block has actually lifted, not just that the cooldown expired.
+        # Reset the strike streak so a later isolated refusal starts back at the
+        # base cooldown instead of picking up where an old streak left off.
+        cooldown.clear(account, store)
 
     staged.status = StagedStatus.published
     staged.external_url = result.url

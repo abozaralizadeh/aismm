@@ -10,9 +10,20 @@ is what triggers it. So after a volume refusal the account is put in a cooldown,
 and the orchestrator **skips the run before it starts** rather than browsing,
 downloading, converting and generating media only to be refused at the last step.
 
-The deadline lives in the account's ``meta`` — no new table and no new Store
-methods, and it survives on both storage backends because ``meta_json`` already
-round-trips.
+**A flat 60-minute cooldown against an hourly schedule is close to useless**: if
+whatever actually triggered the block (an integrity throttle, not the documented
+25-posts/24h quota) lasts longer than an hour, the very next scheduled run knocks
+again the moment the cooldown clears — and by our own reasoning above, that knock
+makes Meta extend the real block further. So repeated refusals **escalate**: each
+one doubles the cooldown from the base (1h -> 2h -> 4h -> …), capped at
+``MAX_COOLDOWN_SECONDS`` (24h) so a stuck account isn't silently dead forever. A
+clean, non-reconciled publish resets the streak — the point is to back off harder
+while the block is actually recurring, not to punish an account permanently for
+one bad hour.
+
+Both the deadline and the strike count live in the account's ``meta`` — no new
+table and no new Store methods, and they survive on both storage backends
+because ``meta_json`` already round-trips.
 """
 from __future__ import annotations
 
@@ -22,6 +33,8 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger("aismm.cooldown")
 
 META_KEY = "publish_blocked_until"
+STRIKES_KEY = "publish_blocked_strikes"
+MAX_COOLDOWN_SECONDS = 24 * 3600
 
 
 def _now() -> datetime:
@@ -50,27 +63,44 @@ def is_active(account) -> bool:
     return remaining_seconds(account) > 0
 
 
-def start(account, store, seconds: int, *, reason: str = "") -> int:
-    """Block publishing for this account for ``seconds``. Returns the seconds set.
+def strike_count(account) -> int:
+    """How many rate limits this account has hit in the current streak."""
+    try:
+        return max(int((account.meta or {}).get(STRIKES_KEY, 0)), 0)
+    except (TypeError, ValueError):
+        return 0
 
-    Extends rather than shortens an existing cooldown: two refusals in a row mean
-    the platform is less happy, not more.
+
+def start(account, store, seconds: int, *, reason: str = "") -> int:
+    """Block publishing for this account. Returns the seconds actually set.
+
+    ``seconds`` is the BASE cooldown for a first offense; each call doubles it
+    from there (capped at ``MAX_COOLDOWN_SECONDS``), because a refusal that keeps
+    recurring at the base duration means the schedule is knocking on a block that
+    hasn't actually lifted. Also extends rather than shortens an already-longer
+    cooldown, so a shorter reconciled-publish cooldown can't cut a longer one short.
     """
+    strikes = strike_count(account) + 1
+    escalated = min(int(seconds) * (2 ** (strikes - 1)), MAX_COOLDOWN_SECONDS)
     current = remaining_seconds(account)
-    seconds = max(int(seconds), current)
+    held = max(escalated, current)
+
     meta = dict(account.meta or {})
-    meta[META_KEY] = (_now() + timedelta(seconds=seconds)).isoformat()
+    meta[META_KEY] = (_now() + timedelta(seconds=held)).isoformat()
+    meta[STRIKES_KEY] = strikes
     account.set_meta(meta)
     store.upsert_account(account)
-    logger.warning("Publishing cooldown for %s (%s): %d minutes%s",
+    logger.warning("Publishing cooldown for %s (%s): %d minutes (strike %d)%s",
                    account.handle or account.external_id, account.platform.value,
-                   seconds // 60, f" — {reason}" if reason else "")
-    return seconds
+                   held // 60, strikes, f" — {reason}" if reason else "")
+    return held
 
 
 def clear(account, store) -> None:
+    """Lift the cooldown and reset the strike streak (a clean publish got through)."""
     meta = dict(account.meta or {})
-    if meta.pop(META_KEY, None) is not None:
+    had_either = meta.pop(META_KEY, None) is not None or meta.pop(STRIKES_KEY, None) is not None
+    if had_either:
         account.set_meta(meta)
         store.upsert_account(account)
         logger.info("Cleared the publishing cooldown for %s",

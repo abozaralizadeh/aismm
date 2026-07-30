@@ -292,6 +292,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   [cooldown](aismm/cooldown.py) (stored in `account.meta`, so no schema change and both backends
   persist it) and `orchestrator._run_one` skips later **live** runs for that account before doing any
   work — `dry_run` still proceeds since it calls no API.
+- **The cooldown ESCALATES on repeated refusals** (`cooldown.start`, doubling from the base, capped
+  at `MAX_COOLDOWN_SECONDS` = 24h). A flat 60-minute cooldown against an `every 1h` schedule is close
+  to useless if whatever actually triggered the block outlasts an hour: the next scheduled fire lands
+  right as the cooldown clears and knocks again, which — per the point above — extends the real
+  block. Each `RateLimited` bumps a strike counter (`STRIKES_KEY`, next to the deadline in
+  `account.meta`); a clean, non-reconciled publish resets it via `cooldown.clear`, so one bad hour
+  doesn't escalate every isolated refusal for the rest of the account's life. A **reconciled**
+  publish (the post landed despite the error) does NOT reset the streak — Meta is still signalling a
+  limit even though this one got through.
 - **The agent must write memory AFTER publish returns**, not before. The prompt used to say
   memory-then-publish, so a rate-limited run advanced its position past a panel it never posted and
   the next run skipped it. Steps 8/9/10 are attempt → publish → outcome; keep that order.

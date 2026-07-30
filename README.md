@@ -850,12 +850,22 @@ So a volume refusal is handled differently from a content error:
 - the **account is put in a cooldown**, and the orchestrator skips subsequent `live` runs for that
   account *before* they start — no point browsing, downloading and converting media that will be
   refused at the last step. `dry_run` still runs, since it touches no API;
-- the failure names the likely cause: if the instruction fires very often, the message says so.
+- the failure names the likely cause: if the instruction fires very often, the message says so;
+- **the cooldown escalates on repeated refusals** — 1h, 2h, 4h, … doubling up to a 24h cap. A flat
+  60-minute cooldown against an `every 1h` schedule barely helps if the real block outlasts an hour:
+  the very next scheduled fire lands right as the cooldown clears and knocks again, which extends the
+  block further. A clean publish that goes through with no rate-limit signal at all resets the streak,
+  so a single bad hour doesn't permanently escalate every future isolated refusal.
 
 ```
-Publishing cooldown for apadana.audiology.clinic (instagram): 60 minutes — instagram rate limit
+Publishing cooldown for apadana.audiology.clinic (instagram): 60 minutes (strike 1) — instagram rate limit
 … — instagram is refusing posts for volume reasons, not because of this content. Publishing is
 paused for 60 minutes. This instruction runs 'every 1h' — that is far more often than a single
+account can publish. Lengthen the schedule.
+
+Publishing cooldown for apadana.audiology.clinic (instagram): 120 minutes (strike 2) — instagram rate limit
+… Publishing is paused for 120 minutes. This is strike 2 — the cooldown doubles each time this
+recurs, capped at 24h. This instruction runs 'every 1h' — that is far more often than a single
 account can publish. Lengthen the schedule.
 ```
 
