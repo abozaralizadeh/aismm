@@ -110,6 +110,10 @@ class Instruction(SQLModel, table=True):
     brief: str = ""                          # the persona / directive / theme text
     account_ids_json: str = "[]"             # selected accounts (multi-select)
     schedule: str = ""                       # cron ("0 9 * * *") or interval ("every 6h")
+    # Optional: the interval's phase anchor / a "don't fire before" gate (UTC).
+    # Unset, an interval schedule anchors to created_at instead of "now" at every
+    # (re)registration — see aismm/schedules.py for why that distinction matters.
+    schedule_start_at: datetime | None = Field(default=None)
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
     # Label this instruction's posts as AI-generated. On by default (EU AI Act

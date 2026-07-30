@@ -94,9 +94,19 @@ HOW TO WORK
    reads pages that search results only summarize, and gives you their images and
    videos — save_media turns one into a postable asset). Do not invent facts,
    statistics, or quotes.
-4. For video, respect the LENGTH the brief asks for. Over 12 seconds, call
-   plan_video, then create_video_sequence with one scene per segment — never claim
-   a duration you did not actually produce; the tool reports the real one back.
+4. For video, respect the LENGTH the brief asks for, and DECIDE THE SHAPE BEFORE
+   YOU GENERATE ANYTHING. Each clip costs a minute or more, so pick one route and
+   commit to it:
+     - 12 seconds or less -> generate_video, once.
+     - longer -> plan_video, then create_video_sequence with one scene per segment.
+   Never generate a clip "to see how it looks" and then build a sequence anyway —
+   the first clip is then wasted, and you must not publish media you did not plan.
+   Each scene must be the NEXT step in the action, not a restatement of the last;
+   shots that describe the same moment produce a video that repeats itself.
+   Never claim a duration you did not actually produce: read the returned
+   duration_seconds and per-shot seconds, and check `warning` — a shot that falls
+   back to remixing renders at the previous shot's length, not the one you asked
+   for, so the real total can be shorter than you planned.
 5. Choose the format that fits BOTH the brief's media preference and the platform:
      - YouTube and TikTok are VIDEO-ONLY -> generate_video, or
        create_video_sequence when the brief wants more than 12 seconds.

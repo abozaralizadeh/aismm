@@ -262,3 +262,72 @@ def test_an_orphaned_lock_clears_within_the_ttl(store, pair):
     # Nobody renews it. Once a TTL passes it is reclaimable — 5 minutes, not 30.
     assert orchestrator._LOCK_TTL <= 600
     assert store.acquire_lock(lock_key, ttl_seconds=0) is True
+
+
+# --- concurrent runs must be separable in the log ------------------------------------ #
+
+def test_a_runs_log_lines_carry_its_id(store, monkeypatch, pair, caplog):
+    """Two runs overlap routinely; without a tag their lines cannot be told apart."""
+    import logging
+
+    from aismm import logging_setup
+
+    instruction, account = pair
+    seen = []
+
+    async def logs_something(*args, **kwargs):
+        logging.getLogger("aismm.tools.sequence").info("Shot 1/1 done")
+        seen.append(logging_setup.current_run_id.get(""))
+        return {"mode": "dry_run"}
+
+    monkeypatch.setattr(orchestrator, "run_for_account", logs_something)
+    orchestrator._run_one(instruction, account, store)
+
+    runs = store.list_runs(limit=1, instruction_id=instruction.id)
+    assert seen == [runs[0].id[:8]], "tool code did not see the run id"
+
+
+def test_the_run_id_is_cleared_afterwards(store, monkeypatch, pair):
+    from aismm import logging_setup
+
+    instruction, account = pair
+
+    async def quick(*args, **kwargs):
+        return {"mode": "dry_run"}
+
+    monkeypatch.setattr(orchestrator, "run_for_account", quick)
+    orchestrator._run_one(instruction, account, store)
+    assert logging_setup.current_run_id.get("") == ""
+
+
+def test_the_run_id_is_cleared_even_when_the_run_crashes(store, monkeypatch, pair):
+    from aismm import logging_setup
+
+    instruction, account = pair
+
+    async def explode(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestrator, "run_for_account", explode)
+    orchestrator._run_one(instruction, account, store)
+    assert logging_setup.current_run_id.get("") == ""
+
+
+def test_the_formatter_renders_a_run_id_for_every_record():
+    """The filter sits on the HANDLER; a logger-level filter would miss children."""
+    import logging
+
+    from aismm.logging_setup import _RunIdFilter, current_run_id
+
+    record = logging.LogRecord("aismm.tools.publish", logging.INFO, __file__, 1,
+                               "x", None, None)
+    token = current_run_id.set("deadbeef")
+    try:
+        assert _RunIdFilter().filter(record) is True
+        assert record.run_id == "deadbeef"
+    finally:
+        current_run_id.reset(token)
+
+    plain = logging.LogRecord("aismm", logging.INFO, __file__, 1, "x", None, None)
+    _RunIdFilter().filter(plain)
+    assert plain.run_id == "-"

@@ -225,13 +225,27 @@ This is where GenBox drifts even when a reference is passed. Three causes, each 
    made its base clip, so GenBox's per-clip failover silently destroyed the option. Here only shot 1
    picks a resource; every later shot stays on it.
 
-`continuity="auto"` (default) chains frames and **falls back to remixing shot 1** if the reference is
-refused — Azure rejects `input_reference` containing human faces, which is exactly when GenBox loses
-continuity. `continuity="remix"` derives every shot from shot 1 (strongest when people are on
-camera); `"frame"` chains only; `"none"` makes independent clips.
+`continuity="auto"` (default) chains frames and **falls back to remixing the previous shot** if the
+reference is refused — Azure rejects `input_reference` containing human faces, which is exactly when
+GenBox loses continuity. `continuity="remix"` derives each shot from the one before it (strongest
+when people are on camera); `"frame"` chains only; `"none"` makes independent clips.
+
+> **Remix chains from the previous shot, not from shot 1.** Anchoring every remix to shot 1 was the
+> original design, and it published a reel whose opening moment played three times over: each later
+> shot applied its own prompt to the same untouched starting point, so the action never advanced.
+> Because a refused reference is the *normal* case as soon as people are on camera, that path ran
+> for nearly every shot. Chained drift is the lesser evil — repetition is not a video.
+
+> **A remix cannot change the clip's length.** The remix API takes only a prompt and inherits the
+> source's duration, so a shot asking for 8s that falls back to remixing a 4s clip renders 4s — a
+> 4/4/4/8 plan came out as 16s, not 20s. Every clip is therefore measured after rendering:
+> `shots[].seconds` is the real length, `requested_seconds` appears only when it differs, and the
+> result carries a `warning` telling the agent to describe the real duration. Use `continuity="none"`
+> when the exact length matters more than the visual match.
 
 > **Sora 2 has no seed.** None of this makes shots identical — it makes them plausibly the same
-> scene. That ceiling is the model's. Keep `style` rich and shot-to-shot changes small.
+> scene. That ceiling is the model's. Keep `style` rich, and make each scene the *next step* in the
+> action rather than a restatement of the last.
 
 A shot that fails does not lose the ones already rendered: the video is merged from what succeeded
 and the result carries a `warning` naming the shortfall.
@@ -903,6 +917,29 @@ trigger. A schedule it cannot parse logs a warning and never fires, rather than 
 `6` is ambiguous (06:00? every 6 hours?) and is refused for that reason. Editing an instruction
 live-reschedules its jobs.
 
+Note that intervals take a **single count and unit**: `every 90 minutes` (or `90m`) works,
+`every 1.5h` and `every 1h30m` do not — and an unparseable schedule never fires, so check the
+readback.
+
+#### When does an interval actually start?
+
+An `every Nh` schedule counts from a fixed **anchor**, shown as **Next run** on the instructions page:
+
+- the instruction's optional **Starts** field, if you set one;
+- otherwise the moment the instruction was **created**.
+
+So `every 1h` on an instruction created at 08:12 fires at 09:12, 10:12, … — not on the hour. Set
+*Starts* to `09:00` to put it on the hour instead, or to a future time to delay the first run.
+
+This anchoring matters for a reason that is not obvious: the scheduler rebuilds **every** job from
+scratch whenever any instruction is saved, and on every service restart. Without a fixed anchor an
+interval would re-base to that moment each time, quietly pushing the next run a full interval into
+the future — an instruction on `every 6h` in a frequently-edited deployment could go a long time
+without ever firing, with nothing in the log to say so. The anchor is what makes the phase survive.
+
+For a time-of-day or cron schedule there is no drift to fix, and *Starts* simply delays the first
+fire until that moment.
+
 ### Files attached to an instruction
 
 An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):
@@ -943,7 +980,17 @@ full service log:
 journalctl -u aismm.service | grep <run-id-prefix>
 ```
 
-which works because the orchestrator tags every run's log lines with that prefix.
+which works because **every log line carries the id of the run that produced it**, in a column after
+the level:
+
+```
+16:02:32 INFO    3332fc11  aismm.tools.sequence   Shot 1/4 done (create, 4.0s, 1831834 bytes)
+16:05:13 INFO    6754a8a8  aismm.tools.image      Generating image: {'model': 'gpt-image-2', …}
+16:07:03 INFO    3332fc11  aismm.video            Merged 4 clip(s) into 2685041 bytes at 720x1280
+```
+
+That matters because runs overlap routinely — a dashboard **Run now** next to a scheduled fire — and
+their lines interleave. Anything logged outside a run shows `-`.
 
 ### On a phone
 

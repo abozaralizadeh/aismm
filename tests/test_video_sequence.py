@@ -3,8 +3,13 @@
 The Sora client is mocked, so these pin the *consistency machinery* — which is
 where GenBox drifts: the style block must reach every prompt, the reference frame
 must be described as a continuation, the sequence must stay on one resource so
-remix remains possible, and a refused reference must fall back to remixing shot 1
-rather than making an unrelated clip.
+remix remains possible, and a refused reference must fall back to remixing rather
+than making an unrelated clip.
+
+They also pin the two faults that shipped a bad reel to a live account: every
+fallback remixed **shot 1**, so the opening moment played three times over; and a
+remix silently inherits its source's duration, so a 4/4/4/8 plan rendered 16s
+while reporting the 20s that was asked for.
 """
 import asyncio
 
@@ -131,7 +136,8 @@ def sora(monkeypatch, tmp_path):
     async def remix(resource, base_job_id, prompt):
         calls["remixes"].append({"base": base_job_id, "prompt": prompt,
                                  "resource": resource})
-        return b"clip", f"remix-{len(calls['remixes'])}"
+        # A remix inherits its SOURCE's duration; the caller's request is ignored.
+        return b"remixed", f"remix-{len(calls['remixes'])}"
 
     monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
     monkeypatch.setattr(sequence_tool, "create_clip", create)
@@ -141,7 +147,11 @@ def sora(monkeypatch, tmp_path):
                         lambda clip, size: b"frame-bytes")
     monkeypatch.setattr(sequence_tool.video, "concat_clips",
                         lambda clips, size: b"merged" * len(clips))
-    monkeypatch.setattr(sequence_tool.video, "duration_seconds", lambda data: 24.0)
+    # Per-clip vs merged: a created clip renders the 8s asked for, a remix comes
+    # back at its source's 4s — the real behaviour that shipped a 16s "20s" video.
+    monkeypatch.setattr(sequence_tool.video, "duration_seconds",
+                        lambda data: 24.0 if data.startswith(b"merged")
+                        else (4.0 if data == b"remixed" else 8.0))
     monkeypatch.setattr(sequence_tool, "save_bytes",
                         lambda data, ext: str(tmp_path / f"merged.{ext}"))
     monkeypatch.setattr(sequence_tool, "public_url", lambda p: f"https://host/{p}")
@@ -183,12 +193,25 @@ def test_the_sequence_is_pinned_to_one_resource(sora):
     assert all(call["resource"] is RESOURCE_A for call in sora["creates"][1:])
 
 
-def test_remix_mode_derives_later_shots_from_shot_one(sora):
+def test_remix_mode_chains_each_shot_from_the_previous_one(sora):
+    """NOT from shot 1.
+
+    Anchoring every remix to shot 1 shipped a reel whose opening moment played
+    three times: each later shot applied its own prompt to the same untouched
+    starting point, so the action never advanced.
+    """
     _sequence(continuity="remix")
     assert len(sora["creates"]) == 1                 # only the base clip is created
     assert len(sora["remixes"]) == 2
-    assert all(r["base"] == "job-1" for r in sora["remixes"])
+    assert [r["base"] for r in sora["remixes"]] == ["job-1", "remix-1"]
     assert all(STYLE in r["prompt"] for r in sora["remixes"])
+
+
+def test_a_remixed_shot_is_told_it_is_continuing_not_restating(sora):
+    _sequence(continuity="remix")
+    prompt = sora["remixes"][1]["prompt"]
+    assert "PREVIOUS shot" in prompt
+    assert "NEXT moment, not another take" in prompt
 
 
 def test_no_continuity_mode_passes_no_reference(sora):
@@ -196,10 +219,15 @@ def test_no_continuity_mode_passes_no_reference(sora):
     assert all(call["reference"] is None for call in sora["creates"])
 
 
-def test_a_refused_reference_falls_back_to_remixing_shot_one(monkeypatch, sora):
-    """Azure rejects input_reference containing faces — exactly where GenBox drifts."""
+@pytest.fixture()
+def faces_refused(monkeypatch, sora):
+    """Azure rejects input_reference containing faces — the real clinic-video case.
+
+    Every shot after the first refuses, so `auto` degrades to remix throughout;
+    that is exactly what happened on the account. Depends on ``sora`` so it wraps
+    the mocked ``create_clip`` rather than being overwritten by it.
+    """
     original = sequence_tool.create_clip
-    state = {"attempts": 0}
 
     async def refuse_reference(resource, prompt, seconds, size, reference=None):
         if reference is not None:
@@ -207,11 +235,43 @@ def test_a_refused_reference_falls_back_to_remixing_shot_one(monkeypatch, sora):
         return await original(resource, prompt, seconds, size, reference)
 
     monkeypatch.setattr(sequence_tool, "create_clip", refuse_reference)
-    result = _sequence(scenes=["one", "two"], continuity="auto")
 
+
+def test_a_refused_reference_falls_back_to_remixing(faces_refused, sora):
+    result = _sequence(scenes=["one", "two"], continuity="auto")
     assert result["clips_merged"] == 2               # nothing was lost
     assert sora["remixes"] and sora["remixes"][0]["base"] == "job-1"
     assert result["shots"][1]["how"] == "remix(fallback)"
+
+
+def test_the_fallback_chain_never_replays_shot_one(faces_refused, sora):
+    """The shipped bug: four shots, three of them remixes of shot 1.
+
+    The reel opened with the same moment three times over. Each fallback must
+    build on the shot before it, so the action moves.
+    """
+    _sequence(scenes=["one", "two", "three", "four"], continuity="auto")
+    assert [r["base"] for r in sora["remixes"]] == ["job-1", "remix-1", "remix-2"]
+
+
+def test_a_remix_reports_its_real_duration_not_the_requested_one(faces_refused, sora):
+    """A remix inherits its source's length, so the request cannot be honoured."""
+    result = _sequence(scenes=["one", "two"], continuity="auto", seconds_each=8)
+    assert result["shots"][0]["seconds"] == 8.0      # created: got what it asked for
+    assert result["shots"][1]["seconds"] == 4.0      # remixed: inherited 4s
+    assert result["shots"][1]["requested_seconds"] == 8
+
+
+def test_a_shortfall_is_warned_about_rather_than_left_to_be_miscaptioned(faces_refused, sora):
+    result = _sequence(scenes=["one", "two"], continuity="auto", seconds_each=8)
+    assert "did not render at the requested length" in result["warning"]
+    assert "REAL duration" in result["warning"]
+
+
+def test_no_shortfall_warning_when_every_shot_got_its_length(sora):
+    result = _sequence(continuity="none", seconds_each=8)
+    assert "warning" not in result
+    assert all("requested_seconds" not in shot for shot in result["shots"])
 
 
 def test_a_failing_shot_keeps_the_clips_already_made(monkeypatch, sora):
@@ -277,3 +337,26 @@ def test_the_merged_asset_is_recorded_on_state(sora):
     _sequence(state)
     assert state["assets"][0]["kind"] == "video"
     assert state["assets"][0]["shots"]
+
+
+# --- the prompt tells the agent not to waste a generation ----------------------------- #
+
+def test_the_prompt_forbids_a_throwaway_clip_before_a_sequence():
+    """A run generated a 12s clip, ignored it, built a sequence, and posted that."""
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS
+
+    assert "DECIDE THE SHAPE BEFORE" in MANAGER_INSTRUCTIONS
+    assert "to see how it looks" in MANAGER_INSTRUCTIONS
+
+
+def test_the_prompt_warns_that_shots_must_advance():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS
+
+    assert "NEXT step in the action" in MANAGER_INSTRUCTIONS
+    assert "repeats itself" in MANAGER_INSTRUCTIONS
+
+
+def test_the_prompt_points_at_the_duration_warning():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS
+
+    assert "check `warning`" in MANAGER_INSTRUCTIONS

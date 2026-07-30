@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 
 from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -80,7 +81,13 @@ def refresh_jobs() -> None:
     existing = {j.id for j in sched.get_jobs()}
     wanted: set[str] = set()
     for instr in get_store().list_instructions(enabled_only=True):
-        triggers = parse_schedule(instr.schedule)
+        # An interval trigger anchors to the moment it is CONSTRUCTED unless told
+        # otherwise, and this loop reconstructs every trigger on every refresh
+        # (dashboard save of any instruction, service restart). Anchoring to a
+        # stable point — the operator's explicit start, else created_at — is what
+        # keeps "every 1h" from silently re-basing its phase each time.
+        anchor = instr.schedule_start_at or instr.created_at
+        triggers = parse_schedule(instr.schedule, anchor=anchor)
         if not triggers:
             if (instr.schedule or "").strip():
                 logger.warning("Instruction '%s' has an unparseable schedule %r — it will "
@@ -93,13 +100,31 @@ def refresh_jobs() -> None:
             sched.add_job(_job, trigger=trigger, id=job_id, args=[instr.id],
                           replace_existing=True, misfire_grace_time=3600, coalesce=True,
                           max_instances=MAX_INSTANCES)
-        logger.info("Scheduled '%s' (%r -> %s) as %d job(s)",
-                    instr.name, instr.schedule, describe(instr.schedule), len(triggers))
+        logger.info("Scheduled '%s' (%r -> %s) as %d job(s)", instr.name, instr.schedule,
+                    describe(instr.schedule, starts_at=instr.schedule_start_at), len(triggers))
     # Drop jobs for instructions that were disabled/deleted.
     for job_id in existing - wanted:
         if job_id.startswith("instr:"):
             sched.remove_job(job_id)
     logger.info("Scheduler synced: %d job(s) active", len(wanted))
+
+
+def next_run_for(instruction_id: str) -> datetime | None:
+    """When this instruction's job(s) will next fire, for the dashboard.
+
+    An instruction can hold several jobs (one per trigger — "09:00 and 18:00" is
+    two), so this is the earliest of them. Live scheduler state, not persisted —
+    ``None`` when the scheduler isn't running here (dashboard-only mode) or the
+    instruction has no valid schedule.
+    """
+    sched = get_scheduler()
+    if not sched.running:
+        return None
+    prefix = f"instr:{instruction_id}"
+    times = [j.next_run_time for j in sched.get_jobs()
+            if j.id == prefix or j.id.startswith(f"{prefix}:")]
+    times = [t for t in times if t]
+    return min(times) if times else None
 
 
 def start() -> BackgroundScheduler:

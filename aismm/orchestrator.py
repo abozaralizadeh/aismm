@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 
-from . import cooldown, publish_ledger
+from . import cooldown, logging_setup, publish_ledger
 from .agent import run_for_account
 from .assets import kind_from_path
 from .models import (
@@ -133,6 +133,9 @@ def _run_one(instruction: Instruction, account: Account, store) -> dict:
     run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
                             status=RunStatus.running))
     started = time.monotonic()
+    # Tag every log line this run produces. Concurrent runs (a dashboard "Run now"
+    # next to a scheduled fire) otherwise interleave indistinguishably.
+    log_token = logging_setup.current_run_id.set(run.id[:8])
     try:
         logger.info("RUN START %s | instruction='%s' account=%s (%s) mode=%s media_pref=%s",
                     run.id[:8], instruction.name, account.handle or account.external_id,
@@ -166,6 +169,7 @@ def _run_one(instruction: Instruction, account: Account, store) -> dict:
         return {"account_id": account.id, "status": "failed", "error": str(exc)}
     finally:
         store.release_lock(lock_key)
+        logging_setup.current_run_id.reset(log_token)
 
 
 def approve_staged(staged_id: str) -> dict:

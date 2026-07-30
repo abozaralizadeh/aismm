@@ -103,11 +103,18 @@ form { margin: 0; }
 
 .form { display: flex; flex-direction: column; gap: 1.1rem; max-width: 680px; }
 .form label { display: flex; flex-direction: column; gap: .35rem; font-weight: 600; }
-.form input[type=text], .form input[type=password], .form textarea, .form select {
+.form input[type=text], .form input[type=password], .form input[type=datetime-local],
+.form textarea, .form select {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); padding: .55rem .7rem; font: inherit; font-weight: 400;
 }
 .form textarea { resize: vertical; }
+/* The date/time picker indicator renders as a dark glyph on our dark field, so
+   invert it — without this the calendar button is invisible. */
+.form input[type=datetime-local]::-webkit-calendar-picker-indicator {
+  filter: invert(1); opacity: .6; cursor: pointer;
+}
+.form input[type=datetime-local]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .hint { color: var(--muted); font-size: .82rem; font-weight: 400; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
 .checklist { display: flex; flex-direction: column; gap: .35rem; background: var(--panel-2);
@@ -204,8 +211,11 @@ th .sort-active { color: var(--accent); }
   .user-box { margin-left: auto; font-size: .8rem; }
   .user-email { max-width: 12ch; }
 
-  /* 16px minimum: anything smaller makes iOS zoom in on focus. */
-  .form input[type=text], .form input[type=password], .form textarea, .form select,
+  /* 16px minimum: anything smaller makes iOS zoom in on focus. The typed
+     selectors must list every input type the form uses — a bare `input` here
+     loses on specificity to the `.form input[type=…]` base rule above. */
+  .form input[type=text], .form input[type=password], .form input[type=datetime-local],
+  .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea {
     font-size: 16px;
   }
@@ -252,7 +262,8 @@ th .sort-active { color: var(--accent); }
  * is 768px wide in portrait and zooms on focus for anything smaller, which the
  * max-width:720px block above would have missed. */
 @media (pointer: coarse) {
-  .form input[type=text], .form input[type=password], .form textarea, .form select,
+  .form input[type=text], .form input[type=password], .form input[type=datetime-local],
+  .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
   .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }

@@ -29,9 +29,23 @@ addressed here:
    the resource that served clip 1**, so remix stays available throughout.
 
 On top of that, ``continuity="auto"`` falls back from frame chaining to **remixing
-clip 1** when a reference is refused — Azure's Sora rejects ``input_reference``
-containing human faces, which is precisely when GenBox loses continuity. A fresh
-unrelated clip is never silently substituted.
+the previous shot** when a reference is refused — Azure's Sora rejects
+``input_reference`` containing human faces, which is precisely when GenBox loses
+continuity. A fresh unrelated clip is never silently substituted.
+
+**Remix chains from the PREVIOUS shot, never from shot 1.** Anchoring every
+remix to shot 1 was the original design, and it produced a video whose first
+moment played three times over: each later shot applied its own prompt to the
+same untouched starting point, so nothing ever advanced. Chaining means shot 3
+remixes shot 2, which remixes shot 1 — the action moves forward, and the repeated
+``style`` block is what holds the look together. Drift across a chain is the
+lesser evil; literal repetition is not a video.
+
+**A remix inherits the source clip's duration** (the API takes only a prompt), so
+a shot asking for 8s that falls back to remixing a 4s clip *renders 4s*. Every
+clip is therefore measured after the fact and the real per-shot duration is
+reported — a plan of 4/4/4/8 that silently returned 16s instead of 20s is how
+this was found.
 
 Sora 2 has **no seed**, so none of this makes clips identical — it makes them
 plausibly the same scene. That limit is the model's, not the code's.
@@ -97,11 +111,14 @@ def plan_segments(target_seconds: int, prefer: int = 12) -> dict:
 
 
 def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
-                      continues_from_frame: bool) -> str:
+                      continues_from_frame: bool, continues_from_remix: bool = False) -> str:
     """Assemble one clip's prompt: style + continuity contract + this scene.
 
     The style block is repeated in EVERY clip — that is lever 1. When a reference
-    frame is attached, the prompt says so explicitly — that is lever 2.
+    frame is attached, the prompt says so explicitly — that is lever 2. A remix
+    gets its own wording (lever 3): the source video the model is editing IS the
+    previous shot, and saying so is what turns "another take of the same moment"
+    into "the next moment".
     """
     parts = []
     if style.strip():
@@ -112,6 +129,14 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
             "previous shot. Begin this shot from that exact framing, lighting, "
             "subject and wardrobe, then perform the action below. Do not restyle, "
             "recolour, relight or reframe the scene, and do not cut to a new location."
+        )
+    elif continues_from_remix:
+        parts.append(
+            "CONTINUITY: the video you are editing is the PREVIOUS shot of this "
+            "sequence. Keep its subject, wardrobe, location, lighting and framing "
+            "exactly, and ADVANCE the action to what is described below — this is "
+            "the NEXT moment, not another take of the same one. Do not restart the "
+            "scene or repeat the previous action."
         )
     elif index > 1:
         parts.append(
@@ -153,7 +178,7 @@ async def perform_create_sequence(
     clips: list[bytes] = []
     details: list[dict] = []
     resource = None            # pinned after clip 1 so remix stays available
-    base_job_id = ""
+    previous_job_id = ""       # the shot just rendered — what a remix chains FROM
     reference: bytes | None = None
 
     for index, (scene, seconds) in enumerate(zip(scenes, lengths), start=1):
@@ -163,13 +188,17 @@ async def perform_create_sequence(
         clip = job_id = None
         how = ""
 
-        # A later clip in remix mode reuses clip 1's job — the strongest lever.
-        if index > 1 and mode == "remix" and resource is not None and base_job_id:
+        # A later clip in remix mode derives from the PREVIOUS shot, so the action
+        # advances. Remixing shot 1 every time replays shot 1 every time.
+        if index > 1 and mode == "remix" and resource is not None and previous_job_id:
             try:
-                clip, job_id = await remix_clip(resource, base_job_id, prompt)
+                remix_prompt = build_clip_prompt(
+                    scene, style, index=index, total=len(scenes),
+                    continues_from_frame=False, continues_from_remix=True)
+                clip, job_id = await remix_clip(resource, previous_job_id, remix_prompt)
                 how = "remix"
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Remix of %s failed (%s); creating instead", base_job_id, exc)
+                logger.warning("Remix of %s failed (%s); creating instead", previous_job_id, exc)
 
         if clip is None:
             try:
@@ -186,17 +215,17 @@ async def perform_create_sequence(
             except Exception as exc:  # noqa: BLE001
                 detail = format_http_error(exc) if hasattr(exc, "response") else str(exc)
                 # Azure refuses input_reference containing faces — exactly where
-                # GenBox loses continuity. Fall back to remixing clip 1 rather
-                # than making an unrelated clip.
-                if (use_frame and mode == "auto" and base_job_id and resource is not None
+                # GenBox loses continuity. Fall back to remixing the PREVIOUS shot
+                # rather than making an unrelated clip (or replaying shot 1).
+                if (use_frame and mode == "auto" and previous_job_id and resource is not None
                         and _looks_like_reference_rejection(detail)):
-                    logger.info("Reference refused for shot %d (%s); remixing clip 1 instead",
-                                index, detail[:160])
+                    logger.info("Reference refused for shot %d (%s); remixing shot %d (%s) "
+                                "instead", index, detail[:160], index - 1, previous_job_id)
                     try:
                         retry_prompt = build_clip_prompt(
                             scene, style, index=index, total=len(scenes),
-                            continues_from_frame=False)
-                        clip, job_id = await remix_clip(resource, base_job_id, retry_prompt)
+                            continues_from_frame=False, continues_from_remix=True)
+                        clip, job_id = await remix_clip(resource, previous_job_id, retry_prompt)
                         how = "remix(fallback)"
                     except Exception as remix_exc:  # noqa: BLE001
                         logger.warning("Remix fallback failed too: %s", remix_exc)
@@ -208,11 +237,24 @@ async def perform_create_sequence(
                     break        # keep what we have rather than losing everything
 
         clips.append(clip)
-        if index == 1:
-            base_job_id = job_id or ""
-        details.append({"shot": index, "seconds": seconds, "how": how, "job_id": job_id})
-        logger.info("Shot %d/%d done (%s, %ss, %d bytes)",
-                    index, len(scenes), how, seconds, len(clip))
+        previous_job_id = job_id or previous_job_id
+
+        # Measure what was ACTUALLY rendered. A remix takes only a prompt and
+        # inherits its source's duration, so a shot that asked for 8s and fell
+        # back to remixing a 4s clip is 4s — reporting the request would be a lie,
+        # and the agent writes its caption from these numbers.
+        try:
+            actual = round(await asyncio.to_thread(video.duration_seconds, clip), 1)
+        except Exception as exc:  # noqa: BLE001 - never fail a run over measurement
+            logger.warning("Could not measure shot %d: %s", index, exc)
+            actual = float(seconds)
+        detail_row = {"shot": index, "seconds": actual, "how": how, "job_id": job_id}
+        if abs(actual - seconds) >= 1:
+            detail_row["requested_seconds"] = seconds
+        details.append(detail_row)
+        logger.info("Shot %d/%d done (%s, %ss%s, %d bytes)", index, len(scenes), how, actual,
+                    f" — {seconds}s requested" if "requested_seconds" in detail_row else "",
+                    len(clip))
 
         if mode in {"auto", "frame"}:
             try:
@@ -235,9 +277,24 @@ async def perform_create_sequence(
     result = {"asset_path": path, "public_url": asset["public_url"], "kind": "video",
               "size": size, "duration_seconds": round(duration, 1),
               "clips_merged": len(clips), "shots": details}
+
+    warnings = []
     if len(clips) < len(scenes):
-        result["warning"] = (f"only {len(clips)} of {len(scenes)} shots rendered; "
-                             f"the video is shorter than planned")
+        warnings.append(f"only {len(clips)} of {len(scenes)} shots rendered; "
+                        f"the video is shorter than planned")
+    # A remix cannot honour a requested length, so say so rather than letting the
+    # agent describe a duration the file does not have.
+    short = [d for d in details if "requested_seconds" in d]
+    if short:
+        requested = sum(d.get("requested_seconds", d["seconds"]) for d in details)
+        warnings.append(
+            f"{len(short)} shot(s) did not render at the requested length "
+            f"(a remix inherits its source clip's duration), so this video is "
+            f"{round(duration, 1)}s, not {requested}s. Describe the REAL duration, or "
+            f"re-run with continuity=\"none\" if the exact length matters more than "
+            f"the visual match.")
+    if warnings:
+        result["warning"] = " ".join(warnings)
     return result
 
 
@@ -290,19 +347,28 @@ def _make_create_sequence(state: dict):
                 location, lighting, lens, mood. This text is repeated verbatim in
                 every shot's prompt, which is the single most effective thing you
                 can do for consistency. Be specific and reuse it unchanged.
-            seconds_each: Clip length for every shot (snapped to 4, 8 or 12).
+            seconds_each: Clip length for every shot (snapped to 4, 8 or 12). Keep
+                it the SAME for every shot unless you have a reason: a shot that
+                falls back to remixing cannot change length (see below).
             orientation: "portrait" for Reels/TikTok/Shorts, "landscape" otherwise.
             continuity: "auto" (recommended) chains each shot from the previous
-                shot's final frame and falls back to remixing shot 1 if the
-                reference is refused — which happens when human faces are in
-                frame. "frame" chains only. "remix" derives every later shot from
-                shot 1, the strongest lever when people are on camera. "none" makes
-                independent clips.
+                shot's final frame, and falls back to remixing the previous shot
+                if the reference is refused — which happens whenever human faces
+                are in frame. "frame" chains only. "remix" derives each shot from
+                the one before it, the strongest lever when people are on camera.
+                "none" makes independent clips — use it when the exact per-shot
+                length matters more than the visual match.
             scene_seconds: Optional per-shot lengths, overriding ``seconds_each``.
 
-        Returns the merged ``asset_path``, its real duration, and per-shot detail
-        showing how each was produced. Sora 2 has no seed, so shots will be
-        similar rather than identical — keep ``style`` rich and shot changes small.
+        Returns the merged ``asset_path``, its **measured** duration, and per-shot
+        detail showing how each shot was produced and how long it really is.
+
+        Two things to check in the result. A remix inherits its source clip's
+        duration, so a shot that falls back to remixing renders at the PREVIOUS
+        shot's length and its ``requested_seconds`` will differ — the ``warning``
+        field says when this happened. And Sora 2 has no seed, so shots are
+        similar rather than identical: keep ``style`` rich, and make each scene a
+        clear step forward in the action rather than a restatement of the last.
         """
         if state.get("video_failures", 0) >= 2:
             return {"error": "video_circuit_open",

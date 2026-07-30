@@ -248,7 +248,9 @@ def create_app() -> Flask:
     # ---- instructions ---------------------------------------------------- #
     @app.route("/instructions")
     def instructions():
-        return render_template("instructions.html", instructions=get_store().list_instructions())
+        instrs = get_store().list_instructions()
+        next_runs = {i.id: scheduler.next_run_for(i.id) for i in instrs}
+        return render_template("instructions.html", instructions=instrs, next_runs=next_runs)
 
     @app.route("/instructions/new")
     def new_instruction():
@@ -268,7 +270,9 @@ def create_app() -> Flask:
                                files=store.list_instruction_files(instruction_id),
                                purposes=list(AttachmentPurpose),
                                accounts=store.list_accounts(), settings=settings,
-                               schedule_readback=describe_schedule(instr.schedule),
+                               schedule_readback=describe_schedule(
+                                   instr.schedule, starts_at=instr.schedule_start_at),
+                               next_run=scheduler.next_run_for(instr.id),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions", methods=["POST"])
@@ -282,6 +286,7 @@ def create_app() -> Flask:
         instr.name = f.get("name", "Untitled").strip() or "Untitled"
         instr.brief = f.get("brief", "").strip()
         instr.schedule = f.get("schedule", "").strip()
+        instr.schedule_start_at = _parse_datetime_local(f.get("schedule_start_at", ""))
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
@@ -505,3 +510,21 @@ def _refresh_scheduler() -> None:
             scheduler.refresh_jobs()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _parse_datetime_local(value: str) -> dt.datetime | None:
+    """Parse an ``<input type="datetime-local">`` value as UTC.
+
+    The value has no timezone ("2026-08-05T09:00") — schedules are documented as
+    UTC throughout, so it's read as UTC rather than the browser's local zone. An
+    empty or unparseable value clears the field (interval schedules then anchor to
+    ``created_at`` instead — see aismm/schedules.py).
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=dt.timezone.utc) if parsed.tzinfo is None else parsed

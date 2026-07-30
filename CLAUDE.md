@@ -189,6 +189,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   list and `refresh_jobs` registers one job per trigger (`instr:<id>`, `instr:<id>:1`, …). Ambiguous
   input is REFUSED, not guessed — a bare `6` could be 06:00 or every 6h. `describe()` is the
   dashboard readback; keep it defensive, cron fields can be `*/4`.
+- **Interval triggers MUST be given an `anchor`** (`parse_schedule(..., anchor=...)`). An
+  `IntervalTrigger` with no `start_date` anchors to the moment it is *constructed*, and `refresh_jobs`
+  reconstructs every trigger on every service restart **and every dashboard save of any
+  instruction** — so `every 1h` silently pushed its next fire an hour out each time, with nothing in
+  the log. The anchor is `instruction.schedule_start_at or instruction.created_at`, so phase survives
+  a rebuild. Cron parts don't drift; there the anchor only gates "don't fire before". Note
+  `CronTrigger.from_crontab` takes **no** `start_date` — use `_cron_from_crontab`.
+  `scheduler.next_run_for(id)` is the dashboard's "Next run" readout (live scheduler state, `None`
+  when the scheduler isn't running in this process).
 - **gpt-image-2 ≠ gpt-image-1** ([tools/image_tool.py](aismm/tools/image_tool.py)): image-2 takes
   arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
   transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a
@@ -201,9 +210,19 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   imageio-ffmpeg's bundled binary. Three consistency levers, all applied together because GenBox
   applying one at a time still drifts: the `style` block is repeated in EVERY prompt, the reference
   frame is explicitly described as the previous shot's final frame, and the sequence is **pinned to
-  one Sora resource** (remix is job-scoped — GenBox's per-clip failover destroyed it). `auto` falls
-  back to remixing shot 1 when `input_reference` is refused (faces). Always re-encode before concat
-  and add silence to mute clips, or the merged file loses audio from the first silent clip onward.
+  one Sora resource** (remix is job-scoped — GenBox's per-clip failover destroyed it). Always
+  re-encode before concat and add silence to mute clips, or the merged file loses audio from the
+  first silent clip onward.
+- **A remix chains from the PREVIOUS shot, never from shot 1.** Anchoring every fallback remix to
+  shot 1 was the original design and it published a reel whose opening moment played three times:
+  each later shot applied its own prompt to the same untouched starting point, so nothing advanced.
+  `input_reference` is refused for *every* shot once people are on camera, so this path is the
+  common case, not the edge case. Chained drift is the lesser evil; repetition is not a video.
+- **A remix inherits its source clip's duration** — `remix_video_job` takes only a prompt. A shot
+  asking for 8s that falls back to remixing a 4s clip renders **4s**, which is how a 4/4/4/8 plan
+  shipped as 16s while reporting 20s. Every clip is measured after the fact (`video.duration_seconds`
+  per clip); `shots[].seconds` is the REAL length, `requested_seconds` appears only when they differ,
+  and `warning` tells the agent to caption the real duration. Never report the requested value.
 - **Sora 2** ([tools/sora_client.py](aismm/tools/sora_client.py)): job-scoped — a job id only exists
   on the resource that created it, so create/poll/download must stay on one resource. The pool
   round-robins **at the job level** (`sora_config.next_resource`); never front it with a round-robin

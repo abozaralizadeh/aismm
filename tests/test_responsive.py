@@ -67,6 +67,46 @@ def test_narrow_screens_also_get_16px_controls():
     assert "font-size: 16px" in narrow
 
 
+# Types that put a keyboard on screen — these are the ones iOS zooms into.
+# checkbox/radio/file/submit don't focus a text field, so they're exempt.
+ZOOMABLE_INPUT_TYPES = {"text", "password", "email", "number", "search", "tel",
+                        "url", "date", "datetime-local", "time", "month", "week"}
+
+
+def _form_input_types() -> set[str]:
+    """Every zoomable input type the templates actually use."""
+    found = set()
+    for path in TEMPLATE_FILES:
+        for match in re.finditer(r'<input[^>]*type="([^"]+)"', path.read_text()):
+            if match.group(1) in ZOOMABLE_INPUT_TYPES:
+                found.add(match.group(1))
+    return found
+
+
+def test_the_templates_use_input_types_worth_checking():
+    """Guards the guard: if this is empty the two tests below prove nothing."""
+    assert _form_input_types()
+
+
+@pytest.mark.parametrize("block", ["@media (pointer: coarse)", "max-width: 720px"])
+def test_every_form_input_type_is_named_in_the_16px_rules(block):
+    """A bare `input` selector is NOT enough here.
+
+    ``.form input[type=text]`` in the base rule sets ``font: inherit`` (15px) and
+    out-specifies a bare ``input { font-size: 16px }`` inside a media query — so
+    each type has to be listed explicitly or it silently keeps the zooming size.
+    A datetime-local field shipped at 15px exactly this way.
+    """
+    css = (CSS.split("@media (pointer: coarse)", 1)[1] if block.startswith("@media")
+           else _media_block(block))
+    for input_type in _form_input_types():
+        # Scoped either way (.form … or .filters …) — what matters is that the
+        # type is named, so it beats the base rule's `font: inherit`.
+        assert f"input[type={input_type}]" in css, (
+            f"input[type={input_type}] is used in a template but is not listed in the "
+            f"16px rules for {block} — it will render below 16px and zoom on iOS")
+
+
 # --- the topbar nav must never be clipped ------------------------------------------ #
 
 def test_the_nav_scrolls_rather_than_clipping():

@@ -20,11 +20,24 @@ Accepted forms, combined freely with ``,`` / ``;`` / ``and`` / newlines:
 Everything is UTC — the scheduler runs on it, so "09:00" means 09:00 UTC.
 :func:`describe` renders a parsed schedule back as English for the dashboard, so
 the operator can see what their text was understood to mean.
+
+An ``every Xh``-style schedule needs a fixed reference point ("every 6 hours
+starting FROM WHEN?"), and every trigger built here takes an ``anchor`` for that.
+Without one, ``IntervalTrigger`` anchors to the moment it was *constructed* — so
+re-registering the same "every 1h" job (which happens on every dashboard save of
+ANY instruction, and on every service restart, since :func:`aismm.scheduler.
+refresh_jobs` rebuilds every job from scratch) silently pushed the next fire a
+full interval into the future each time. Callers pass a stable anchor —
+``instruction.schedule_start_at`` if the operator set one, else
+``instruction.created_at`` — so the phase survives being rebuilt. Cron-style
+parts ("09:00", raw cron) don't drift this way; ``anchor`` only gates them
+("don't fire before this"), which is a no-op once the anchor is in the past.
 """
 from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -108,7 +121,15 @@ def _parse_days(tokens: list[str]) -> str | None:
     return ",".join(parts) if parts else None
 
 
-def _cron_from_times(times: list[tuple[int, int]], days: str | None):
+def _cron_from_crontab(expr: str, anchor: datetime | None) -> CronTrigger:
+    """``CronTrigger.from_crontab`` doesn't take ``start_date``, so build it directly."""
+    minute, hour, day, month, day_of_week = expr.split()
+    return CronTrigger(minute=minute, hour=hour, day=day, month=month,
+                       day_of_week=day_of_week, start_date=anchor, timezone="UTC")
+
+
+def _cron_from_times(times: list[tuple[int, int]], days: str | None,
+                     anchor: datetime | None):
     """One CronTrigger covering several times of day (cron takes lists)."""
     hours = ",".join(str(h) for h, _ in times)
     minutes = ",".join(sorted({str(m) for _, m in times}))
@@ -117,28 +138,28 @@ def _cron_from_times(times: list[tuple[int, int]], days: str | None):
         # cross-producting, so the caller splits those into separate triggers.
         return None
     return CronTrigger(hour=hours, minute=minutes, day_of_week=days or "*",
-                       timezone="UTC")
+                       start_date=anchor, timezone="UTC")
 
 
-def _parse_part(part: str) -> list:
+def _parse_part(part: str, anchor: datetime | None = None) -> list:
     """Parse one part into zero or more triggers."""
     text = part.strip()
     low = text.lower()
 
     if low.startswith("@"):                                    # cron nicknames
         try:
-            return [CronTrigger.from_crontab(
+            return [_cron_from_crontab(
                 {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
                  "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *",
-                 "@hourly": "0 * * * *"}[low], timezone="UTC")]
+                 "@hourly": "0 * * * *"}[low], anchor)]
         except KeyError:
             return []
 
     if low in _NAMED:
         kind, value = _NAMED[low]
         if kind == "interval":
-            return [IntervalTrigger(seconds=value, timezone="UTC")]
-        return [CronTrigger.from_crontab(value, timezone="UTC")]
+            return [IntervalTrigger(seconds=value, start_date=anchor, timezone="UTC")]
+        return [_cron_from_crontab(value, anchor)]
 
     interval = _INTERVAL.match(low)
     if interval:
@@ -146,11 +167,11 @@ def _parse_part(part: str) -> list:
         unit = raw_unit if raw_unit in _UNIT_SECONDS else _WORD_UNIT.get(
             raw_unit.rstrip("s"), "h")
         seconds = max(count * _UNIT_SECONDS.get(unit, 3600), _MIN_INTERVAL_SECONDS)
-        return [IntervalTrigger(seconds=seconds, timezone="UTC")]
+        return [IntervalTrigger(seconds=seconds, start_date=anchor, timezone="UTC")]
 
     if len(text.split()) == 5:                                 # raw cron
         try:
-            return [CronTrigger.from_crontab(text, timezone="UTC")]
+            return [_cron_from_crontab(text, anchor)]
         except ValueError as exc:
             logger.warning("Invalid cron %r: %s", text, exc)
             return []
@@ -174,33 +195,42 @@ def _parse_part(part: str) -> list:
         logger.warning("Unrecognized day names in %r", text)
         return []
 
-    combined = _cron_from_times(times, days)
+    combined = _cron_from_times(times, days, anchor)
     if combined is not None:
         return [combined]
     return [CronTrigger(hour=str(h), minute=str(m), day_of_week=days or "*",
-                        timezone="UTC") for h, m in times]
+                        start_date=anchor, timezone="UTC") for h, m in times]
 
 
-def parse_schedule(schedule: str) -> list:
-    """All triggers for a schedule string. Empty list = nothing valid found."""
+def parse_schedule(schedule: str, *, anchor: datetime | None = None) -> list:
+    """All triggers for a schedule string. Empty list = nothing valid found.
+
+    ``anchor`` is the interval phase reference / "don't fire before" gate — see
+    the module docstring. Pass ``instruction.schedule_start_at or
+    instruction.created_at`` from callers that have an ``Instruction``.
+    """
     triggers = []
     for part in _split_parts(schedule):
-        parsed = _parse_part(part)
+        parsed = _parse_part(part, anchor)
         if not parsed:
             logger.warning("Unrecognized schedule part %r", part)
         triggers.extend(parsed)
     return triggers
 
 
-def parse_trigger(schedule: str):
+def parse_trigger(schedule: str, *, anchor: datetime | None = None):
     """First trigger only — kept for callers that want a single trigger."""
-    triggers = parse_schedule(schedule)
+    triggers = parse_schedule(schedule, anchor=anchor)
     return triggers[0] if triggers else None
 
 
-def describe(schedule: str) -> str:
-    """Plain-English readback of what a schedule string was understood to mean."""
-    triggers = parse_schedule(schedule)
+def describe(schedule: str, *, starts_at: datetime | None = None) -> str:
+    """Plain-English readback of what a schedule string was understood to mean.
+
+    ``starts_at`` is the operator-set field, not the ``created_at`` fallback used
+    for the actual anchor — only an EXPLICIT start is worth telling them about.
+    """
+    triggers = parse_schedule(schedule, anchor=starts_at)
     if not triggers:
         return "not understood — this instruction will never fire"
     pieces = []
@@ -230,4 +260,7 @@ def describe(schedule: str) -> str:
                 when = f"cron hour={hour} minute={minute}"
             days = "" if day_of_week in ("*", "mon-sun") else f" on {day_of_week}"
             pieces.append(f"{when} UTC{days}")
-    return " · ".join(pieces)
+    rendered = " · ".join(pieces)
+    if starts_at:
+        rendered += f", starting {starts_at.strftime('%Y-%m-%d %H:%M')} UTC"
+    return rendered

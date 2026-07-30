@@ -10,7 +10,7 @@
 <div class="table-scroll">
 <table>
   <thead>
-    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
+    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
   </thead>
   <tbody>
   {% for i in instructions %}
@@ -18,6 +18,11 @@
       <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
       <td class="small">{{ i.account_ids|length }}</td>
       <td class="mono small">{{ i.schedule or "—" }}</td>
+      <td class="small nowrap">
+        {% if next_runs.get(i.id) %}{{ next_runs[i.id].strftime('%Y-%m-%d %H:%M') }} UTC
+        {% elif i.schedule %}<span class="muted">not scheduled</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
       <td><span class="badge badge-{{ i.publish_mode.value }}">{{ i.publish_mode.value }}</span></td>
       <td class="small">{{ i.media_pref.value }}</td>
       <td>{{ "✓" if i.enabled else "—" }}</td>
