@@ -11,7 +11,7 @@ import asyncio
 import logging
 import time
 
-from . import cooldown
+from . import cooldown, publish_ledger
 from .agent import run_for_account
 from .assets import kind_from_path
 from .models import (
@@ -115,10 +115,26 @@ def approve_staged(staged_id: str) -> dict:
         return {"error": "no_token", "message": "Reconnect the account in the dashboard."}
 
     kind = staged.media_kind or kind_from_path(staged.asset_path)
+    # A staged carousel has several items and a story has a placement; passing only
+    # asset_path posted the first image of a carousel as a lone feed post.
+    paths = staged.asset_paths or ([staged.asset_path] if staged.asset_path else [])
+    placement = staged.placement or "feed"
+
+    digest = publish_ledger.fingerprint(paths, placement)
+    already = publish_ledger.find(account, digest)
+    if already:
+        logger.warning("Refusing to approve a duplicate of an already-published post (%s)",
+                       already.get("url") or already.get("at"))
+        return {"error": "already_published",
+                "message": (f"This exact media was already published on "
+                            f"{publish_ledger.describe_entry(already)}. Not posting it twice — "
+                            f"reject this staged post instead.")}
+
     try:
         result = _run_async(platform.publish(
             access_token=access_token, account=account,
-            caption=staged.caption, asset_path=staged.asset_path, media_kind=kind))
+            caption=staged.caption, asset_path=staged.asset_path, media_kind=kind,
+            asset_paths=paths, placement=placement))
     except RateLimited as exc:
         held = cooldown.start(account, store, exc.retry_after_seconds,
                               reason="approval publish was rate-limited")
@@ -130,6 +146,9 @@ def approve_staged(staged_id: str) -> dict:
         logger.exception("Approval publish failed")
         return {"error": "publish_failed", "message": str(exc)}
 
+    publish_ledger.record(account, store, digest, url=result.url,
+                          external_id=result.external_id,
+                          instruction_id=staged.instruction_id)
     staged.status = StagedStatus.published
     staged.external_url = result.url
     store.update_staged(staged)

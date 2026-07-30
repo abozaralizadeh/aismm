@@ -750,6 +750,54 @@ The memory prompt reinforces it: record what was **published**, not what was cre
 media but failed to post it has covered nothing, and writing it down as done makes the next run skip
 work it never did.
 
+### The same post never goes out twice
+
+The agent's memory is model-written prose, so "did this already go out?" cannot depend on it. It did
+once: a run recorded *"attempting panel X"*, published successfully, then ended without writing the
+outcome — and the next scheduled run read that memory, concluded panel X was outstanding, and posted
+the byte-identical image again.
+
+Two deterministic guards now sit beside the publish-mode gate, where the AI disclosure lives:
+
+- **A publish ledger.** Every successful live publish fingerprints its media (sha256 of the bytes
+  plus the placement) into the account's `meta`, in code. A `publish` call whose fingerprint is
+  already there is **refused** with `already_published`, and the message tells the agent to record
+  the item as done and advance. Keyed on the media, not the caption — the agent rewrites captions
+  every run, so identical art with fresh words would otherwise slip through. Approving a staged post
+  goes through the same check.
+- **Reconciliation after an ambiguous failure.** When Instagram's `media_publish` fails *after* the
+  container reached `FINISHED`, Meta already had the media and may have posted it anyway — the
+  outcome is unknown, not failed. AISMM reads the account's recent posts and, if one carrying our
+  caption appeared in the last 15 minutes, reports it as published with the real permalink instead of
+  a failure the next run would "retry".
+
+A legitimate re-post of the same media is blocked for 30 days; change the schedule or the media to
+post again sooner.
+
+A publish that got through *despite* a rate-limit error is recorded as **published** and still starts
+the cooldown — the post landed, but the app is being throttled, so the next scheduled run must not
+knock again.
+
+#### Repairing runs from before this existed
+
+Runs that published under a rate-limit error are stored as `failed` with a live post on the account,
+and the ledger only knows about posts made after it was introduced. A run whose **caption** is shown
+in the runs table (rather than an error) is one that got as far as publishing. To find and fix them:
+
+```bash
+python -m aismm.cli reconcile
+```
+
+It reads each Instagram account's recent posts, matches them to failed runs by caption, and prints
+what it would change. Nothing is written until you add `--apply`:
+
+```bash
+python -m aismm.cli reconcile --apply
+```
+
+That marks those runs `published` with their real permalink and seeds the duplicate guard with their
+media, so the next scheduled run cannot post them again. It publishes and deletes nothing.
+
 ### Rate limits and "action is blocked"
 
 Meta refuses some posts for **volume** rather than content — `code=4 Application request limit

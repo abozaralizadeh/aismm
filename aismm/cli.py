@@ -138,6 +138,41 @@ def cmd_post(args) -> int:
     return 0
 
 
+def cmd_reconcile(args) -> int:
+    """Repair runs recorded as failed whose post is actually live on the account."""
+    from . import reconcile
+    from .store import get_store
+
+    configure_logging()
+    store = get_store()
+    reports = reconcile.reconcile_all(store, apply=args.apply)
+    if not reports:
+        print("No Instagram accounts to reconcile.")
+        return 0
+
+    total = 0
+    for report in reports:
+        if report.get("error"):
+            print(f"\n{report['account']}: ERROR {report['error']}")
+            continue
+        found = report["repaired"]
+        total += len(found)
+        print(f"\n{report['account']}: {report['live_posts']} live post(s), "
+              f"{report['failed_runs']} failed run(s) checked")
+        for run_id, url in found:
+            print(f"  run {run_id[:8]} IS published -> {url or '(no permalink)'}")
+        if found:
+            print(f"  {'repaired' if report['applied'] else 'would repair'}: {len(found)}"
+                  + (f", ledger entries added: {report['ledger_seeded']}"
+                     if report["applied"] else ""))
+        else:
+            print("  nothing to repair")
+
+    if total and not args.apply:
+        print("\nThis was a dry run. Re-run with --apply to write the changes.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aismm", description="AI Social Media Manager")
     sub = p.add_subparsers(dest="command")
@@ -156,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--instruction", required=True, help="instruction id (prefix) or name")
     pp.add_argument("--account", help="limit to one account id")
     pp.set_defaults(func=cmd_post)
+
+    pr = sub.add_parser("reconcile",
+                        help="fix runs marked failed whose post is actually live")
+    pr.add_argument("--apply", action="store_true",
+                    help="write the changes (default is a dry run)")
+    pr.set_defaults(func=cmd_reconcile)
 
     return p
 

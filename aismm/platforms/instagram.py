@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -75,6 +77,35 @@ class RateLimited(RuntimeError):
 # Volume/integrity refusals, as opposed to "this media is wrong".
 _RATE_LIMIT_CODES = {4, 17, 32}
 _BLOCKED_SUBCODES = {2207051}
+
+# How far back to look when checking whether a failed media_publish actually
+# published. Generous enough to cover a slow container, short enough that an
+# earlier post of the same caption can't be mistaken for this one.
+_RECONCILE_WINDOW_SECONDS = 900
+
+
+def _caption_key(caption: str | None) -> str:
+    """Normalized caption for comparing ours against what Graph reports back.
+
+    Graph can return the caption with different whitespace than we submitted, so
+    compare on collapsed whitespace over a bounded prefix.
+    """
+    return re.sub(r"\s+", " ", (caption or "").strip())[:200].lower()
+
+
+def _parse_graph_time(value) -> datetime | None:
+    """Graph timestamps look like ``2026-07-30T12:33:41+0000``."""
+    if not value:
+        return None
+    text = str(value)
+    # fromisoformat wants +00:00, Graph sends +0000.
+    if re.search(r"[+-]\d{4}$", text):
+        text = f"{text[:-5]}{text[-5:-2]}:{text[-2:]}"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _auth(access_token: str) -> dict:
@@ -246,6 +277,50 @@ class Instagram(SocialPlatform):
             raise RuntimeError(message)
         raise RuntimeError("Instagram media never became publishable")
 
+    async def _find_recent_published(self, client, ig_user_id, token, caption,
+                                     within_seconds=_RECONCILE_WINDOW_SECONDS) -> dict | None:
+        """Did a post we just tried to publish actually land? Never raises.
+
+        ``media_publish`` can fail *after* the container reached FINISHED — Meta
+        already holds the media, and a code-4 refusal at that last step leaves the
+        outcome genuinely UNKNOWN rather than failed. Assuming failure is what
+        produced duplicate posts: the run reported failure, the position stayed
+        put, and the next run posted the same thing again.
+
+        So we ask the account what its newest post is. A post carrying our caption
+        and timestamped within the last few minutes is the one we just submitted.
+
+        Requires a caption to match on. ``/media`` does not list stories, so
+        without one the newest *feed* post would be misread as ours — the
+        [publish ledger](../publish_ledger.py) is what guards story duplicates.
+        """
+        wanted = _caption_key(caption)
+        if not wanted:
+            logger.info("No caption to reconcile against; reporting the publish failure as-is")
+            return None
+        try:
+            r = await client.get(f"{GRAPH}/{ig_user_id}/media",
+                                 params={"fields": "id,caption,permalink,timestamp",
+                                         "limit": 5},
+                                 headers=_auth(token))
+            if r.status_code >= 400:
+                logger.info("Could not reconcile the publish (HTTP %s reading recent media)",
+                            r.status_code)
+                return None
+            recent = r.json().get("data", [])
+        except Exception as exc:  # noqa: BLE001 - reconciliation is best-effort
+            logger.warning("Could not reconcile the publish: %s", exc)
+            return None
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=within_seconds)
+        for post in recent:
+            stamp = _parse_graph_time(post.get("timestamp"))
+            if stamp is None or stamp < cutoff:
+                continue
+            if _caption_key(post.get("caption")) == wanted:
+                return post
+        return None
+
     async def _log_media_preflight(self, client, media_url, asset_path, media_kind) -> None:
         """Describe the media Instagram is about to fetch. Never fatal.
 
@@ -384,7 +459,25 @@ class Instagram(SocialPlatform):
                                    "failure (attempt %d/%d)", attempt + 1, _CONTAINER_RETRIES)
                     await asyncio.sleep(_CONTAINER_RETRY_DELAY)
 
-            media_id = await self._publish_container(client, ig_user_id, creation_id, access_token)
+            try:
+                media_id = await self._publish_container(
+                    client, ig_user_id, creation_id, access_token)
+            except (RateLimited, RuntimeError) as exc:
+                # The container was FINISHED, so Meta already had the media and may
+                # have published it anyway. Check before reporting a failure that
+                # would make the next run post this a second time.
+                landed = await self._find_recent_published(
+                    client, ig_user_id, access_token,
+                    "" if placement == "story" else caption)
+                if landed is None:
+                    raise
+                logger.warning("media_publish reported %r, but the post IS live (%s) — "
+                               "treating it as published so the next run does not repeat it",
+                               str(exc), landed.get("permalink") or landed.get("id"))
+                return PublishResult(url=landed.get("permalink", ""),
+                                     external_id=landed.get("id", ""),
+                                     raw={"media_id": landed.get("id", ""),
+                                          "reconciled": True, "publish_error": str(exc)})
 
             perma = await client.get(f"{GRAPH}/{media_id}", params={"fields": "permalink"},
                                      headers=_auth(access_token))

@@ -24,6 +24,7 @@ python -m aismm.cli run         # scheduler + dashboard  → http://127.0.0.1:87
 python -m aismm.cli dashboard   # dashboard only
 python -m aismm.cli list        # accounts + instructions
 python -m aismm.cli post --instruction <id-or-name> [--account <id>]
+python -m aismm.cli reconcile [--apply]   # fix runs marked failed whose post is actually live
 
 # test / verify
 pytest -q                       # 30 unit tests (no network, no creds needed)
@@ -275,6 +276,26 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 - **The agent must write memory AFTER publish returns**, not before. The prompt used to say
   memory-then-publish, so a rate-limited run advanced its position past a panel it never posted and
   the next run skipped it. Steps 8/9/10 are attempt → publish → outcome; keep that order.
+- **"Was it published?" is recorded in CODE, not in the memory**
+  ([publish_ledger.py](aismm/publish_ledger.py)). The prompt above is necessary but not sufficient:
+  a run wrote "attempting panel X", published successfully, then ended *without* the step-10 write,
+  so the next run re-posted the same panel — two identical live posts. Every successful live publish
+  now fingerprints its media (sha256 of the bytes + placement, in `account.meta` like the cooldown)
+  and `perform_publish` **refuses** a fingerprint already in the ledger. Same reasoning as the AI
+  disclosure and the publish gate: a guarantee that must hold on every path cannot live in
+  model-written prose. Key on the MEDIA, never the caption — the agent rewrites the caption each run.
+- **A `media_publish` failure after the container is FINISHED means UNKNOWN, not failed**
+  (`Instagram._find_recent_published`). Meta already holds the media at that point, and a code-4
+  refusal on the last step can still have published. Treating it as failure left the position
+  unchanged and the next run posted a duplicate — so we read back `/{ig-user-id}/media` and, if a
+  post with our caption appeared in the last 15 minutes, report success with the real permalink.
+  Needs a caption to match on: `/media` does not list stories, so a story failure is never
+  reconciled (the ledger guards that case) or the newest feed post would be misread as ours.
+  A reconciled publish reports success **and still starts the cooldown** — the post landed, but Meta
+  signalled a limit, so the next run must not knock. [reconcile.py](aismm/reconcile.py) +
+  `cli reconcile --apply` does the same repair retroactively for runs recorded before this existed
+  (match failed runs to live posts by caption, fix the status, seed the ledger); it is read-only
+  against the platform and dry-run by default.
 - **Instagram engagement tools** ([tools/instagram_tools.py](aismm/tools/instagram_tools.py)) return
   `None` from their factories unless the run targets an Instagram account, so other platforms aren't
   handed them. Reply/moderate act on the live account IMMEDIATELY — they are not behind

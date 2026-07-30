@@ -17,7 +17,7 @@ import re
 
 from agents import function_tool
 
-from .. import cooldown, disclosure, media
+from .. import cooldown, disclosure, media, publish_ledger
 from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
@@ -26,6 +26,9 @@ from ..platforms.instagram import RateLimited
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.publish")
+
+# A post that went out despite a rate-limit error still means the app is throttled.
+RECONCILED_COOLDOWN_SECONDS = 3600
 
 
 # A caption that narrates the agent's own trouble is a bug report, not a post —
@@ -237,6 +240,31 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
                 "message": "Queued for approval. It publishes when approved in the dashboard."}
 
     # --- live: publish now ------------------------------------------------ #
+    # Refuse a re-post of content this account already published. The agent is
+    # supposed to know from its memory, but the memory is model-written prose and
+    # a run that published then failed to record it made the next run post the
+    # same panel twice. This is the deterministic backstop.
+    digest = publish_ledger.fingerprint(paths, placement)
+    already = publish_ledger.find(account, digest)
+    if already:
+        message = (f"This exact media was ALREADY published to "
+                   f"{account.handle or account.platform.value} on "
+                   f"{publish_ledger.describe_entry(already)}. Not posting it again. The item "
+                   f"is DONE: call update_memory to record it as published and advance your "
+                   f"position, then finish with report_failure if there is nothing new left "
+                   f"to post this run.")
+        logger.warning("Refusing a duplicate publish for %s (fingerprint %s, first posted %s)",
+                       account.handle or account.external_id, digest[:12],
+                       already.get("at", "?"))
+        run.status = RunStatus.failed
+        run.error = message
+        run.log = (run.log + "\nREFUSED: duplicate of an already-published post.").strip()
+        store.update_run(run)
+        state["result"] = {"mode": "live", "error": message, "duplicate": True,
+                           "url": already.get("url", "")}
+        return {"error": "already_published", "message": message,
+                "published_at": already.get("at", ""), "url": already.get("url", "")}
+
     try:
         access_token, _refresh = store.get_tokens(account.id)
         if not access_token:
@@ -270,15 +298,40 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
         state["result"] = {"mode": "live", "error": str(exc)}
         return {"error": "publish_failed", "message": str(exc)}
 
+    # Record the outcome in CODE, before returning to the agent. The agent is told
+    # to write its memory after publish returns; when it doesn't, this is still
+    # what stops the next run from posting the same thing again.
+    publish_ledger.record(account, store, digest, url=result.url,
+                          external_id=result.external_id, instruction_id=instruction.id)
+
+    # The post landed, but Instagram had answered media_publish with a rate-limit
+    # error — the app IS being throttled even though this one got through. Back off
+    # anyway, or the next scheduled run knocks again and Meta extends the block.
+    reconciled = bool((result.raw or {}).get("reconciled"))
+    publish_error = (result.raw or {}).get("publish_error", "")
+    if reconciled:
+        logger.warning("Publish reconciled for %s: Instagram errored (%s) but the post is live "
+                       "at %s", account.handle or account.external_id, publish_error, result.url)
+        cooldown.start(account, store, RECONCILED_COOLDOWN_SECONDS,
+                       reason="published, but Instagram reported a rate limit")
+
     staged.status = StagedStatus.published
     staged.external_url = result.url
     store.add_staged(staged)
     run.status = RunStatus.published
     run.external_url = result.url
-    run.log = (run.log + f"\nPublished {kind} post: {result.url}").strip()
+    run.log = (run.log + f"\nPublished {kind} post: {result.url}"
+               + (f"\nRECONCILED: Instagram reported an error ({publish_error}) but the post "
+                  f"is live. Publishing paused so the next run does not knock again."
+                  if reconciled else "")).strip()
     store.update_run(run)
-    state["result"] = {"mode": "live", "url": result.url, "kind": kind}
-    return {"status": "published", "mode": "live", "url": result.url}
+    state["result"] = {"mode": "live", "url": result.url, "kind": kind,
+                       **({"reconciled": True} if reconciled else {})}
+    return {"status": "published", "mode": "live", "url": result.url,
+            **({"note": f"Instagram reported {publish_error!r} but the post IS live."}
+               if reconciled else {}),
+            "reminder": ("This IS published and recorded. Call update_memory now to advance "
+                         "your position past this item so the next run does not repeat it.")}
 
 
 def _make_publish(state: dict):
