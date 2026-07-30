@@ -123,10 +123,12 @@
 {% if instruction %}
 <h2>Attached files</h2>
 <p class="muted small">
-  Files every run of this instruction can use. A <strong>context</strong> file is read by the agent —
-  its text is extracted on upload (PDF, txt, md, csv, json) and an excerpt goes into the prompt, with
-  <code>read_attachment</code> for the rest. A <strong>reference</strong> image is handed to the image
-  or video generator to hold a look. Max 25MB per file.
+  Files every run of this instruction can use. A <strong>context</strong> PDF or image is sent to the
+  model directly as a file — it reads the real layout and pixels, not our own extraction. Plain text
+  (txt, md, csv, json) is inlined instead. A file too large to attach falls back to the text extracted
+  on upload, with <code>read_attachment</code> for the rest. A <strong>reference</strong> image is
+  handed to the image or video generator to hold a look, and is never sent to the text model. Max
+  25MB per file.
 </p>
 
 {% if files %}

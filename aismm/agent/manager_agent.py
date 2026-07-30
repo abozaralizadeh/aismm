@@ -11,6 +11,7 @@ import logging
 
 from agents import Agent, ModelSettings, Runner
 
+from ..attachments import build_agent_input, looks_like_unsupported_file_input
 from ..llm import build_model
 from ..models import Account, Instruction, Run, RunStatus
 from ..platforms.registry import get_platform
@@ -53,17 +54,33 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                             platform_caps=caps, state=instruction_state,
                             files=attachments)
     # Keep the exact prompt on the Run: debugging a failure means seeing what the
-    # agent was told, not what the instruction says now.
+    # agent was told, not what the instruction says now. run.prompt always stays
+    # plain text even when the model also receives files natively.
     run.prompt = kickoff
     store.update_run(run)
-    logger.info("Agent ready: %d tool(s) [%s], memory=%d chars, note=%s, files=%d",
+    agent_input, attached_natively, fell_back = build_agent_input(kickoff, attachments)
+    logger.info("Agent ready: %d tool(s) [%s], memory=%d chars, note=%s, files=%d "
+                "(%d attached natively, %d as text)",
                 len(agent.tools), ", ".join(getattr(t, "name", "?") for t in agent.tools),
                 len(instruction_state.memory or ""),
                 "yes" if (instruction_state.note or "").strip() else "no",
-                len(attachments))
+                len(attachments), len(attached_natively), len(fell_back))
+    if attached_natively:
+        logger.info("Attached natively to the model: %s", ", ".join(attached_natively))
+    if fell_back:
+        logger.info("Too large/unreadable to attach natively, using extracted text: %s",
+                    ", ".join(fell_back))
 
     try:
-        result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
+        try:
+            result = await Runner.run(agent, agent_input, max_turns=MAX_TURNS)
+        except Exception as exc:  # noqa: BLE001 - only retry the specific failure we can fix
+            if isinstance(agent_input, list) and looks_like_unsupported_file_input(str(exc)):
+                logger.warning("Deployment rejected native file input (%s) — retrying as "
+                               "text-only", exc)
+                result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
+            else:
+                raise
 
         # --- deterministic recovery: ensure the run reached a terminal publish ---
         if not state.get("result"):

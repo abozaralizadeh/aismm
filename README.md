@@ -836,13 +836,14 @@ An instruction can carry files, available to **every run** of it, uploaded on it
 
 | Purpose | What happens |
 |---|---|
-| **context** | Text is extracted once on upload — PDF (text layer), `txt`, `md`, `csv`, `json`, `html`. An excerpt goes into the run's prompt, and `read_attachment("voice.pdf")` gives the agent the rest. |
-| **reference** | The image's `asset_path` is put in front of the agent to pass to `generate_image` (`reference_asset_paths`) or a video sequence, so a look can be held across posts. |
+| **context** | A PDF or image is sent to the model **directly as a file** (the Responses API's `input_file`/`input_image`), so it reads the real layout, tables and pixels — not our own extraction. Plain text (`txt`, `md`, `csv`, `json`, `html`) is inlined. A file too large to attach, or a deployment that rejects file parts, falls back to the text extracted once on upload, with `read_attachment("voice.pdf")` giving the agent the rest. |
+| **reference** | The image's `asset_path` is put in front of the agent to pass to `generate_image` (`reference_asset_paths`) or a video sequence, so a look can be held across posts. Never sent to the text model itself. |
 
-A brand-voice PDF, a price list, a palette swatch, a product photo to match. Extraction is
-best-effort and never blocks the upload: a scanned PDF with no text layer stores fine and the flash
-message tells you it had none ("it may be a scan — OCR is not done here"). Deleting an instruction
-deletes its attachments.
+A brand-voice PDF, a price list, a palette swatch, a product photo to match. Text is still
+extracted on upload as a fallback (best-effort, never blocks the upload — a scanned PDF with no
+text layer stores fine and the flash message says so). Each file inlines up to 12MB, with a 28MB
+budget shared across all of an instruction's attachments in one run; anything over that falls back
+to its extracted text instead of being dropped. Deleting an instruction deletes its attachments.
 
 ### The Runs page
 

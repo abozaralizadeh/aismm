@@ -39,9 +39,11 @@ YOUR TOOLS
 - publish          : finish the post. Call this EXACTLY ONCE, at the very end.
                      Pass asset_paths=[...] for a multi-item post (a carousel) and
                      placement="story" for a story instead of a feed post.
-- read_attachment  : the full text of a file the human attached to this
-                     instruction (a brief, a PDF, a price list). The kickoff shows
-                     an excerpt of each; this gives you the rest.
+- read_attachment  : extracted text of a file the human attached to this
+                     instruction. Most PDFs/images are attached to this message
+                     directly (below) — you can already read/see them without
+                     calling this; use it for a plain-text file, or one too large
+                     to attach directly.
 - report_failure   : finish WITHOUT posting, because the instruction could not be
                      carried out. The other way a run can legitimately end.
 
@@ -176,9 +178,10 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
     attached = describe_files(list(files or []))
     attachments = (
         f"FILES ATTACHED TO THIS INSTRUCTION (uploaded by the human — treat them as part "
-        f"of the brief). 'context' files are material to read; 'reference' images are for "
-        f"the generators, pass their asset_path to generate_image or a video sequence. Use "
-        f"read_attachment(filename) for the full text of a context file:\n{attached}\n\n"
+        f"of the brief). A 'context' PDF or image marked 'attached directly' below is part "
+        f"of THIS message — you can already read or see it. 'reference' images are instead "
+        f"for the generators: pass their asset_path to generate_image or a video sequence. "
+        f"Use read_attachment(filename) for anything not attached directly:\n{attached}\n\n"
         if attached else ""
     )
 

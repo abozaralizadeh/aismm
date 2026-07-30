@@ -217,7 +217,7 @@ class PlatformApp(SQLModel, table=True):
 class AttachmentPurpose(str, enum.Enum):
     """What an uploaded file is FOR, which decides how it reaches the model."""
 
-    context = "context"      # text is extracted and given to the agent to read
+    context = "context"      # given to the agent to read — natively (PDF/image) or as text
     reference = "reference"   # an image handed to the image/video generator
 
 
@@ -227,13 +227,16 @@ class InstructionFile(SQLModel, table=True):
     Two uses, chosen per file:
 
     * ``context`` — a brief, a style guide, a price list, a PDF of source
-      material. Its text is extracted once on upload and put in front of the
-      agent (an excerpt in the kickoff, the whole thing via ``read_attachment``).
+      material. A PDF or image is sent to the model directly as a file
+      (``attachments.build_agent_input``), so it sees the real layout and
+      pixels; plain text is inlined; anything too large to attach falls back to
+      the text extracted once on upload (``read_attachment`` gives the rest).
     * ``reference`` — an image the generators should follow: passed to
       ``generate_image`` as a reference, or to a video sequence to hold the look.
+      Never sent to the text model itself.
 
     The bytes live in the assets dir (and blob storage when configured) like any
-    other media; this row is the metadata plus the extracted text.
+    other media; this row is the metadata plus the extracted-text fallback.
     """
 
     id: str = Field(default_factory=_uuid, primary_key=True)

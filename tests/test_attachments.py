@@ -2,15 +2,16 @@
 
 Two things a run needs to be debuggable and steerable: the exact prompt it was
 given (stored on the Run, since the instruction may have changed since), and the
-files a human attached to the instruction — read as text by the model, or handed
-to the image/video generators as references.
+files a human attached to the instruction — a 'context' PDF/image is sent to the
+model directly (native file input), a 'reference' image is handed to the
+image/video generators, and anything else falls back to our own extracted text.
 """
 import asyncio
 import io
 
 import pytest
 
-from aismm import attachments
+from aismm import assets, attachments
 from aismm.agent.prompts import build_kickoff
 from aismm.dashboard import app as app_module
 from aismm.models import (
@@ -208,6 +209,115 @@ def test_no_attachments_adds_no_section(instruction):
     kickoff = build_kickoff(account=Account(platform=PlatformName.instagram),
                             instruction=instruction, platform_caps=CAPS, files=[])
     assert "FILES ATTACHED" not in kickoff
+
+
+# --- native file input: PDFs/images go to the model directly, not just as text ------- #
+
+def _stored_file(dash, instruction, data, content_type, purpose=AttachmentPurpose.context,
+                 filename="voice.pdf", note=""):
+    """A file with real bytes on disk, like one that went through the upload route."""
+    path = assets.save_bytes(data, filename.rsplit(".", 1)[-1])
+    return InstructionFile(instruction_id=instruction.id, filename=filename,
+                           content_type=content_type, purpose=purpose, asset_path=path,
+                           size_bytes=len(data), note=note)
+
+
+def test_goes_natively_accepts_pdf_and_common_images_not_plain_text(instruction):
+    pdf = InstructionFile(instruction_id=instruction.id, filename="a.pdf",
+                          content_type="application/pdf")
+    png = InstructionFile(instruction_id=instruction.id, filename="b.png",
+                          content_type="image/png")
+    txt = InstructionFile(instruction_id=instruction.id, filename="c.txt",
+                          content_type="text/plain")
+    assert attachments.goes_natively(pdf)
+    assert attachments.goes_natively(png)
+    assert not attachments.goes_natively(txt)
+
+
+def test_a_context_pdf_becomes_an_input_file_part(dash, instruction):
+    data = text_pdf()
+    f = _stored_file(dash, instruction, data, "application/pdf")
+    parts, attached, fell_back = attachments.build_content_parts([f])
+    assert attached == ["voice.pdf"] and fell_back == []
+    assert parts[0]["type"] == "input_file"
+    assert parts[0]["filename"] == "voice.pdf"
+    assert parts[0]["file_data"].startswith("data:application/pdf;base64,")
+
+
+def test_a_context_image_becomes_an_input_image_part(dash, instruction):
+    data = png_bytes()
+    f = _stored_file(dash, instruction, data, "image/png", filename="diagram.png")
+    parts, attached, fell_back = attachments.build_content_parts([f])
+    assert attached == ["diagram.png"]
+    assert parts[0]["type"] == "input_image"
+    assert parts[0]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_a_reference_image_is_never_sent_to_the_text_model(dash, instruction):
+    """Reference images stay dedicated to generate_image/video — only context goes natively."""
+    f = _stored_file(dash, instruction, png_bytes(), "image/png",
+                     purpose=AttachmentPurpose.reference, filename="palette.png")
+    parts, attached, fell_back = attachments.build_content_parts([f])
+    assert parts == [] and attached == [] and fell_back == []
+
+
+def test_a_missing_asset_falls_back_instead_of_raising(instruction):
+    f = InstructionFile(instruction_id=instruction.id, filename="gone.pdf",
+                        content_type="application/pdf", asset_path="/no/such/file.pdf")
+    parts, attached, fell_back = attachments.build_content_parts([f])
+    assert parts == [] and fell_back == ["gone.pdf"]
+
+
+def test_an_oversized_file_falls_back_to_text(dash, instruction, monkeypatch):
+    monkeypatch.setattr(attachments, "MAX_INLINE_BYTES", 10)
+    f = _stored_file(dash, instruction, text_pdf(), "application/pdf")
+    parts, attached, fell_back = attachments.build_content_parts([f])
+    assert parts == [] and fell_back == ["voice.pdf"]
+
+
+def test_the_request_budget_is_shared_across_files(dash, instruction, monkeypatch):
+    monkeypatch.setattr(attachments, "MAX_INLINE_BYTES", 10_000)
+    monkeypatch.setattr(attachments, "MAX_INLINE_TOTAL_BYTES", 12_000)
+    files = [_stored_file(dash, instruction, b"x" * 8_000, "application/pdf",
+                          filename=f"f{i}.pdf")
+            for i in range(3)]
+    parts, attached, fell_back = attachments.build_content_parts(files)
+    assert len(attached) == 1 and len(fell_back) == 2
+
+
+def test_a_context_pdf_shows_as_attached_directly_in_the_kickoff(dash, instruction):
+    f = _stored_file(dash, instruction, text_pdf(), "application/pdf")
+    kickoff = build_kickoff(account=Account(platform=PlatformName.instagram),
+                            instruction=instruction, platform_caps=CAPS, files=[f])
+    assert "voice.pdf (context" in kickoff
+    assert "attached directly to this message" in kickoff
+    assert "Tone: warm, clinical." not in kickoff  # not dumped as text — it's a real file part
+
+
+def test_build_agent_input_is_plain_text_with_no_attachable_files(instruction):
+    agent_input, attached, fell_back = attachments.build_agent_input("BRIEF:\nhello", [])
+    assert agent_input == "BRIEF:\nhello"
+    assert attached == [] and fell_back == []
+
+
+def test_build_agent_input_wraps_the_kickoff_with_native_parts(dash, instruction):
+    f = _stored_file(dash, instruction, text_pdf(), "application/pdf")
+    agent_input, attached, fell_back = attachments.build_agent_input("BRIEF:\nhello", [f])
+    assert attached == ["voice.pdf"]
+    assert isinstance(agent_input, list)
+    content = agent_input[0]["content"]
+    assert content[0] == {"type": "input_text", "text": "BRIEF:\nhello"}
+    assert content[1]["type"] == "input_file"
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("Unsupported parameter: 'input_file' is not supported with this model", True),
+    ("invalid_type: image_url must be a string", True),
+    ("Rate limit reached for requests", False),
+    ("500 internal server error", False),
+])
+def test_looks_like_unsupported_file_input(message, expected):
+    assert attachments.looks_like_unsupported_file_input(message) is expected
 
 
 def test_read_attachment_returns_the_full_text(store, instruction):
