@@ -349,6 +349,16 @@ class LocalStore(Store):
             s.commit()
             return True
 
+    def touch_lock(self, key):
+        with Session(self._engine) as s:
+            existing = s.get(Lock, key)
+            if existing is None:
+                return False
+            existing.acquired_at = _now()
+            s.add(existing)
+            s.commit()
+            return True
+
     def release_lock(self, key):
         with Session(self._engine) as s:
             s.exec(sa_delete(Lock).where(Lock.key == key))

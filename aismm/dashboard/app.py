@@ -306,7 +306,20 @@ def create_app() -> Flask:
 
     @app.route("/instructions/<instruction_id>/run", methods=["POST"])
     def run_instruction_now(instruction_id):
-        threading.Thread(target=orchestrator.run_instruction, args=(instruction_id,),
+        # Named and logged: this thread is not the scheduler's, so when the worker
+        # restarts mid-run it dies silently. The lock it holds is heartbeated, so a
+        # death now frees the instruction within one lock TTL instead of blocking
+        # its scheduled runs for half an hour.
+        def _manual_run():
+            app.logger.info("Manual run started for instruction %s", instruction_id)
+            try:
+                orchestrator.run_instruction(instruction_id)
+            except Exception:  # noqa: BLE001 - a thread that dies quietly is undebuggable
+                app.logger.exception("Manual run failed for instruction %s", instruction_id)
+            finally:
+                app.logger.info("Manual run finished for instruction %s", instruction_id)
+
+        threading.Thread(target=_manual_run, name=f"manual-run:{instruction_id[:8]}",
                          daemon=True).start()
         flash("Run started — check Runs in a moment.", "success")
         return redirect(url_for("runs"))

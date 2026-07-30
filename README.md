@@ -629,8 +629,33 @@ One table per project, entity type in the `PartitionKey`, id in the `RowKey` —
 | `lock` | lock key | single-flight lock |
 
 Locks use `create_entity` + `ResourceExistsError` with a TTL reclaim — `GenBox._try_acquire_lock`,
-ported. Tokens are Fernet-encrypted **before** they reach the table, exactly as with SQLite, so the
-storage account never holds a usable credential.
+ported — and are **heartbeated** while their run is alive (see below). Tokens are Fernet-encrypted
+**before** they reach the table, exactly as with SQLite, so the storage account never holds a usable
+credential.
+
+### Why a run can't block the next one forever
+
+Each `(instruction, account)` pair is single-flighted by a lock, so a double schedule fire never
+double-posts. The subtlety is what happens when the lock's owner *dies*.
+
+The dashboard's **Run now** executes in a plain daemon thread, not a scheduler job. If the service
+restarts while it is in flight (`Restart=always` will), that thread is killed without unwinding its
+`finally` — the lock is left behind, and every scheduled run of that instruction is refused as
+"already running" by a run that no longer exists. That is why a manual run could stop scheduled ones
+*after* it had finished.
+
+So a live run **renews its lock every 60 seconds** and the lock's TTL is 300. A run may take as long
+as it likes; an abandoned lock is reclaimable 5 minutes after whatever held it stopped breathing.
+
+Separately, every run has a **wall-clock ceiling of one hour**. APScheduler executes jobs in a bounded
+thread pool with `max_instances=1`, so a run that never returns would silence its instruction
+permanently and leak a pool thread. A skipped fire is now logged rather than silent:
+
+```
+Instruction job instr:a795… did NOT fire: its previous run is still going.
+```
+
+A `RUN START` with no matching `RUN DONE` is the signature of a wedged run.
 
 ### Blob storage solves the Instagram problem
 

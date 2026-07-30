@@ -296,6 +296,20 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   `cli reconcile --apply` does the same repair retroactively for runs recorded before this existed
   (match failed runs to live posts by caption, fix the status, seed the ledger); it is read-only
   against the platform and dry-run by default.
+- **The run lock is HEARTBEATED, and the TTL is short because of it**
+  ([orchestrator.py](aismm/orchestrator.py) `_LockHeartbeat` + `Store.touch_lock`). The dashboard's
+  "Run now" runs in a plain daemon thread, not a scheduler job — a gunicorn restart (`Restart=always`)
+  kills it without unwinding `finally`, so its lock was never released and, at the old 30-minute TTL
+  with no heartbeat, every scheduled run of that instruction was refused as "already running" by a run
+  that no longer existed. Now a live run renews its lock every 60s and the TTL is 300s, so an orphaned
+  lock clears in one TTL. Don't raise `_LOCK_TTL` to "allow longer runs" — that is what the heartbeat
+  is for; the TTL only measures how long a *dead* owner blocks the next run.
+- **A run has a wall-clock ceiling** (`RUN_TIMEOUT_SECONDS`, 1h). APScheduler runs jobs in a bounded
+  pool with `max_instances=1`, so one run that never returns silences its instruction *permanently*
+  and leaks a pool thread; enough of them stop every instruction. The scheduler also logs
+  `EVENT_JOB_MAX_INSTANCES`/`EVENT_JOB_MISSED` — a skipped fire used to be completely silent, which is
+  why an instruction quietly not posting was so hard to diagnose. A `RUN START` with no matching
+  `RUN DONE` is the signature.
 - **Instagram engagement tools** ([tools/instagram_tools.py](aismm/tools/instagram_tools.py)) return
   `None` from their factories unless the run targets an Instagram account, so other platforms aren't
   handed them. Reply/moderate act on the live account IMMEDIATELY — they are not behind

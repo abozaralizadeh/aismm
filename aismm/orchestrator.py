@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
 from . import cooldown, publish_ledger
@@ -23,12 +24,69 @@ from .store import get_store
 
 logger = logging.getLogger("aismm.orchestrator")
 
-_LOCK_TTL = 1800  # 30 min
+# The lock is HEARTBEATED for as long as the run is alive, so this is "how long
+# after its owner dies before the lock is reclaimable", not "how long a run may
+# take". It used to be 30 minutes with no heartbeat: a dashboard "Run now" thread
+# killed by a gunicorn restart left its lock behind, and every scheduled run of
+# that instruction was skipped as "already running" for the next half hour —
+# the run had finished (violently), but the lock hadn't heard.
+_LOCK_TTL = 300
+_LOCK_HEARTBEAT = 60
+
+# A wedged run must not hold a scheduler thread forever. APScheduler runs jobs in
+# a 10-thread pool with max_instances=1, so one run that never returns silences
+# that instruction permanently and leaks a pool thread; ten of them stop every
+# instruction. Nothing in a run legitimately takes this long.
+RUN_TIMEOUT_SECONDS = 3600
 
 
 def _run_async(coro):
     """Run an async coroutine from a sync context (scheduler thread / CLI)."""
     return asyncio.run(coro)
+
+
+async def _with_timeout(coro, seconds: int = 0):
+    """Abandon a run that has stopped making progress.
+
+    ``asyncio.TimeoutError`` is ``TimeoutError`` on 3.11+; normalized here so the
+    caller can catch the builtin on every supported version.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=seconds or RUN_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(str(exc) or "run timed out") from None
+
+
+class _LockHeartbeat:
+    """Keeps a run's lock fresh while the run is alive; stops on exit.
+
+    A daemon thread, so it can never keep the process up on its own — if
+    everything else is gone, the lock simply stops being renewed and goes stale.
+    """
+
+    def __init__(self, store, key: str, interval: int = _LOCK_HEARTBEAT):
+        self._store, self._key, self._interval = store, key, interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._beat, name=f"lock-heartbeat:{self._key}",
+                                        daemon=True)
+        self._thread.start()
+        return self
+
+    def _beat(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                if not self._store.touch_lock(self._key):
+                    logger.warning("Lock %s vanished while its run was still going", self._key)
+                    return
+            except Exception as exc:  # noqa: BLE001 - never kill a run over bookkeeping
+                logger.warning("Could not refresh lock %s: %s", self._key, exc)
+
+    def __exit__(self, *exc_info):
+        self._stop.set()
+        return False
 
 
 def run_instruction(instruction_id: str) -> list[dict]:
@@ -80,11 +138,24 @@ def _run_one(instruction: Instruction, account: Account, store) -> dict:
                     run.id[:8], instruction.name, account.handle or account.external_id,
                     account.platform.value, instruction.publish_mode.value,
                     instruction.media_pref.value)
-        result = _run_async(run_for_account(account, instruction, store, run))
+        with _LockHeartbeat(store, lock_key):
+            result = _run_async(_with_timeout(
+                run_for_account(account, instruction, store, run)))
         result["account_id"] = account.id
         logger.info("RUN DONE  %s | %.1fs | %s",
                     run.id[:8], time.monotonic() - started, result)
         return result
+    except TimeoutError:
+        message = (f"Run exceeded {RUN_TIMEOUT_SECONDS}s and was abandoned. Something it "
+                   f"called never returned — check the last log line before this one for "
+                   f"where it stopped.")
+        logger.error("RUN TIMEOUT %s | %.1fs | instruction='%s' account=%s",
+                     run.id[:8], time.monotonic() - started, instruction.name,
+                     account.handle or account.external_id)
+        run.status = RunStatus.failed
+        run.error = message
+        store.update_run(run)
+        return {"account_id": account.id, "status": "failed", "error": message}
     except Exception as exc:  # noqa: BLE001
         logger.exception("RUN FAILED %s | %.1fs | instruction='%s' account=%s",
                          run.id[:8], time.monotonic() - started, instruction.name,

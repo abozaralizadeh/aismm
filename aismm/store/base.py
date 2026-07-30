@@ -157,4 +157,15 @@ class Store(ABC):
         """
 
     @abstractmethod
+    def touch_lock(self, key: str) -> bool:
+        """Re-stamp a held lock so it does not go stale. False if it is gone.
+
+        This is what makes the TTL safe to keep SHORT. A run holds its lock for
+        as long as it is alive and renewing; if the process dies mid-run — a
+        gunicorn restart while a dashboard "Run now" thread is in flight — nobody
+        renews it, and the next run reclaims it in one TTL instead of being told
+        "already running" for half an hour by a run that no longer exists.
+        """
+
+    @abstractmethod
     def release_lock(self, key: str) -> None: ...

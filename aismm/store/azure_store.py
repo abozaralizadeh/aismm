@@ -510,5 +510,11 @@ class AzureStore(Store):
             except Exception:  # noqa: BLE001 - someone else won the race
                 return False
 
+    def touch_lock(self, key: str) -> bool:
+        if self._get(PK_LOCK, key) is None:
+            return False
+        self._upsert(PK_LOCK, key, {"acquired_at": _now().isoformat()})
+        return True
+
     def release_lock(self, key: str) -> None:
         self._delete(PK_LOCK, key)
