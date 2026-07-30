@@ -40,8 +40,8 @@ from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, Instruction, InstructionState, MediaPref, PlatformApp, PlatformName, PublishMode,
-    Run, RunStatus, StagedPost, StagedStatus,
+    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, MediaPref,
+    PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
 )
 from .base import Store
 
@@ -53,6 +53,7 @@ PK_RUN = "run"
 PK_STAGED = "staged"
 PK_STATE = "state"
 PK_APP = "app"
+PK_FILE = "file"
 PK_LOCK = "lock"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
@@ -208,7 +209,7 @@ class AzureStore(Store):
             "instruction_id": r.instruction_id, "account_id": r.account_id,
             "status": r.status.value, "caption": r.caption, "asset_path": r.asset_path,
             "external_url": r.external_url, "error": r.error, "log": r.log,
-            "created_at": r.created_at,
+            "prompt": r.prompt, "created_at": r.created_at,
         }
 
     @staticmethod
@@ -218,7 +219,8 @@ class AzureStore(Store):
             account_id=e.get("account_id", ""), status=RunStatus(e.get("status", "running")),
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
             external_url=e.get("external_url", ""), error=e.get("error", ""),
-            log=e.get("log", ""), created_at=_parse_dt(e.get("created_at")) or _now(),
+            log=e.get("log", ""), prompt=e.get("prompt", ""),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
         )
 
     @staticmethod
@@ -337,6 +339,41 @@ class AzureStore(Store):
     def delete_instruction(self, instruction_id):
         self._delete(PK_INSTRUCTION, instruction_id)
         self._delete(PK_STATE, instruction_id)      # don't orphan memory/notes
+        for attachment in self.list_instruction_files(instruction_id):
+            self._delete(PK_FILE, attachment.id)
+
+    # --- instruction attachments ------------------------------------------- #
+    def add_instruction_file(self, file):
+        self._upsert(PK_FILE, file.id, {
+            "instruction_id": file.instruction_id, "filename": file.filename,
+            "content_type": file.content_type, "purpose": file.purpose.value,
+            "asset_path": file.asset_path, "size_bytes": file.size_bytes,
+            "text": file.text, "note": file.note, "created_at": file.created_at,
+        })
+        return file
+
+    @staticmethod
+    def _file_from_entity(e) -> InstructionFile:
+        return InstructionFile(
+            id=e["RowKey"], instruction_id=e.get("instruction_id", ""),
+            filename=e.get("filename", ""), content_type=e.get("content_type", ""),
+            purpose=AttachmentPurpose(e.get("purpose", "context")),
+            asset_path=e.get("asset_path", ""), size_bytes=int(e.get("size_bytes", 0) or 0),
+            text=e.get("text", ""), note=e.get("note", ""),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def list_instruction_files(self, instruction_id):
+        files = [self._file_from_entity(e) for e in self._query(PK_FILE)
+                 if e.get("instruction_id") == instruction_id]
+        return sorted(files, key=lambda f: f.created_at)
+
+    def get_instruction_file(self, file_id):
+        entity = self._get(PK_FILE, file_id)
+        return self._file_from_entity(entity) if entity else None
+
+    def delete_instruction_file(self, file_id):
+        self._delete(PK_FILE, file_id)
 
     # --- instruction state (agent memory + human note) --------------------- #
     def get_state(self, instruction_id):

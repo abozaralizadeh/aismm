@@ -40,6 +40,8 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         "assets": [],
     }
     instruction_state = store.get_state(instruction.id)
+    attachments = store.list_instruction_files(instruction.id)
+    state["attachments"] = attachments
     agent = Agent(
         name="SocialManager",
         instructions=MANAGER_INSTRUCTIONS,
@@ -48,11 +50,17 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         model_settings=ModelSettings(temperature=0.8),
     )
     kickoff = build_kickoff(account=account, instruction=instruction,
-                            platform_caps=caps, state=instruction_state)
-    logger.info("Agent ready: %d tool(s) [%s], memory=%d chars, note=%s",
+                            platform_caps=caps, state=instruction_state,
+                            files=attachments)
+    # Keep the exact prompt on the Run: debugging a failure means seeing what the
+    # agent was told, not what the instruction says now.
+    run.prompt = kickoff
+    store.update_run(run)
+    logger.info("Agent ready: %d tool(s) [%s], memory=%d chars, note=%s, files=%d",
                 len(agent.tools), ", ".join(getattr(t, "name", "?") for t in agent.tools),
                 len(instruction_state.memory or ""),
-                "yes" if (instruction_state.note or "").strip() else "no")
+                "yes" if (instruction_state.note or "").strip() else "no",
+                len(attachments))
 
     try:
         result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)

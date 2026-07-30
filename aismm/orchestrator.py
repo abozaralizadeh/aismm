@@ -11,9 +11,13 @@ import asyncio
 import logging
 import time
 
+from . import cooldown
 from .agent import run_for_account
 from .assets import kind_from_path
-from .models import Account, Instruction, Run, RunStatus, StagedPost, StagedStatus
+from .models import (
+    Account, Instruction, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
+)
+from .platforms.instagram import RateLimited
 from .platforms.registry import get_platform
 from .store import get_store
 
@@ -54,6 +58,15 @@ def run_single(instruction: Instruction, account: Account) -> dict:
 
 
 def _run_one(instruction: Instruction, account: Account, store) -> dict:
+    # A rate-limited account cannot publish, so don't spend a run researching,
+    # downloading and generating media that would be refused at the last step.
+    if instruction.publish_mode is PublishMode.live and cooldown.is_active(account):
+        waiting = cooldown.describe(account)
+        logger.warning("Skipping %s / %s — publishing is rate-limited for another %s",
+                       instruction.name, account.handle or account.external_id, waiting)
+        return {"account_id": account.id, "status": "skipped",
+                "reason": "rate_limited", "retry_in": waiting}
+
     lock_key = f"instr:{instruction.id}:acct:{account.id}"
     if not store.acquire_lock(lock_key, ttl_seconds=_LOCK_TTL):
         logger.info("Locked (already running): %s / %s", instruction.name, account.handle)
@@ -106,6 +119,13 @@ def approve_staged(staged_id: str) -> dict:
         result = _run_async(platform.publish(
             access_token=access_token, account=account,
             caption=staged.caption, asset_path=staged.asset_path, media_kind=kind))
+    except RateLimited as exc:
+        held = cooldown.start(account, store, exc.retry_after_seconds,
+                              reason="approval publish was rate-limited")
+        logger.error("Approval publish rate-limited: %s", exc)
+        return {"error": "rate_limited",
+                "message": (f"{exc} — paused for {held // 60} minutes. The post is still "
+                            f"pending; approve it again after that.")}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Approval publish failed")
         return {"error": "publish_failed", "message": str(exc)}

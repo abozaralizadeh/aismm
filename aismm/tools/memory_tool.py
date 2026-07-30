@@ -120,3 +120,47 @@ def _make_update_memory(state: dict):
 
 register_tool("read_memory", _make_read_memory)
 register_tool("update_memory", _make_update_memory)
+
+
+# --- attachments ------------------------------------------------------------- #
+
+async def perform_read_attachment(state: dict, filename: str) -> dict:
+    """Full extracted text of one file attached to this instruction."""
+    files = state.get("attachments")
+    if files is None:
+        files = state["store"].list_instruction_files(state["instruction"].id)
+    wanted = (filename or "").strip().lower()
+    match = next((f for f in files if f.filename.lower() == wanted), None)
+    if match is None:
+        available = ", ".join(f.filename for f in files) or "none"
+        return {"error": "not_found",
+                "message": f"No attachment named {filename!r}. Attached: {available}."}
+    if not match.text:
+        return {"filename": match.filename, "purpose": match.purpose.value,
+                "content_type": match.content_type, "text": "",
+                "message": ("This file has no extracted text. If it is an image, use it as a "
+                            f"reference instead — asset_path: {match.asset_path}")}
+    return {"filename": match.filename, "purpose": match.purpose.value,
+            "content_type": match.content_type, "chars": len(match.text),
+            "text": match.text}
+
+
+def _make_read_attachment(state: dict):
+    @function_tool
+    async def read_attachment(filename: str) -> dict:
+        """Read a file the human attached to this instruction, in full.
+
+        The kickoff lists every attachment with a short excerpt; call this for the
+        whole text of one (a brand guide, a PDF of source material, a price list).
+        Reference *images* have no text — pass their asset_path to generate_image
+        or create_video_sequence instead.
+
+        Args:
+            filename: The name shown in the attachment list.
+        """
+        return await perform_read_attachment(state, filename)
+
+    return read_attachment
+
+
+register_tool("read_attachment", _make_read_attachment)

@@ -133,6 +133,20 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
 | [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
 
+## Attachments and the stored prompt
+
+`Run.prompt` holds the kickoff each run actually received. Debugging a failure means reading what the
+agent was told, not what the instruction says now — the run detail page shows it in a `<details>`
+block alongside the *current* brief/memory/note for comparison.
+
+`InstructionFile` ([models.py](aismm/models.py)) is a file attached to an instruction, with an
+`AttachmentPurpose`: **context** (text extracted ONCE at upload by
+[attachments.py](aismm/attachments.py) and stored on the row — never re-parsed per run; an excerpt
+goes in the kickoff, `read_attachment` serves the rest) or **reference** (an image whose `asset_path`
+the generators receive). Extraction is best-effort: a scan with no text layer still uploads and says
+why it is empty. Office formats are deliberately unsupported — "export to PDF" covers it without
+another dependency.
+
 ## Continuity (memory + note)
 
 `InstructionState` ([models.py](aismm/models.py)) is a **side table**, not columns on `Instruction`:
@@ -252,6 +266,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   standalone); a story is `media_type=STORIES` and takes no caption. `publish` validates placements
   against `Capabilities` (`supports_carousel`/`supports_stories`/`max_carousel_items`) before calling
   the platform.
+- **Volume refusals are not content errors** ([platforms/instagram.py](aismm/platforms/instagram.py)
+  `RateLimited`, codes 4/17/32 + subcode 2207051 "action is blocked"). Never retry one: Meta extends
+  blocks when an app keeps knocking. `perform_publish` starts a per-account
+  [cooldown](aismm/cooldown.py) (stored in `account.meta`, so no schema change and both backends
+  persist it) and `orchestrator._run_one` skips later **live** runs for that account before doing any
+  work — `dry_run` still proceeds since it calls no API.
+- **The agent must write memory AFTER publish returns**, not before. The prompt used to say
+  memory-then-publish, so a rate-limited run advanced its position past a panel it never posted and
+  the next run skipped it. Steps 8/9/10 are attempt → publish → outcome; keep that order.
 - **Instagram engagement tools** ([tools/instagram_tools.py](aismm/tools/instagram_tools.py)) return
   `None` from their factories unless the run targets an Instagram account, so other platforms aren't
   handed them. Reply/moderate act on the live account IMMEDIATELY — they are not behind

@@ -55,6 +55,28 @@ class ContainerError(RuntimeError):
     """Instagram accepted the request but its media processing failed."""
 
 
+class RateLimited(RuntimeError):
+    """Meta is refusing this action for volume reasons, not content reasons.
+
+    Code 4 is the app-level request limit; 17 the per-user limit; 32 the page
+    limit; subcode 2207051 is the same thing wearing integrity language ("action
+    is blocked — we restrict certain activity to protect our community").
+
+    This must NEVER be retried in the same run and, more importantly, must stop
+    the *next* scheduled run from trying again: repeated attempts against a
+    blocked account extend the block. Callers put the account in a cooldown.
+    """
+
+    def __init__(self, message: str, retry_after_seconds: int = 3600):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+# Volume/integrity refusals, as opposed to "this media is wrong".
+_RATE_LIMIT_CODES = {4, 17, 32}
+_BLOCKED_SUBCODES = {2207051}
+
+
 def _auth(access_token: str) -> dict:
     """Graph accepts the token as a bearer header — keep it out of the URL."""
     return {"Authorization": f"Bearer {access_token}"}
@@ -93,8 +115,15 @@ def _graph_error(exc: httpx.HTTPStatusError) -> tuple[str, dict]:
 
 
 def _raise_graph(exc: httpx.HTTPStatusError) -> None:
-    """Re-raise a Graph failure with the body included and no token in the text."""
-    message, _err = _graph_error(exc)
+    """Re-raise a Graph failure with the body included and no token in the text.
+
+    Volume refusals become :class:`RateLimited` so callers can back off instead of
+    treating them like a content problem and trying again.
+    """
+    message, err = _graph_error(exc)
+    code, subcode = err.get("code"), err.get("error_subcode")
+    if code in _RATE_LIMIT_CODES or subcode in _BLOCKED_SUBCODES:
+        raise RateLimited(message) from None
     raise RuntimeError(message) from None
 
 
@@ -206,6 +235,9 @@ class Instagram(SocialPlatform):
                 return r.json()["id"]
             exc = httpx.HTTPStatusError("publish failed", request=r.request, response=r)
             message, err = _graph_error(exc)
+            if err.get("code") in _RATE_LIMIT_CODES or \
+                    err.get("error_subcode") in _BLOCKED_SUBCODES:
+                raise RateLimited(message)          # never retry a volume refusal
             if err.get("code") in _NOT_READY_CODES and attempt < _PUBLISH_RETRIES - 1:
                 logger.info("Instagram media not publishable yet (attempt %d/%d): %s",
                             attempt + 1, _PUBLISH_RETRIES, message)

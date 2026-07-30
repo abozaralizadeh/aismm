@@ -35,6 +35,14 @@ def _make_get_context(state: dict):
                 "caption_limit": caps.caption_limit,
                 "notes": caps.notes,
             },
+            "attachments": [
+                {"filename": f.filename, "purpose": f.purpose.value,
+                 "content_type": f.content_type,
+                 "asset_path": f.asset_path if f.purpose.value == "reference" else "",
+                 "has_text": bool(f.text), "note": f.note}
+                for f in (state.get("attachments")
+                          or state["store"].list_instruction_files(instruction.id))
+            ],
             "assets_generated": [
                 {"kind": a["kind"], "asset_path": a["path"]} for a in state.get("assets", [])
             ],

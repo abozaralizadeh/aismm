@@ -119,4 +119,62 @@
     <a class="btn" href="{{ url_for('instructions') }}">Cancel</a>
   </div>
 </form>
+
+{% if instruction %}
+<h2>Attached files</h2>
+<p class="muted small">
+  Files every run of this instruction can use. A <strong>context</strong> file is read by the agent —
+  its text is extracted on upload (PDF, txt, md, csv, json) and an excerpt goes into the prompt, with
+  <code>read_attachment</code> for the rest. A <strong>reference</strong> image is handed to the image
+  or video generator to hold a look. Max 25MB per file.
+</p>
+
+{% if files %}
+<div class="table-scroll">
+<table>
+  <thead><tr><th>File</th><th>Purpose</th><th>Size</th><th>Extracted</th><th>Note</th><th></th></tr></thead>
+  <tbody>
+  {% for f in files %}
+    <tr>
+      <td class="small">
+        <a href="{{ url_for('asset', filename=f.asset_path.split('/')[-1]) }}" target="_blank">{{ f.filename }}</a>
+        <div class="muted">{{ f.content_type or "unknown type" }}</div>
+      </td>
+      <td><span class="badge">{{ f.purpose.value }}</span></td>
+      <td class="small nowrap">{{ "{:,}".format(f.size_bytes) }} B</td>
+      <td class="small">{% if f.text %}{{ "{:,}".format(f.text|length) }} chars{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="small">{{ f.note or "" }}</td>
+      <td>
+        <form method="post" action="{{ url_for('delete_instruction_file', file_id=f.id) }}"
+              onsubmit="return confirm('Remove {{ f.filename }}?')">
+          <button class="btn btn-danger small">Remove</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No files attached yet.</p>
+{% endif %}
+
+<form method="post" enctype="multipart/form-data" class="form card"
+      action="{{ url_for('upload_instruction_file', instruction_id=instruction.id) }}">
+  <label>Add a file
+    <input type="file" name="file" required>
+  </label>
+  <div class="grid-2">
+    <label>Purpose
+      <select name="purpose">
+        {% for p in purposes %}<option value="{{ p.value }}">{{ p.value }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Note <span class="muted small">— what it is for</span>
+      <input type="text" name="note" placeholder="e.g. brand voice guide; use this palette">
+    </label>
+  </div>
+  <button class="btn btn-primary">Upload</button>
+</form>
+{% endif %}
 {% endblock %}

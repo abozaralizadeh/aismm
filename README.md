@@ -750,6 +750,33 @@ The memory prompt reinforces it: record what was **published**, not what was cre
 media but failed to post it has covered nothing, and writing it down as done makes the next run skip
 work it never did.
 
+### Rate limits and "action is blocked"
+
+Meta refuses some posts for **volume** rather than content — `code=4 Application request limit
+reached`, or the same thing worded as *"action is blocked — we restrict certain activity to protect
+our community"* (`error_subcode=2207051`). Retrying soon makes it worse: Meta extends these blocks
+when an app keeps knocking.
+
+So a volume refusal is handled differently from a content error:
+
+- it is raised as a distinct `RateLimited`, never retried inside the run;
+- the **account is put in a cooldown**, and the orchestrator skips subsequent `live` runs for that
+  account *before* they start — no point browsing, downloading and converting media that will be
+  refused at the last step. `dry_run` still runs, since it touches no API;
+- the failure names the likely cause: if the instruction fires very often, the message says so.
+
+```
+Publishing cooldown for apadana.audiology.clinic (instagram): 60 minutes — instagram rate limit
+… — instagram is refusing posts for volume reasons, not because of this content. Publishing is
+paused for 60 minutes. This instruction runs 'every 1h' — that is far more often than a single
+account can publish. Lengthen the schedule.
+```
+
+> **A schedule of `every 1h` is 24 posts a day to one account.** That is the usual cause. Instagram's
+> published cap is 50 API posts per rolling 24 hours, but the *app* request limit and its
+> spam heuristics bite well before that. A few posts a day is a realistic ceiling; use
+> `instagram_publishing_limit` to see the remaining quota.
+
 ### When an Instagram publish fails
 
 Failures surface Graph's own error body — message, `code`, `error_subcode`, `error_user_msg` and
@@ -803,6 +830,20 @@ trigger. A schedule it cannot parse logs a warning and never fires, rather than 
 `6` is ambiguous (06:00? every 6 hours?) and is refused for that reason. Editing an instruction
 live-reschedules its jobs.
 
+### Files attached to an instruction
+
+An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):
+
+| Purpose | What happens |
+|---|---|
+| **context** | Text is extracted once on upload — PDF (text layer), `txt`, `md`, `csv`, `json`, `html`. An excerpt goes into the run's prompt, and `read_attachment("voice.pdf")` gives the agent the rest. |
+| **reference** | The image's `asset_path` is put in front of the agent to pass to `generate_image` (`reference_asset_paths`) or a video sequence, so a look can be held across posts. |
+
+A brand-voice PDF, a price list, a palette swatch, a product photo to match. Extraction is
+best-effort and never blocks the upload: a scanned PDF with no text layer stores fine and the flash
+message tells you it had none ("it may be a scan — OCR is not done here"). Deleting an instruction
+deletes its attachments.
+
 ### The Runs page
 
 Built to stay usable as the table grows — filtering, sorting and paging all happen in the **store**,
@@ -815,7 +856,11 @@ so the page loads one page of rows however many runs exist.
   Sort links keep the active filters.
 - **Page** at 25 / 50 / 100 / 200 per page.
 
-Every row links to a **run detail page** with the full log and error, the caption, the media it
+Every row links to a **run detail page**. Under *"What the agent was told"* it has expandable
+sections for the **exact kickoff prompt that run received** — brief + memory + note + attachments +
+platform rules, stored on the run itself, so a failure can be debugged from what the agent was told
+rather than from what the instruction says now — plus the current brief, memory, note, attachment list
+and system prompt for comparison. Below that: the full log and error, the caption, the media it
 produced, the staged posts it created, its instruction (with publish mode) and account, one-click
 links to "all runs for this instruction / account / status", and the `journalctl` incantation for the
 full service log:

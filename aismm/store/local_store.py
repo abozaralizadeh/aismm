@@ -18,8 +18,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, Instruction, InstructionState, Lock, PlatformApp, Run, StagedPost,
-    StagedStatus,
+    Account, Instruction, InstructionFile, InstructionState, Lock, PlatformApp, Run,
+    StagedPost, StagedStatus,
 )
 from .base import Store
 
@@ -177,7 +177,35 @@ class LocalStore(Store):
             state = s.get(InstructionState, instruction_id)
             if state:
                 s.delete(state)          # don't orphan memory/notes
+            for attachment in s.exec(select(InstructionFile).where(
+                    InstructionFile.instruction_id == instruction_id)).all():
+                s.delete(attachment)
             s.commit()
+
+    # --- instruction attachments ------------------------------------------- #
+    def add_instruction_file(self, file):
+        with Session(self._engine) as s:
+            merged = s.merge(file)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def list_instruction_files(self, instruction_id):
+        with Session(self._engine) as s:
+            stmt = select(InstructionFile).where(
+                InstructionFile.instruction_id == instruction_id)
+            return list(s.exec(stmt.order_by(InstructionFile.created_at)).all())
+
+    def get_instruction_file(self, file_id):
+        with Session(self._engine) as s:
+            return s.get(InstructionFile, file_id)
+
+    def delete_instruction_file(self, file_id):
+        with Session(self._engine) as s:
+            obj = s.get(InstructionFile, file_id)
+            if obj:
+                s.delete(obj)
+                s.commit()
 
     # --- instruction state (agent memory + human note) --------------------- #
     def get_state(self, instruction_id):

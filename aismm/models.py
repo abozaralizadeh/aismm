@@ -141,6 +141,10 @@ class Run(SQLModel, table=True):
     external_url: str = ""                    # published permalink, when live
     error: str = ""
     log: str = ""                            # short human-readable trace of the run
+    # The kickoff prompt this run actually received — brief + memory + note +
+    # platform rules, as composed at the time. Kept so a failed run can be
+    # debugged from what the agent was told, not from what the instruction says now.
+    prompt: str = ""
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -208,6 +212,48 @@ class PlatformApp(SQLModel, table=True):
     @property
     def label(self) -> str:
         return self.name or f"{self.platform.value} app {self.id[:8]}"
+
+
+class AttachmentPurpose(str, enum.Enum):
+    """What an uploaded file is FOR, which decides how it reaches the model."""
+
+    context = "context"      # text is extracted and given to the agent to read
+    reference = "reference"   # an image handed to the image/video generator
+
+
+class InstructionFile(SQLModel, table=True):
+    """A file attached to an instruction, available to every run of it.
+
+    Two uses, chosen per file:
+
+    * ``context`` — a brief, a style guide, a price list, a PDF of source
+      material. Its text is extracted once on upload and put in front of the
+      agent (an excerpt in the kickoff, the whole thing via ``read_attachment``).
+    * ``reference`` — an image the generators should follow: passed to
+      ``generate_image`` as a reference, or to a video sequence to hold the look.
+
+    The bytes live in the assets dir (and blob storage when configured) like any
+    other media; this row is the metadata plus the extracted text.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    instruction_id: str = Field(index=True)
+    filename: str = ""                       # as uploaded, for the agent to refer to
+    content_type: str = ""
+    purpose: AttachmentPurpose = AttachmentPurpose.context
+    asset_path: str = ""                     # where the bytes are
+    size_bytes: int = 0
+    text: str = ""                           # extracted on upload; "" for images
+    note: str = ""                           # what the human says this file is for
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def is_image(self) -> bool:
+        return self.content_type.startswith("image/")
+
+    @property
+    def label(self) -> str:
+        return self.filename or self.id[:8]
 
 
 class InstructionState(SQLModel, table=True):

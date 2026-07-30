@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import Account, Instruction, InstructionState, PlatformApp, Run, StagedPost
+from ..models import (
+    Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, StagedPost,
+)
 
 
 class Store(ABC):
@@ -71,6 +73,19 @@ class Store(ABC):
 
     @abstractmethod
     def delete_instruction(self, instruction_id: str) -> None: ...
+
+    # --- instruction attachments ------------------------------------------- #
+    @abstractmethod
+    def add_instruction_file(self, file: InstructionFile) -> InstructionFile: ...
+
+    @abstractmethod
+    def list_instruction_files(self, instruction_id: str) -> list[InstructionFile]: ...
+
+    @abstractmethod
+    def get_instruction_file(self, file_id: str) -> InstructionFile | None: ...
+
+    @abstractmethod
+    def delete_instruction_file(self, file_id: str) -> None: ...
 
     # --- instruction state (agent memory + human note) --------------------- #
     @abstractmethod

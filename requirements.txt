@@ -10,6 +10,10 @@ Pillow>=10.0.0
 # --- Scheduling ---
 apscheduler>=3.10.0
 
+# --- Instruction attachments ---
+# Extracts text from an uploaded PDF so the textual model can read it.
+pypdf>=4.0.0
+
 # --- Video merging (plan_video / create_video_sequence tools) ---
 # Bundles a static ffmpeg binary, so merging Sora clips needs no system package
 # (GenBox does the same). Used by aismm/video.py.

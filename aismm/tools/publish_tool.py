@@ -17,11 +17,12 @@ import re
 
 from agents import function_tool
 
-from .. import disclosure, media
+from .. import cooldown, disclosure, media
 from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
 from ..models import PublishMode, RunStatus, StagedPost, StagedStatus
+from ..platforms.instagram import RateLimited
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.publish")
@@ -89,6 +90,17 @@ def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
     logger.info("Converted image for %s: %s -> %s (%d bytes)",
                 platform_name, asset_path, new_path, len(converted))
     return new_path
+
+
+def _schedule_advice(instruction) -> str:
+    """Name the likely cause when an instruction fires often enough to trip limits."""
+    schedule = (getattr(instruction, "schedule", "") or "").lower()
+    for marker in ("every 1h", "every 1 h", "every 30m", "every 15m", "every 5m",
+                   "every 10m", "every 20m", "every 2h"):
+        if marker in schedule:
+            return (f" This instruction runs '{instruction.schedule}' — that is far more often "
+                    f"than a single account can publish. Lengthen the schedule.")
+    return ""
 
 
 async def perform_publish(state: dict, caption: str, asset_path: str = "",
@@ -234,6 +246,22 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
             caption=caption, asset_path=asset_path, media_kind=kind,
             instruction=instruction, asset_paths=paths, placement=placement,
         )
+    except RateLimited as exc:
+        # A volume refusal, not a content problem. Stop this account from trying
+        # again on the next scheduled run — repeated attempts extend the block.
+        held = cooldown.start(account, store, exc.retry_after_seconds,
+                              reason=f"{account.platform.value} rate limit")
+        advice = _schedule_advice(instruction)
+        message = (f"{exc} — {account.platform.value} is refusing posts for volume reasons, "
+                   f"not because of this content. Publishing is paused for "
+                   f"{held // 60} minutes.{advice}")
+        logger.error("Publish rate-limited: %s", message)
+        run.status = RunStatus.failed
+        run.error = message
+        store.update_run(run)
+        state["result"] = {"mode": "live", "error": message, "rate_limited": True}
+        return {"error": "rate_limited", "message": message,
+                "retry_after_minutes": held // 60}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Live publish failed")
         run.status = RunStatus.failed

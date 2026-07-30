@@ -39,6 +39,9 @@ YOUR TOOLS
 - publish          : finish the post. Call this EXACTLY ONCE, at the very end.
                      Pass asset_paths=[...] for a multi-item post (a carousel) and
                      placement="story" for a story instead of a feed post.
+- read_attachment  : the full text of a file the human attached to this
+                     instruction (a brief, a PDF, a price list). The kickoff shows
+                     an excerpt of each; this gives you the rest.
 - report_failure   : finish WITHOUT posting, because the instruction could not be
                      carried out. The other way a run can legitimately end.
 
@@ -68,10 +71,11 @@ run 1 handles 1 March, run 2 continues from where run 1 stopped, and so on. So:
     something the memory lists as already covered;
   * before publishing, update_memory with the new position, the next step, and
     anything durable you learned (URL patterns, pagination, what worked);
-  * record only what actually HAPPENED. "Created a 2-item carousel" is not
-    progress — "published carousel for 2026-05-13" is. A run that made media but
-    failed to post it has covered nothing, and writing it down as done makes the
-    next run skip work it never did;
+  * record only what actually HAPPENED, and record it AFTER publish returns.
+    "Created a 2-item carousel" is not progress — "published carousel for
+    2026-05-13" is. A run that made media but failed to post it has covered
+    nothing, and writing it down as done makes the next run skip work it never
+    did. If publish is refused for rate limits, the item is still OUTSTANDING;
   * MEDIA DOES NOT CARRY OVER. Files you generated in a previous run are not
     available to this one, and no asset_path you remember can be published. Every
     run that posts media must create that media itself.
@@ -102,14 +106,22 @@ HOW TO WORK
    Respect the media preference in the brief unless the platform forbids it.
 6. If you generate media, describe the visual only in the media prompt — never bake
    in captions, subtitles, logos, or watermarks; those belong in the post caption.
+   If the instruction has REFERENCE attachments, pass their asset_path to
+   generate_image (reference_asset_paths) or as the style seed of a video sequence
+   — that is what the human uploaded them for.
 7. Write a caption/title that fits the persona and stays within the caption limit.
    For YouTube, the FIRST LINE is the video title (<=100 chars); the rest is the
    description. Use hashtags where idiomatic for the platform.
-8. Call update_memory with the new position and next step.
+8. Record the ATTEMPT in memory before you post ("attempting Panel 4 of
+   2026-05-17"), so a crash can't lose your place.
 9. Call publish once with the final caption and the asset_path from a media tool
    (or no asset for a text-only X post). The publish mode (dry-run / approval /
    live) is decided by the human and enforced for you — just call publish.
    If you could not do the job at all, call report_failure instead (see below).
+10. Read what publish RETURNED, then update_memory with the real outcome. If it
+   published, advance the position. If it failed — rate limits included — leave
+   the position where it was and note the failure, so the next run retries this
+   item instead of skipping it. Never advance past something you did not post.
 
 WHEN YOU CANNOT DO THE JOB
 Publishing is NOT mandatory. Finish with report_failure — not publish — whenever:
@@ -148,7 +160,7 @@ RULES
 """
 
 
-def build_kickoff(*, account, instruction, platform_caps, state=None) -> str:
+def build_kickoff(*, account, instruction, platform_caps, state=None, files=None) -> str:
     """Compose the first user turn from the instruction + account context.
 
     ``state`` is the instruction's :class:`~aismm.models.InstructionState`. Its
@@ -158,6 +170,17 @@ def build_kickoff(*, account, instruction, platform_caps, state=None) -> str:
     """
     memory = (getattr(state, "memory", "") or "").strip()
     note = (getattr(state, "note", "") or "").strip()
+
+    from ..attachments import describe as describe_files
+
+    attached = describe_files(list(files or []))
+    attachments = (
+        f"FILES ATTACHED TO THIS INSTRUCTION (uploaded by the human — treat them as part "
+        f"of the brief). 'context' files are material to read; 'reference' images are for "
+        f"the generators, pass their asset_path to generate_image or a video sequence. Use "
+        f"read_attachment(filename) for the full text of a context file:\n{attached}\n\n"
+        if attached else ""
+    )
 
     if memory:
         continuity = (
@@ -178,6 +201,7 @@ def build_kickoff(*, account, instruction, platform_caps, state=None) -> str:
 
     return (
         f"BRIEF:\n{instruction.brief}\n\n"
+        f"{attachments}"
         f"{continuity}"
         f"{operator}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "

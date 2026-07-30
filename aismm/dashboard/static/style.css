@@ -256,3 +256,17 @@ th .sort-active { color: var(--accent); }
   .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
   .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
+
+/* --- expandable prompt sections on the run detail --- */
+.prompt-block { margin-bottom: .6rem; }
+.prompt-block > summary {
+  cursor: pointer; padding: .5rem .7rem; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; font-weight: 600;
+}
+.prompt-block > summary:hover { border-color: var(--accent); }
+.prompt-block[open] > summary { border-radius: 8px 8px 0 0; }
+.prompt-block > .logbox { border-radius: 0 0 8px 8px; border-top: 0; margin-top: 0; }
+.form input[type=file] {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: .5rem; font: inherit; font-weight: 400;
+}

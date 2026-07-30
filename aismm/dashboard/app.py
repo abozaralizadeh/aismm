@@ -16,11 +16,16 @@ from flask import (
     Flask, abort, flash, redirect, render_template, request, send_from_directory, session, url_for,
 )
 from markupsafe import Markup, escape
+from werkzeug.utils import secure_filename
 
 from ..config import settings
 from ..assets import public_url
+from .. import attachments
+from ..agent.prompts import MANAGER_INSTRUCTIONS
+from ..assets import save_bytes
 from ..models import (
-    Account, Instruction, MediaPref, PlatformApp, PlatformName, PublishMode, RunStatus,
+    Account, AttachmentPurpose, Instruction, InstructionFile, MediaPref, PlatformApp,
+    PlatformName, PublishMode, RunStatus,
 )
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
@@ -248,6 +253,7 @@ def create_app() -> Flask:
     @app.route("/instructions/new")
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
+                               files=[], purposes=list(AttachmentPurpose),
                                accounts=get_store().list_accounts(), settings=settings,
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
@@ -259,6 +265,8 @@ def create_app() -> Flask:
             abort(404)
         return render_template("instruction_form.html", instruction=instr,
                                state=store.get_state(instruction_id),
+                               files=store.list_instruction_files(instruction_id),
+                               purposes=list(AttachmentPurpose),
                                accounts=store.list_accounts(), settings=settings,
                                schedule_readback=describe_schedule(instr.schedule),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
@@ -302,6 +310,53 @@ def create_app() -> Flask:
                          daemon=True).start()
         flash("Run started — check Runs in a moment.", "success")
         return redirect(url_for("runs"))
+
+    # ---- instruction attachments ----------------------------------------- #
+    MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+    @app.route("/instructions/<instruction_id>/files", methods=["POST"])
+    def upload_instruction_file(instruction_id):
+        store = get_store()
+        if not store.get_instruction(instruction_id):
+            abort(404)
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            flash("Choose a file to upload.", "error")
+            return redirect(url_for("edit_instruction", instruction_id=instruction_id))
+
+        data = upload.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            flash(f"{upload.filename} is {len(data) // 1024 // 1024}MB; the limit is "
+                  f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.", "error")
+            return redirect(url_for("edit_instruction", instruction_id=instruction_id))
+
+        filename = secure_filename(upload.filename) or "upload"
+        suffix = filename.rsplit(".", 1)[-1] if "." in filename else "bin"
+        content_type = upload.mimetype or ""
+        try:
+            purpose = AttachmentPurpose(request.form.get("purpose", "context"))
+        except ValueError:
+            purpose = AttachmentPurpose.context
+
+        text, note = attachments.extract_text(data, content_type, filename)
+        record = InstructionFile(
+            instruction_id=instruction_id, filename=filename, content_type=content_type,
+            purpose=purpose, asset_path=save_bytes(data, suffix), size_bytes=len(data),
+            text=text, note=request.form.get("note", "").strip() or note)
+        store.add_instruction_file(record)
+        flash(f"Attached {filename}" + (f" — {len(text):,} characters of text extracted"
+                                        if text else f" ({note})" if note else ""), "success")
+        return redirect(url_for("edit_instruction", instruction_id=instruction_id))
+
+    @app.route("/files/<file_id>/delete", methods=["POST"])
+    def delete_instruction_file(file_id):
+        store = get_store()
+        record = store.get_instruction_file(file_id)
+        store.delete_instruction_file(file_id)
+        flash("Attachment removed.", "success")
+        return redirect(url_for("edit_instruction",
+                                instruction_id=record.instruction_id) if record
+                        else url_for("instructions"))
 
     # ---- runs / approvals ------------------------------------------------ #
     RUN_SORTS = {"created_at": "When", "status": "Status",
@@ -380,10 +435,15 @@ def create_app() -> Flask:
         if not run:
             abort(404)
         staged = [s for s in store.list_staged(limit=500) if s.run_id == run.id]
+        instruction = store.get_instruction(run.instruction_id)
         return render_template(
             "run_detail.html",
             run=run,
-            instruction=store.get_instruction(run.instruction_id),
+            system_prompt=MANAGER_INSTRUCTIONS,
+            instruction_state=store.get_state(run.instruction_id) if instruction else None,
+            attachments=(store.list_instruction_files(run.instruction_id)
+                         if instruction else []),
+            instruction=instruction,
             account=store.get_account(run.account_id),
             staged=staged,
             asset_url=public_url(run.asset_path) if run.asset_path else "",

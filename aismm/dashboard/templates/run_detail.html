@@ -15,6 +15,50 @@
       <pre class="logbox logbox-error">{{ run.error }}</pre>
     {% endif %}
 
+    <h2>What the agent was told</h2>
+    {% if run.prompt %}
+      <details class="prompt-block">
+        <summary>Kickoff prompt for this run <span class="muted small">({{ run.prompt|length }} chars — brief + memory + note + platform rules, exactly as sent)</span></summary>
+        <pre class="logbox">{{ run.prompt }}</pre>
+      </details>
+    {% else %}
+      <p class="muted small">This run predates prompt capture, so it wasn't recorded. Newer runs show it here.</p>
+    {% endif %}
+
+    {% if instruction %}
+      <details class="prompt-block">
+        <summary>Instruction brief <span class="muted small">(as it is NOW — may have changed since)</span></summary>
+        <pre class="logbox">{{ instruction.brief or "(empty)" }}</pre>
+      </details>
+    {% endif %}
+    {% if instruction_state %}
+      <details class="prompt-block">
+        <summary>Carry-over memory <span class="muted small">(current — {{ (instruction_state.memory or '')|length }} chars)</span></summary>
+        <pre class="logbox">{{ instruction_state.memory or "(empty)" }}</pre>
+      </details>
+      {% if instruction_state.note %}
+        <details class="prompt-block">
+          <summary>Operator note <span class="muted small">(current)</span></summary>
+          <pre class="logbox">{{ instruction_state.note }}</pre>
+        </details>
+      {% endif %}
+    {% endif %}
+    {% if attachments %}
+      <details class="prompt-block">
+        <summary>Attached files <span class="muted small">({{ attachments|length }})</span></summary>
+        <ul class="small">
+          {% for f in attachments %}
+            <li><code>{{ f.filename }}</code> — {{ f.purpose.value }}, {{ f.content_type or "unknown type" }},
+              {{ "{:,}".format(f.size_bytes) }} bytes{% if f.text %}, {{ "{:,}".format(f.text|length) }} chars of text{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+    <details class="prompt-block">
+      <summary>System prompt <span class="muted small">(current build — not stored per run)</span></summary>
+      <pre class="logbox">{{ system_prompt }}</pre>
+    </details>
+
     <h2>Log</h2>
     {% if run.log %}
       <pre class="logbox">{{ run.log }}</pre>
