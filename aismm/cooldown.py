@@ -77,28 +77,41 @@ def strike_count(account) -> int:
         return 0
 
 
-def start(account, store, seconds: int, *, reason: str = "") -> int:
+def start(account, store, seconds: int, *, reason: str = "", escalate: bool = True) -> int:
     """Block publishing for this account. Returns the seconds actually set.
 
     ``seconds`` is the BASE cooldown for a first offense; each call doubles it
     from there (capped at ``MAX_COOLDOWN_SECONDS``), because a refusal that keeps
     recurring at the base duration means the schedule is knocking on a block that
     hasn't actually lifted. Also extends rather than shortens an already-longer
-    cooldown, so a shorter reconciled-publish cooldown can't cut a longer one short.
+    cooldown, so a shorter cooldown can't cut a longer one short.
+
+    ``escalate=False`` sets the base duration WITHOUT counting a strike. That is
+    for the case where the post actually went out — Instagram answered
+    ``media_publish`` with a rate-limit error but published anyway. Backing off
+    briefly is still polite, but this is not a failure: counting it escalated a
+    perfectly healthy account 60 -> 120 -> 240 minutes across four consecutive
+    *successful* posts, throttling it toward silence. A strike measures failing
+    to publish, never publishing with a noisy error.
     """
-    strikes = strike_count(account) + 1
-    escalated = min(int(seconds) * (2 ** (strikes - 1)), MAX_COOLDOWN_SECONDS)
-    current = remaining_seconds(account)
-    held = max(escalated, current)
+    strikes = strike_count(account)
+    if escalate:
+        strikes += 1
+        target = min(int(seconds) * (2 ** (strikes - 1)), MAX_COOLDOWN_SECONDS)
+    else:
+        target = min(int(seconds), MAX_COOLDOWN_SECONDS)
+    held = max(target, remaining_seconds(account))
 
     meta = dict(account.meta or {})
     meta[META_KEY] = (_now() + timedelta(seconds=held)).isoformat()
-    meta[STRIKES_KEY] = strikes
+    if escalate:
+        meta[STRIKES_KEY] = strikes
     account.set_meta(meta)
     store.upsert_account(account)
-    logger.warning("Publishing cooldown for %s (%s): %d minutes (strike %d)%s",
+    logger.warning("Publishing cooldown for %s (%s): %d minutes (%s)%s",
                    account.handle or account.external_id, account.platform.value,
-                   held // 60, strikes, f" — {reason}" if reason else "")
+                   held // 60, f"strike {strikes}" if escalate else "no strike — post landed",
+                   f" — {reason}" if reason else "")
     return held
 
 

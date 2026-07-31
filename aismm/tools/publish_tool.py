@@ -388,7 +388,9 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     if reconciled:
         logger.warning("Publish reconciled for %s: Instagram errored (%s) but the post is live "
                        "at %s", account.handle or account.external_id, publish_error, result.url)
-        cooldown.start(account, store, RECONCILED_COOLDOWN_SECONDS,
+        # No strike: the post LANDED. Counting these escalated an account that was
+        # publishing fine from 60 to 240 minutes over four consecutive successes.
+        cooldown.start(account, store, RECONCILED_COOLDOWN_SECONDS, escalate=False,
                        reason="published, but Instagram reported a rate limit")
     else:
         # A genuinely clean publish — no rate-limit signal at all — is what tells

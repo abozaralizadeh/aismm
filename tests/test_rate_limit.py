@@ -379,8 +379,14 @@ def test_a_clean_publish_resets_the_strike_streak(store, monkeypatch, tmp_path):
     assert cooldown.strike_count(store.get_account(reloaded.id)) == 0
 
 
-def test_a_reconciled_publish_does_not_reset_the_streak(store, monkeypatch, tmp_path):
-    """The post got through, but Meta still signalled a limit — that is not a recovery."""
+def test_a_reconciled_publish_parks_the_streak_where_it_is(store, monkeypatch, tmp_path):
+    """It neither resets nor advances.
+
+    The post got through, so Meta is not refusing — counting it as a strike drove
+    a healthy account from 60 to 240 minutes over four successful posts. But the
+    error was real, so it is not evidence the block lifted either: the streak
+    stays parked for the next genuine refusal to resume from.
+    """
     from aismm.platforms import registry
     from aismm.platforms.base import PublishResult
 
@@ -408,4 +414,123 @@ def test_a_reconciled_publish_does_not_reset_the_streak(store, monkeypatch, tmp_
              "assets": []}
     asyncio.run(perform_publish(state, "x", asset_path=str(asset), media_kind="image"))
 
-    assert cooldown.strike_count(store.get_account(account.id)) == 3
+    assert cooldown.strike_count(store.get_account(account.id)) == 2
+
+
+# --- a post that LANDED is not a strike ---------------------------------------------- #
+# Reported from the live account: four consecutive posts all published fine (each
+# reconciled — Instagram returned 403 after the container was FINISHED, then
+# published anyway), yet the cooldown climbed 60 -> 120 -> 240 minutes and was
+# heading for 24h. A strike must measure failing to publish, never publishing
+# with a noisy error.
+
+def _reconciled_publish(store, monkeypatch, tmp_path, account=None, index=0):
+    from aismm.platforms import registry
+    from aismm.platforms.base import PublishResult
+
+    account = account or store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                external_id=IG_USER), access_token="t")
+    instruction = store.upsert_instruction(
+        Instruction(name="Comicbook", publish_mode=PublishMode.live))
+    platform = registry.get_platform(PlatformName.instagram)
+
+    async def landed(**kwargs):
+        return PublishResult(url="https://i/p/OK", external_id="999",
+                             raw={"reconciled": True,
+                                  "publish_error": "Instagram Graph 403: request limit"})
+
+    monkeypatch.setattr(platform, "publish", landed)
+    monkeypatch.setattr(registry, "get_platform", lambda *a, **kw: platform)
+    monkeypatch.setattr("aismm.tools.publish_tool.media.normalize_image",
+                        lambda data, **kw: data)
+
+    # Whatever cooldown the previous post set has expired by the time this fires.
+    current = store.get_account(account.id)
+    current.set_meta({k: v for k, v in (current.meta or {}).items()
+                      if k != cooldown.META_KEY})
+    store.upsert_account(current)
+
+    asset = tmp_path / f"panel{index}.jpg"
+    asset.write_bytes(b"\xff\xd8\xff" + bytes([index]) * 400)
+    run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
+    state = {"account": store.get_account(account.id), "instruction": instruction,
+             "store": store, "run": run, "assets": []}
+    result = asyncio.run(perform_publish(state, f"panel {index}",
+                                         asset_path=str(asset), media_kind="image"))
+    return result, account
+
+
+def test_a_reconciled_publish_does_not_count_a_strike(store, monkeypatch, tmp_path):
+    result, account = _reconciled_publish(store, monkeypatch, tmp_path)
+    assert result["status"] == "published"
+    assert cooldown.strike_count(store.get_account(account.id)) == 0
+
+
+def test_repeated_successful_posts_never_escalate(store, monkeypatch, tmp_path):
+    """The exact live sequence: four landed posts stayed at 60 minutes each."""
+    account = None
+    held = []
+    for index in range(4):
+        _result, account = _reconciled_publish(store, monkeypatch, tmp_path,
+                                               account=account, index=index)
+        held.append(cooldown.remaining_seconds(store.get_account(account.id)))
+
+    assert cooldown.strike_count(store.get_account(account.id)) == 0
+    assert all(3500 <= seconds <= 3600 for seconds in held), held
+    assert max(held) - min(held) < 120, "the cooldown grew across successful posts"
+
+
+def test_a_landed_post_still_pauses_briefly(store, monkeypatch, tmp_path):
+    """Meta did signal a limit, so backing off once is still right."""
+    _result, account = _reconciled_publish(store, monkeypatch, tmp_path)
+    assert cooldown.is_active(store.get_account(account.id))
+
+
+def test_real_refusals_still_escalate(store, monkeypatch, tmp_path):
+    """The escalation must survive — it is what stops an hourly schedule knocking."""
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="clinic", external_id=IG_USER),
+        access_token="t")
+    held = []
+    for _ in range(3):
+        current = store.get_account(account.id)
+        current.set_meta({k: v for k, v in (current.meta or {}).items()
+                          if k != cooldown.META_KEY})
+        store.upsert_account(current)
+        held.append(cooldown.start(store.get_account(account.id), store, 3600))
+    assert held == [3600, 7200, 14400]
+
+
+def test_a_landed_post_neither_resets_nor_advances_an_existing_streak(store, monkeypatch,
+                                                                     tmp_path):
+    """It is not evidence the block lifted, and not evidence it got worse."""
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                external_id=IG_USER), access_token="t")
+    cooldown.start(account, store, 3600)
+    cooldown.start(store.get_account(account.id), store, 3600)     # strike 2
+
+    _result, account = _reconciled_publish(store, monkeypatch, tmp_path, account=account)
+    assert cooldown.strike_count(store.get_account(account.id)) == 2
+
+    current = store.get_account(account.id)
+    current.set_meta({k: v for k, v in (current.meta or {}).items()
+                      if k != cooldown.META_KEY})
+    store.upsert_account(current)
+    assert cooldown.start(store.get_account(account.id), store, 3600) == 4 * 3600
+
+
+def test_a_non_escalating_cooldown_cannot_shorten_a_longer_one(store):
+    """A 60-minute landed-post pause must not cut a 4h escalated block short."""
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, external_id=IG_USER), access_token="t")
+    for _ in range(3):
+        current = store.get_account(account.id)
+        current.set_meta({k: v for k, v in (current.meta or {}).items()
+                          if k != cooldown.META_KEY})
+        store.upsert_account(current)
+        cooldown.start(store.get_account(account.id), store, 3600)   # -> 4h
+
+    held = cooldown.start(store.get_account(account.id), store, 3600, escalate=False)
+    assert held > 3 * 3600, "the 60-minute pause cut the escalated block short"

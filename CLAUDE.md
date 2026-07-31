@@ -305,7 +305,13 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   right as the cooldown clears and knocks again, which — per the point above — extends the real
   block. Each `RateLimited` bumps a strike counter (`STRIKES_KEY`, next to the deadline in
   `account.meta`); a clean, non-reconciled publish resets it via `cooldown.clear`, so one bad hour
-  doesn't escalate every isolated refusal for the rest of the account's life. The dashboard's
+  doesn't escalate every isolated refusal for the rest of the account's life. **A strike counts
+  failing to publish, never publishing with a noisy error** — a *reconciled* publish (the post
+  landed despite the 403) calls `start(..., escalate=False)`: base cooldown, no strike. Counting
+  those drove a perfectly healthy account 60 → 120 → 240 minutes across four consecutive
+  *successful* posts, throttling it toward silence. A landed post neither resets nor advances the
+  streak: it isn't a failure, but the error was real, so the next genuine refusal resumes from where
+  the streak was. The dashboard's
   **Clear cooldown** button calls `cooldown.clear(..., reset_strikes=False)` — a human override is
   not evidence the platform stopped blocking, and resetting the streak there would let a
   clear-then-refused loop restart at the base duration forever. A **reconciled**

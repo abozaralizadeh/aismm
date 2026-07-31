@@ -870,7 +870,13 @@ So a volume refusal is handled differently from a content error:
   60-minute cooldown against an `every 1h` schedule barely helps if the real block outlasts an hour:
   the very next scheduled fire lands right as the cooldown clears and knocks again, which extends the
   block further. A clean publish that goes through with no rate-limit signal at all resets the streak,
-  so a single bad hour doesn't permanently escalate every future isolated refusal.
+  so a single bad hour doesn't permanently escalate every future isolated refusal;
+- **but only a failed publish counts as a strike.** When Instagram returns a rate-limit error *and
+  publishes the post anyway* (the reconciled case above), that is a success with a noisy error, not a
+  refusal: it sets the base 1h pause and does **not** escalate. Counting those meant four consecutive
+  successful posts climbed 60 → 120 → 240 minutes, throttling a perfectly healthy account toward
+  silence. Such a post leaves the streak parked — not reset, since the error was real, so a later
+  genuine refusal resumes from where it was.
 
 ```
 Publishing cooldown for apadana.audiology.clinic (instagram): 60 minutes (strike 1) — instagram rate limit
@@ -882,6 +888,14 @@ Publishing cooldown for apadana.audiology.clinic (instagram): 120 minutes (strik
 … Publishing is paused for 120 minutes. This is strike 2 — the cooldown doubles each time this
 recurs, capped at 24h. This instruction runs 'every 1h' — that is far more often than a single
 account can publish. Lengthen the schedule.
+```
+
+A post that landed despite the error looks different — note **no strike**, so it stays at the base
+duration however many times it happens:
+
+```
+Publish reconciled for genaicomicbook: Instagram errored (…403…) but the post is live at …
+Publishing cooldown for genaicomicbook (instagram): 60 minutes (no strike — post landed)
 ```
 
 > **A schedule of `every 1h` is 24 posts a day to one account.** That is the usual cause. Instagram's
