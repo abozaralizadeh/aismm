@@ -402,6 +402,11 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   `profile_views`, non-Reels `video_views`), so `DEFAULT_*_METRICS` stays minimal and overridable.
   Comments/insights need the `instagram_manage_comments` / `instagram_manage_insights` scopes — an
   account connected before those were added must be reconnected.
+- **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so an optional
+  analytics permission blocks publishing too. `Instagram.scopes` is a property splitting
+  `REQUIRED_SCOPES` (what publishing needs) from `OPTIONAL_SCOPES`; `instagram_manage_insights`
+  needs App Review and is **not** in `DEFAULT_SCOPES`. `INSTAGRAM_SCOPES` overrides the list
+  outright once an app is approved. Never add a review-gated scope to the default set.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

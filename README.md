@@ -769,10 +769,28 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 `website_clicks` and non-Reels `video_views` in v21, so asking for them fails the whole call. Pass
 `metrics=` to override, and a rejected name is reported back so the agent can pick another.
 
-> **New scopes.** Comments and insights need `instagram_manage_comments` and
-> `instagram_manage_insights` on top of the publishing scopes. They're in the requested set now, but
-> an **already-connected account has to be reconnected** to grant them — until then those tools will
-> return a permissions error. Reconnect from **Accounts → Connect**.
+> **Scopes, and why one bad one breaks everything.** Meta rejects the *entire* login dialog if your
+> app cannot request even a single scope you ask for — `Invalid Scopes: instagram_manage_insights` —
+> so an optional analytics permission takes publishing down with it. AISMM therefore asks only for
+> what publishing needs plus comments:
+>
+> ```
+> instagram_basic  instagram_content_publish  pages_show_list
+> pages_read_engagement  business_management  instagram_manage_comments
+> ```
+>
+> `instagram_manage_insights` needs App Review and is **not requested by default**. Once it's
+> approved, add it via `INSTAGRAM_SCOPES` in `.env` (commas or spaces, and it replaces the list
+> outright):
+>
+> ```bash
+> INSTAGRAM_SCOPES="instagram_basic instagram_content_publish pages_show_list pages_read_engagement business_management instagram_manage_comments instagram_manage_insights"
+> ```
+>
+> If a connect is still refused, strip `INSTAGRAM_SCOPES` back to the four publishing permissions and
+> add the rest as review grants them. An **already-connected account must be reconnected** for any
+> scope change to take effect — until then those tools return a permissions error. Reconnect from
+> **Accounts → Connect**.
 
 > **Replies are not covered by the publish mode.** `dry_run`/`approval` gate *posts*; a reply or a
 > moderation action happens immediately. That's deliberate — an approval queue for comment replies

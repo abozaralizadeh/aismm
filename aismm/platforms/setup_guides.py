@@ -34,9 +34,15 @@ GUIDES: dict[str, dict] = {
             "Request the permissions `instagram_basic`, `instagram_content_publish`, "
             "`pages_show_list` and `pages_read_engagement`. Publishing to accounts you "
             "don't own needs App Review.",
+            "⚠️ Meta rejects the *entire* login dialog if your app cannot request even "
+            "one scope — \"Invalid Scopes: …\". Analytics (`instagram_manage_insights`) "
+            "needs App Review, so it is NOT requested by default; add it to "
+            "`INSTAGRAM_SCOPES` in your .env once it is approved.",
         ],
         "notes": "Instagram fetches media from a public URL, so this deployment must be "
-                 "reachable from the internet (or use Azure Blob storage).",
+                 "reachable from the internet (or use Azure Blob storage). If a connect "
+                 "fails with \"Invalid Scopes\", set INSTAGRAM_SCOPES to just the "
+                 "permissions your app is actually approved for.",
     },
     "twitter": {
         "title": "X (Twitter)",

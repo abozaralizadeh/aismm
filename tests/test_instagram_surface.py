@@ -299,10 +299,50 @@ def test_insights_default_metrics_avoid_deprecated_names():
         assert metric not in Instagram.DEFAULT_ACCOUNT_METRICS
 
 
-def test_comment_scopes_are_requested():
+def test_publishing_scopes_are_always_requested():
+    """Whatever else changes, these are what a post needs."""
     scopes = get_platform(PlatformName.instagram).scopes
-    assert "instagram_manage_comments" in scopes
-    assert "instagram_manage_insights" in scopes
+    for required in Instagram.REQUIRED_SCOPES:
+        assert required in scopes
+
+
+def test_comment_scopes_are_requested():
+    assert "instagram_manage_comments" in get_platform(PlatformName.instagram).scopes
+
+
+def test_insights_is_not_requested_by_default():
+    """Meta rejects the WHOLE dialog on one unavailable scope.
+
+    ``instagram_manage_insights`` needs App Review, and an app without it got
+    "Invalid Scopes: instagram_manage_insights" — which blocked connecting at
+    all, including publishing, which does not need insights. It is opt-in now.
+    """
+    assert "instagram_manage_insights" not in get_platform(PlatformName.instagram).scopes
+
+
+def test_insights_can_be_opted_into(monkeypatch):
+    import dataclasses
+
+    from aismm import config as config_module
+    from aismm.platforms import instagram as ig_module
+
+    full = " ".join(Instagram.REQUIRED_SCOPES + Instagram.OPTIONAL_SCOPES)
+    monkeypatch.setattr(ig_module, "settings",
+                        dataclasses.replace(config_module.settings, instagram_scopes=full),
+                        raising=False)
+    monkeypatch.setattr(config_module, "settings",
+                        dataclasses.replace(config_module.settings, instagram_scopes=full))
+    assert "instagram_manage_insights" in get_platform(PlatformName.instagram).scopes
+
+
+def test_the_scope_override_accepts_commas_or_spaces(monkeypatch):
+    import dataclasses
+
+    from aismm import config as config_module
+
+    monkeypatch.setattr(config_module, "settings", dataclasses.replace(
+        config_module.settings, instagram_scopes="instagram_basic, pages_show_list"))
+    assert get_platform(PlatformName.instagram).scopes == ["instagram_basic", "pages_show_list"]
 
 
 def test_capabilities_advertise_the_new_placements():

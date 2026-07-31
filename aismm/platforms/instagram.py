@@ -194,15 +194,43 @@ class Instagram(SocialPlatform):
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
     token_endpoint = f"{GRAPH}/oauth/access_token"
-    scopes = [
+    # Scopes are split by what they cost you if the app cannot request them.
+    #
+    # Meta rejects the WHOLE authorization dialog when any one scope is not
+    # available to the app ("Invalid Scopes: …"), so an optional analytics
+    # permission that has not been through App Review takes publishing down with
+    # it. Only the permissions publishing genuinely needs are requested by
+    # default; the engagement/analytics extras are opt-in via
+    # ``INSTAGRAM_SCOPES`` once the app is approved for them.
+    REQUIRED_SCOPES = (
         "instagram_basic",
         "instagram_content_publish",
-        "instagram_manage_comments",   # read/reply/hide/delete comments
-        "instagram_manage_insights",   # media + account metrics
         "pages_show_list",
         "pages_read_engagement",
         "business_management",
-    ]
+    )
+    # Needs App Review before an app may even ask for it. Comments is usually
+    # granted with Standard Access; insights commonly is not, which is the scope
+    # that has actually blocked connections in the wild.
+    OPTIONAL_SCOPES = (
+        "instagram_manage_comments",   # reply/hide/delete comments
+        "instagram_manage_insights",   # media + account metrics
+    )
+    DEFAULT_SCOPES = REQUIRED_SCOPES + ("instagram_manage_comments",)
+
+    @property
+    def scopes(self) -> list[str]:  # type: ignore[override]
+        """What to ask for, honouring ``INSTAGRAM_SCOPES`` when it is set.
+
+        The env var replaces the list outright, so an app approved for insights
+        can request them and an app in trouble can strip back to the minimum.
+        """
+        from ..config import settings
+
+        override = (settings.instagram_scopes or "").strip()
+        if override:
+            return [s.strip() for s in re.split(r"[,\s]+", override) if s.strip()]
+        return list(self.DEFAULT_SCOPES)
     scope_sep = ","
 
     async def fetch_identity(self, access_token: str) -> Identity:

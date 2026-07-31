@@ -250,6 +250,12 @@ class Settings:
     # duplicate is two taps to delete. Set true where an accidental duplicate
     # costs more than a gap. A CONFIRMED duplicate is always refused either way.
     publish_duplicate_guard_strict: bool = False
+    # Override the Instagram OAuth scopes (comma/space separated). Meta rejects
+    # the ENTIRE authorization dialog if any one scope is unavailable to the app
+    # ("Invalid Scopes: …"), so the default asks only for what publishing needs
+    # plus comments. Add instagram_manage_insights here once App Review has
+    # granted it. See aismm/platforms/instagram.py.
+    instagram_scopes: str = ""
 
     @property
     def db_path(self) -> Path:
@@ -379,6 +385,7 @@ def load_settings() -> Settings:
         publish_content_guard=_bool(os.getenv("PUBLISH_CONTENT_GUARD"), True),
         publish_duplicate_guard_strict=_bool(
             os.getenv("PUBLISH_DUPLICATE_GUARD_STRICT"), False),
+        instagram_scopes=os.getenv("INSTAGRAM_SCOPES", "").strip(),
     )
 
 
