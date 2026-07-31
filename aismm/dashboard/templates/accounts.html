@@ -39,11 +39,19 @@
       <td>{{ a.handle or "—" }}</td>
       <td class="mono small">{{ a.external_id or a.id }}</td>
       <td class="small">{{ a.expires_at.strftime('%Y-%m-%d %H:%M') if a.expires_at else "—" }}</td>
-      <td>
-        <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
-              onsubmit="return confirm('Disconnect this account?');">
-          <button class="btn btn-danger">Disconnect</button>
-        </form>
+      <td class="actions-cell">
+        <div class="actions">
+          <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
+            <button class="btn small"
+                    title="Ask Meta which permissions this stored token actually has">
+              Check permissions
+            </button>
+          </form>
+          <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
+                onsubmit="return confirm('Disconnect this account?');">
+            <button class="btn btn-danger small">Disconnect</button>
+          </form>
+        </div>
       </td>
     </tr>
   {% endfor %}

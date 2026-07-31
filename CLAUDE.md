@@ -402,6 +402,14 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   `profile_views`, non-Reels `video_views`), so `DEFAULT_*_METRICS` stays minimal and overridable.
   Comments/insights need the `instagram_manage_comments` / `instagram_manage_insights` scopes — an
   account connected before those were added must be reconnected.
+- **Publishing acts AS THE PAGE, so the stored token must be the PAGE token** — never the user
+  token. `/me/accounts` only returns a page's `access_token` when the login actually granted page
+  access; `fetch_identity` used to fall back to the user token when it didn't, which looked like a
+  successful connect and then failed at publish time with `code=190 … must be granted before
+  impersonating a user's page`. It now REFUSES the connection there, naming the page and the dialog
+  step to redo. **Accounts → Check permissions** (`granted_scopes` → Graph `/debug_token`) shows what
+  a stored token really carries, since requested scopes ≠ granted scopes — the dialog lets a user
+  untick a Page.
 - **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so a review-gated
   analytics permission blocks publishing too — that is what `Invalid Scopes:
   instagram_manage_insights` was. `Instagram.scopes` is a property splitting `REQUIRED_SCOPES` (what

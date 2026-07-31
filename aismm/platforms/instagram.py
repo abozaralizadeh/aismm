@@ -236,7 +236,19 @@ class Instagram(SocialPlatform):
     scope_sep = ","
 
     async def fetch_identity(self, access_token: str) -> Identity:
-        """Resolve the IG business account + its Page access token from a user token."""
+        """Resolve the IG business account + its Page access token from a user token.
+
+        Publishing acts AS THE PAGE, so what gets stored has to be the page's own
+        token. Graph only returns one in ``/me/accounts`` when the login actually
+        granted the page permissions; a page with no ``access_token`` field means
+        it did not, and falling back to the user token here is what produced
+
+            Any of the pages_read_engagement, pages_manage_metadata, … permission(s)
+            must be granted before impersonating a user's page. [code=190]
+
+        at publish time, minutes and one generated image later. Better to refuse
+        the connection now and say which step of the dialog to redo.
+        """
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 f"{GRAPH}/me/accounts",
@@ -248,20 +260,61 @@ class Instagram(SocialPlatform):
             except httpx.HTTPStatusError as exc:
                 _raise_graph(exc)
             pages = resp.json().get("data", [])
-        for page in pages:
-            iba = page.get("instagram_business_account")
-            if iba:
-                return Identity(
-                    external_id=iba["id"],
-                    handle=iba.get("username") or page.get("name", ""),
-                    # Publishing uses the PAGE access token; store it as the account token.
-                    meta={"access_token": page.get("access_token", access_token),
-                          "page_name": page.get("name", "")},
-                )
-        raise RuntimeError(
-            "No Instagram Business account found on any Facebook Page for this login. "
-            "Link an IG Business/Creator account to a Page and grant instagram_content_publish."
+
+        linked = [p for p in pages if p.get("instagram_business_account")]
+        if not linked:
+            raise RuntimeError(
+                f"No Instagram Business account found on any Facebook Page for this login "
+                f"({len(pages)} page(s) visible). Link an IG Business/Creator account to a "
+                f"Page, and make sure you ticked that Page in the login dialog."
+            )
+
+        page = linked[0]
+        page_token = page.get("access_token", "")
+        if not page_token:
+            raise RuntimeError(
+                f"Facebook returned the Page '{page.get('name', '?')}' without a page access "
+                f"token, so this connection could publish nothing. That happens when the "
+                f"login did not grant page access: on the 'What do you want to allow' step, "
+                f"make sure the PAGE itself is ticked (not only the Instagram account) and "
+                f"that pages_show_list / pages_read_engagement are left enabled. "
+                f"Disconnect and connect again."
+            )
+
+        iba = page["instagram_business_account"]
+        logger.info("Instagram connected: @%s via Page '%s'",
+                    iba.get("username", "?"), page.get("name", "?"))
+        return Identity(
+            external_id=iba["id"],
+            handle=iba.get("username") or page.get("name", ""),
+            # Publishing uses the PAGE access token; store it as the account token.
+            meta={"access_token": page_token, "page_name": page.get("name", "")},
         )
+
+    async def granted_scopes(self, access_token: str) -> list[str]:
+        """Permissions this token actually carries, straight from Graph.
+
+        ``/debug_token`` is the only way to tell what a login really granted —
+        the dialog lets a user untick things, and a missing page permission does
+        not surface until a publish fails with a message about impersonation.
+        Needs the app credentials, so it returns [] when they aren't configured.
+        """
+        creds = getattr(self, "creds", None)
+        if not (creds and creds.configured):
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(
+                    f"{GRAPH}/debug_token",
+                    params={"input_token": access_token,
+                            "access_token": f"{creds.client_id}|{creds.client_secret}"})
+            if r.status_code >= 400:
+                logger.info("Could not read granted scopes: HTTP %s", r.status_code)
+                return []
+            return list(r.json().get("data", {}).get("scopes", []))
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never break a page
+            logger.warning("Token scope lookup failed: %s", exc)
+            return []
 
     async def _wait_finished(self, client, creation_id, token, tries=30, delay=6.0):
         """Poll a container until it is FINISHED.

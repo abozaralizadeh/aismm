@@ -792,6 +792,14 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 > must be reconnected** for any scope change to take effect — until then those tools return a
 > permissions error. Reconnect from **Accounts → Connect**.
 
+> **"…must be granted before impersonating a user's page" (code 190).** Publishing acts *as the
+> Facebook Page*, so the token AISMM stores has to be the **Page's** token, not your user token.
+> Graph only returns one when the login actually granted page access — and the dialog's last step
+> lets you pick which Pages to share. If the Page isn't ticked there, the connection looks fine and
+> then fails at publish time. AISMM now refuses such a connection up front and tells you which step
+> to redo. Use **Accounts → Check permissions** to see what a stored token really carries; requested
+> scopes and *granted* scopes are not the same thing.
+
 > **Replies are not covered by the publish mode.** `dry_run`/`approval` gate *posts*; a reply or a
 > moderation action happens immediately. That's deliberate — an approval queue for comment replies
 > would make them useless — but it means an instruction with comment duties acts on the live account

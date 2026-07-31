@@ -117,6 +117,50 @@ def create_app() -> Flask:
         return render_template("accounts.html", accounts=get_store().list_accounts(),
                                platforms=_platforms_view())
 
+    @app.route("/accounts/<account_id>/check", methods=["POST"])
+    def check_account(account_id):
+        """What does this account's stored token ACTUALLY allow?
+
+        The scopes AISMM asks for and the scopes a login grants are not the same
+        thing — the dialog lets a user untick a Page, and a missing page
+        permission stays invisible until a publish fails several minutes and one
+        generated image later with a message about "impersonating a user's page".
+        This asks Graph directly.
+        """
+        store = get_store()
+        account = store.get_account(account_id)
+        if not account:
+            abort(404)
+        platform = get_platform(account.platform,
+                                platform_apps.resolve_creds(account.platform, store,
+                                                            (account.meta or {}).get("app_id", "")))
+        access_token, _ = store.get_tokens(account.id)
+        if not access_token:
+            flash("No stored token — reconnect this account.", "error")
+            return redirect(url_for("accounts"))
+
+        try:
+            granted = asyncio.run(platform.granted_scopes(access_token))
+        except Exception as exc:  # noqa: BLE001
+            flash(f"Could not read the token's permissions: {exc}", "error")
+            return redirect(url_for("accounts"))
+
+        if not granted:
+            flash("Could not read this token's permissions — the app credentials may not "
+                  "match the app that authorised it.", "error")
+            return redirect(url_for("accounts"))
+
+        wanted = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
+        missing = sorted(wanted - set(granted))
+        if missing:
+            flash(f"Token is MISSING {', '.join(missing)} — that is why publishing fails. "
+                  f"Disconnect and reconnect, ticking the Page itself in the dialog. "
+                  f"Granted: {', '.join(sorted(granted))}", "error")
+        else:
+            flash(f"Token has every permission publishing needs. "
+                  f"Granted: {', '.join(sorted(granted))}", "success")
+        return redirect(url_for("accounts"))
+
     @app.route("/oauth/<platform>/start")
     def oauth_start(platform):
         try:
