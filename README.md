@@ -794,11 +794,24 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 
 > **"…must be granted before impersonating a user's page" (code 190).** Publishing acts *as the
 > Facebook Page*, so the token AISMM stores has to be the **Page's** token, not your user token.
-> Graph only returns one when the login actually granted page access — and the dialog's last step
-> lets you pick which Pages to share. If the Page isn't ticked there, the connection looks fine and
-> then fails at publish time. AISMM now refuses such a connection up front and tells you which step
-> to redo. Use **Accounts → Check permissions** to see what a stored token really carries; requested
-> scopes and *granted* scopes are not the same thing.
+>
+> **Several Instagram accounts? Connect them in ONE login.** A single **Connect** claims every Page
+> the login administers, so three handles arrive as three accounts, each with its own page token.
+> Tick every Page in the dialog and you are done in one round-trip.
+>
+> This matters because one Meta app plus one Facebook login holds a *single* grant, and authorising
+> again **replaces** it. Connecting accounts one at a time — each with only its own Page selected —
+> makes the second connect strip `pages_show_list` / `pages_read_engagement` from the grant the first
+> account's page token was minted against. It keeps looking connected, publishes fine until its token
+> is next used, then fails with code 190 while the newly added account works perfectly. That
+> asymmetry (newest works, older ones broke) is the tell.
+>
+> AISMM now catches this: after every connect it re-checks the other accounts on that platform and
+> warns on the spot if one just lost page access. **Accounts → Check permissions** settles any
+> individual case — it asks Graph's `/debug_token` whether the stored token is a `PAGE` or a `USER`
+> token, whether it's still valid, and exactly what was granted. A `USER` token is the direct cause
+> of code 190 however complete its scope list looks. A connection that returns no page token at all
+> is now refused at connect time rather than stored and left to fail later.
 
 > **Replies are not covered by the publish mode.** `dry_run`/`approval` gate *posts*; a reply or a
 > moderation action happens immediately. That's deliberate — an approval queue for comment replies

@@ -249,18 +249,7 @@ class Instagram(SocialPlatform):
         at publish time, minutes and one generated image later. Better to refuse
         the connection now and say which step of the dialog to redo.
         """
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{GRAPH}/me/accounts",
-                params={"fields": "name,access_token,instagram_business_account{id,username}"},
-                headers=_auth(access_token),
-            )
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                _raise_graph(exc)
-            pages = resp.json().get("data", [])
-
+        pages = await self._list_pages(access_token)
         linked = [p for p in pages if p.get("instagram_business_account")]
         if not linked:
             raise RuntimeError(
@@ -291,17 +280,72 @@ class Instagram(SocialPlatform):
             meta={"access_token": page_token, "page_name": page.get("name", "")},
         )
 
-    async def granted_scopes(self, access_token: str) -> list[str]:
-        """Permissions this token actually carries, straight from Graph.
+    async def fetch_identities(self, access_token: str) -> list[Identity]:
+        """Every Instagram account this login administers, in one go.
 
-        ``/debug_token`` is the only way to tell what a login really granted —
-        the dialog lets a user untick things, and a missing page permission does
-        not surface until a publish fails with a message about impersonation.
-        Needs the app credentials, so it returns [] when they aren't configured.
+        A Meta app holds ONE grant per Facebook user, so connecting accounts one
+        at a time makes each authorization replace the last — and the page tokens
+        minted by earlier ones stop working. Claiming every linked Page from a
+        single authorization sidesteps that completely.
+
+        A Page that came back without a token is skipped with a warning rather
+        than failing the whole connect: the other Pages are still usable, and the
+        one that isn't gets reported by the accounts page's permission check.
+        """
+        pages = await self._list_pages(access_token)
+        identities = []
+        for page in pages:
+            iba = page.get("instagram_business_account")
+            if not iba:
+                continue
+            token = page.get("access_token", "")
+            if not token:
+                logger.warning("Page '%s' (@%s) has no page access token — skipping it. "
+                               "Re-run the login and tick that Page.",
+                               page.get("name", "?"), iba.get("username", "?"))
+                continue
+            identities.append(Identity(
+                external_id=iba["id"],
+                handle=iba.get("username") or page.get("name", ""),
+                meta={"access_token": token, "page_name": page.get("name", "")},
+            ))
+
+        if not identities:
+            # Reuse the single-account path purely for its diagnostic messages.
+            await self.fetch_identity(access_token)
+        logger.info("Instagram login covers %d account(s): %s", len(identities),
+                    ", ".join("@" + i.handle for i in identities))
+        return identities
+
+    async def _list_pages(self, access_token: str) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{GRAPH}/me/accounts",
+                params={"fields": "name,access_token,instagram_business_account{id,username}"},
+                headers=_auth(access_token),
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise_graph(exc)
+            return resp.json().get("data", [])
+
+    async def inspect_token(self, access_token: str) -> dict:
+        """What this stored token actually IS, straight from Graph.
+
+        ``/debug_token`` answers the two questions logs cannot. **Is it a PAGE
+        token?** — publishing acts as the Page, and a USER token here produces
+        `code=190 … impersonating a user's page` however complete its scope list
+        looks. **What was really granted?** — the dialog lets a user change which
+        Pages an app may use, and re-authorising with a different selection
+        silently drops the ones left unticked.
+
+        Returns ``{}`` when it cannot tell (no app credentials, network trouble),
+        never raises: it is a diagnostic and must not be able to break a page.
         """
         creds = getattr(self, "creds", None)
         if not (creds and creds.configured):
-            return []
+            return {}
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.get(
@@ -309,12 +353,23 @@ class Instagram(SocialPlatform):
                     params={"input_token": access_token,
                             "access_token": f"{creds.client_id}|{creds.client_secret}"})
             if r.status_code >= 400:
-                logger.info("Could not read granted scopes: HTTP %s", r.status_code)
-                return []
-            return list(r.json().get("data", {}).get("scopes", []))
+                logger.info("Could not inspect the token: HTTP %s", r.status_code)
+                return {}
+            data = r.json().get("data", {}) or {}
+            return {
+                "type": (data.get("type") or "").upper(),      # USER | PAGE
+                "scopes": list(data.get("scopes", [])),
+                "is_valid": bool(data.get("is_valid", False)),
+                "profile_id": str(data.get("profile_id", "")),
+                "expires_at": data.get("expires_at", 0),
+            }
         except Exception as exc:  # noqa: BLE001 - diagnostics must never break a page
-            logger.warning("Token scope lookup failed: %s", exc)
-            return []
+            logger.warning("Token inspection failed: %s", exc)
+            return {}
+
+    async def granted_scopes(self, access_token: str) -> list[str]:
+        """Just the permission list — kept for callers that only need that."""
+        return (await self.inspect_token(access_token)).get("scopes", [])
 
     async def _wait_finished(self, client, creation_id, token, tries=30, delay=6.0):
         """Poll a container until it is FINISHED.

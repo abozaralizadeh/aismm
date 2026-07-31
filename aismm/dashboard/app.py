@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 import re
 import threading
 from collections.abc import Callable
@@ -140,25 +141,42 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
 
         try:
-            granted = asyncio.run(platform.granted_scopes(access_token))
+            info = asyncio.run(platform.inspect_token(access_token))
         except Exception as exc:  # noqa: BLE001
-            flash(f"Could not read the token's permissions: {exc}", "error")
+            flash(f"Could not inspect the token: {exc}", "error")
             return redirect(url_for("accounts"))
 
-        if not granted:
-            flash("Could not read this token's permissions — the app credentials may not "
-                  "match the app that authorised it.", "error")
+        if not info:
+            flash("Could not inspect this token — the app credentials may not match the "
+                  "app that authorised it.", "error")
+            return redirect(url_for("accounts"))
+
+        granted = info.get("scopes", [])
+        detail = (f"type={info.get('type') or '?'} · valid={info.get('is_valid')} · "
+                  f"scopes: {', '.join(sorted(granted)) or 'none'}")
+
+        # The decisive check. Publishing acts as the Page, so a USER token here
+        # fails with "impersonating a user's page" no matter how good the scopes
+        # look — which is exactly what makes that error so confusing.
+        if account.platform is PlatformName.instagram and info.get("type") == "USER":
+            flash(f"This is a USER token, not a PAGE token — that is why publishing fails "
+                  f"with \"impersonating a user's page\". The login did not grant access to "
+                  f"the Page. Disconnect, reconnect, and on the Pages step make sure THIS "
+                  f"account's Page is ticked. {detail}", "error")
+            return redirect(url_for("accounts"))
+
+        if not info.get("is_valid", True):
+            flash(f"Instagram says this token is no longer valid — reconnect. {detail}", "error")
             return redirect(url_for("accounts"))
 
         wanted = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
         missing = sorted(wanted - set(granted))
         if missing:
             flash(f"Token is MISSING {', '.join(missing)} — that is why publishing fails. "
-                  f"Disconnect and reconnect, ticking the Page itself in the dialog. "
-                  f"Granted: {', '.join(sorted(granted))}", "error")
+                  f"Disconnect and reconnect, ticking this account's Page in the dialog. "
+                  f"{detail}", "error")
         else:
-            flash(f"Token has every permission publishing needs. "
-                  f"Granted: {', '.join(sorted(granted))}", "success")
+            flash(f"Looks healthy — everything publishing needs is granted. {detail}", "success")
         return redirect(url_for("accounts"))
 
     @app.route("/oauth/<platform>/start")
@@ -205,24 +223,43 @@ def create_app() -> Flask:
         try:
             token = asyncio.run(integ.exchange_code(
                 code=code, redirect_uri=settings.redirect_uri(platform), code_verifier=verifier))
-            identity = asyncio.run(integ.fetch_identity(token.access_token))
+            # EVERY profile this authorization covers, not just the first. One
+            # Meta app holds a single grant per Facebook user, so claiming all the
+            # linked Pages here is what stops the next connect from replacing the
+            # grant the previous ones depend on.
+            identities = asyncio.run(integ.fetch_identities(token.access_token))
         except Exception as exc:  # noqa: BLE001
             flash(f"Failed to connect {platform}: {exc}", "error")
             return redirect(url_for("accounts"))
 
-        meta = dict(identity.meta)
-        if app_id:
-            meta["app_id"] = app_id
-        access = meta.pop("access_token", token.access_token)   # platforms may override (e.g. IG page token)
-        refresh = meta.pop("refresh_token", token.refresh_token)
         expires_at = None
         if token.expires_in:
             expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=int(token.expires_in))
-        acct = Account(platform=name, handle=identity.handle, external_id=identity.external_id,
-                       expires_at=expires_at)
-        acct.set_meta(meta)
-        get_store().upsert_account(acct, access_token=access, refresh_token=refresh)
-        flash(f"Connected {platform}: {identity.handle or identity.external_id}", "success")
+
+        store = get_store()
+        connected = []
+        for identity in identities:
+            meta = dict(identity.meta)
+            if app_id:
+                meta["app_id"] = app_id
+            # Platforms may override the token to store (Instagram: the PAGE token).
+            access = meta.pop("access_token", token.access_token)
+            refresh = meta.pop("refresh_token", token.refresh_token)
+            acct = Account(platform=name, handle=identity.handle,
+                           external_id=identity.external_id, expires_at=expires_at)
+            acct.set_meta(meta)
+            store.upsert_account(acct, access_token=access, refresh_token=refresh)
+            connected.append((acct, identity.handle or identity.external_id))
+
+        if not connected:
+            flash(f"{platform} authorized, but no account could be stored.", "error")
+            return redirect(url_for("accounts"))
+
+        names = ", ".join(handle for _acct, handle in connected)
+        flash(f"Connected {platform}: {names}"
+              + (f" ({len(connected)} accounts from one login)" if len(connected) > 1 else ""),
+              "success")
+        _warn_about_collateral_damage(store, [a for a, _ in connected], integ)
         return redirect(url_for("accounts"))
 
     @app.route("/accounts/<account_id>/delete", methods=["POST"])
@@ -678,6 +715,55 @@ def _tool_catalog(selected: list[str]) -> list[dict]:
     if leftover:
         grouped.append({"title": "Other", "blurb": "", "tools": leftover})
     return grouped
+
+
+def _warn_about_collateral_damage(store, just_connected, platform) -> None:
+    """Did connecting THIS account break the ones already connected?
+
+    One Meta app + one Facebook user = ONE grant. Authorising again replaces it
+    wholesale, so connecting a second Instagram account with only its own Page
+    ticked strips ``pages_show_list`` / ``pages_read_engagement`` from the grant
+    that the *earlier* accounts' page tokens were minted against. They keep
+    looking connected and fail hours later with
+
+        … must be granted before impersonating a user's page [code=190]
+
+    on whatever run happens to come next. Checking here turns that into a warning
+    on the page you are already looking at, while the dialog is still fresh in
+    mind. Best-effort: never blocks or undoes the connection that just succeeded.
+    """
+    inspect = getattr(platform, "inspect_token", None)
+    if inspect is None:
+        return
+
+    fresh = just_connected if isinstance(just_connected, list) else [just_connected]
+    fresh_ids = {a.id for a in fresh}
+    platform_name = fresh[0].platform
+
+    broken = []
+    for other in store.list_accounts():
+        if other.platform is not platform_name or other.id in fresh_ids:
+            continue
+        try:
+            token, _ = store.get_tokens(other.id)
+            info = asyncio.run(inspect(token)) if token else {}
+        except Exception as exc:  # noqa: BLE001 - a warning must never break a connect
+            logging.getLogger("aismm.dashboard").warning(
+                "Could not re-check %s after connecting: %s", other.handle, exc)
+            continue
+        if not info:
+            continue
+        required = set(getattr(platform, "REQUIRED_SCOPES", ()) or ())
+        if info.get("type") == "USER" or not info.get("is_valid", True) or (
+                required and required - set(info.get("scopes", []))):
+            broken.append(other.handle or other.external_id)
+
+    if broken:
+        flash(f"⚠️ Connecting this account appears to have REVOKED page access for "
+              f"{', '.join(broken)} — one Meta app can hold only one grant per Facebook "
+              f"user, and authorising again replaces the previous Page selection. Reconnect "
+              f"{'them' if len(broken) > 1 else 'it'} and tick EVERY Page you publish to, "
+              f"not just the one you are adding.", "error")
 
 
 def _next_run_info(instruction, store) -> dict:

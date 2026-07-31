@@ -113,6 +113,19 @@ class SocialPlatform(ABC):
     async def fetch_identity(self, access_token: str) -> Identity:
         """Look up the connected profile (id + display handle + platform meta)."""
 
+    async def fetch_identities(self, access_token: str) -> list[Identity]:
+        """EVERY profile this authorization covers, not just the first.
+
+        Most platforms authorize exactly one profile, so the default wraps
+        :meth:`fetch_identity`. Instagram is the exception: one Facebook login can
+        administer several Pages, each with its own Instagram account and its own
+        page token — and because a Meta app holds only ONE grant per Facebook
+        user, connecting them one at a time means each authorization replaces the
+        last and breaks the accounts already connected. Taking them all from a
+        single authorization is what avoids that entirely.
+        """
+        return [await self.fetch_identity(access_token)]
+
     @abstractmethod
     async def publish(
         self,

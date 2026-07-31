@@ -35,9 +35,15 @@ GUIDES: dict[str, dict] = {
             "`pages_show_list` and `pages_read_engagement`. Publishing to accounts you "
             "don't own needs App Review.",
             "⚠️ Meta rejects the *entire* login dialog if your app cannot request even "
-            "one scope — \"Invalid Scopes: …\". Analytics (`instagram_manage_insights`) "
-            "needs App Review, so it is NOT requested by default; add it to "
-            "`INSTAGRAM_SCOPES` in your .env once it is approved.",
+            "one scope — \"Invalid Scopes: …\". `instagram_manage_insights` needs App "
+            "Review; if the dialog refuses, drop it from `INSTAGRAM_SCOPES` in your .env "
+            "and add it back once it is approved.",
+            "⚠️ **Several Instagram accounts? Tick EVERY Page in ONE login.** A single "
+            "Connect claims every Page the login administers, so they all arrive at once. "
+            "Doing them one at a time breaks the earlier ones: this app holds a single "
+            "grant per Facebook login, and authorising again REPLACES it — the accounts "
+            "already connected then fail with \"must be granted before impersonating a "
+            "user's page\" while the newest one works fine.",
         ],
         "notes": "Instagram fetches media from a public URL, so this deployment must be "
                  "reachable from the internet (or use Azure Blob storage). If a connect "

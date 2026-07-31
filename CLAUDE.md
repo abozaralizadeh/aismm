@@ -407,9 +407,23 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   access; `fetch_identity` used to fall back to the user token when it didn't, which looked like a
   successful connect and then failed at publish time with `code=190 … must be granted before
   impersonating a user's page`. It now REFUSES the connection there, naming the page and the dialog
-  step to redo. **Accounts → Check permissions** (`granted_scopes` → Graph `/debug_token`) shows what
-  a stored token really carries, since requested scopes ≠ granted scopes — the dialog lets a user
-  untick a Page.
+  step to redo.
+- **One OAuth round-trip connects EVERY account it covers** (`SocialPlatform.fetch_identities`,
+  default `[fetch_identity(...)]`; Instagram returns one Identity per linked Page, each with its own
+  page token). This is the structural fix for the point below: if a single login claims all the
+  Pages, there is never a second authorization to overwrite the first. The dashboard callback loops
+  over the identities; a Page that came back without a token is skipped with a warning rather than
+  failing the whole connect.
+- **One Meta app + one Facebook user = ONE grant, and re-authorising REPLACES it.** Connecting a
+  second Instagram account with only its own Page ticked strips `pages_show_list` /
+  `pages_read_engagement` from the grant the FIRST account's page token was minted against.
+  Observed live: three accounts on one app, the newest published fine while the two reconnected
+  ones returned code 190 under identical code — the newest-works/older-break asymmetry is the
+  signature. `dashboard/app._warn_about_collateral_damage` re-checks the other accounts after every
+  connect and flashes a warning, because the breakage is otherwise invisible until the next run.
+  **Accounts → Check permissions** (`Instagram.inspect_token` → Graph `/debug_token`) is the
+  per-account diagnostic: `type` is `PAGE` or `USER`, and a USER token is the direct cause however
+  complete `scopes` looks. Scope lists alone cannot diagnose this.
 - **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so a review-gated
   analytics permission blocks publishing too — that is what `Invalid Scopes:
   instagram_manage_insights` was. `Instagram.scopes` is a property splitting `REQUIRED_SCOPES` (what
