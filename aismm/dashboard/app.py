@@ -258,6 +258,7 @@ def create_app() -> Flask:
         return render_template("instruction_form.html", instruction=None, state=None,
                                files=[], purposes=list(AttachmentPurpose),
                                accounts=get_store().list_accounts(), settings=settings,
+                               tool_groups=_tool_catalog([]),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions/<instruction_id>/edit")
@@ -274,6 +275,7 @@ def create_app() -> Flask:
                                schedule_readback=describe_schedule(
                                    instr.schedule, starts_at=instr.schedule_start_at),
                                next_run=_next_run_info(instr, store),
+                               tool_groups=_tool_catalog(instr.tools),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions", methods=["POST"])
@@ -293,6 +295,11 @@ def create_app() -> Flask:
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
         instr.set_account_ids(request.form.getlist("account_ids"))
+        # Only touch the selection when the picker was actually on the form, so a
+        # POST that predates it (or omits it) leaves the stored choice alone
+        # rather than resetting the instruction to every tool.
+        if request.form.get("tools_present"):
+            instr.set_tools(_selected_tools(request.form.getlist("tools")))
         store.upsert_instruction(instr)
         # The note is the human's channel into a running instruction; the memory
         # box is only rendered for an existing one, so leave it alone otherwise.
@@ -498,6 +505,27 @@ def create_app() -> Flask:
             asset_url=public_url(run.asset_path) if run.asset_path else "",
         )
 
+    @app.route("/runs/<run_id>/retry", methods=["POST"])
+    def retry_run(run_id):
+        store = get_store()
+        run = store.get_run(run_id)
+        if not run:
+            abort(404)
+        prompt = request.form.get("prompt", "")
+
+        def _retry():
+            app.logger.info("Retry of run %s started", run_id[:8])
+            try:
+                orchestrator.retry_run(run_id, prompt)
+            except Exception:  # noqa: BLE001 - a thread that dies quietly is undebuggable
+                app.logger.exception("Retry of run %s failed", run_id[:8])
+            finally:
+                app.logger.info("Retry of run %s finished", run_id[:8])
+
+        threading.Thread(target=_retry, name=f"retry-run:{run_id[:8]}", daemon=True).start()
+        flash("Retry started as a new run — check Runs in a moment.", "success")
+        return redirect(url_for("runs"))
+
     @app.route("/staged/<staged_id>/approve", methods=["POST"])
     def approve(staged_id):
         res = orchestrator.approve_staged(staged_id)
@@ -541,6 +569,71 @@ def _refresh_scheduler() -> None:
             scheduler.refresh_jobs()
     except Exception:  # noqa: BLE001
         pass
+
+
+# How the tool picker groups and explains the registry, so a long flat list of
+# 21 names reads as a handful of capabilities. Unknown tools fall into "Other",
+# so registering a new one never breaks the page.
+TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("Essentials", "Reading the brief and finishing the run.",
+     ("get_context", "publish", "report_failure")),
+    ("Continuity", "Carrying work across scheduled runs.",
+     ("read_memory", "update_memory", "read_attachment")),
+    ("Research", "Finding real, current material to post about.",
+     ("web_search", "browse_page", "save_media")),
+    ("Media", "Generating images and video.",
+     ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
+    ("Instagram", "Reading the feed and handling comments. Ignored on other platforms.",
+     ("instagram_recent_posts", "instagram_comments", "instagram_reply_to_comment",
+      "instagram_moderate_comment", "instagram_insights", "instagram_publishing_limit",
+      "instagram_profile", "instagram_mentions")),
+]
+
+
+def _selected_tools(posted: list[str]) -> list[str]:
+    """Normalize the picker's submission for storage.
+
+    Everything ticked is stored as an EMPTY list, which means "all" — so a tool
+    added to the registry later is automatically available to instructions that
+    never narrowed their selection. A genuine subset is stored verbatim.
+
+    Nothing ticked is NOT the same as everything ticked, even though both look
+    like an empty list: it is stored as the always-on tools, which is what the
+    agent would get anyway. Collapsing it to "all" would mean unticking every box
+    silently turned every tool back on.
+    """
+    from ..tools.registry import ALWAYS_ON, registered_tool_names
+
+    available = registered_tool_names()
+    chosen = [name for name in available if name in set(posted or ())]
+    if len(chosen) == len(available):
+        return []
+    return chosen or [n for n in ALWAYS_ON if n in available]
+
+
+def _tool_catalog(selected: list[str]) -> list[dict]:
+    """The tool picker's model: grouped names, each with its checked state.
+
+    An empty ``selected`` means "all", which is the default and what a brand-new
+    instruction gets.
+    """
+    from ..tools.registry import ALWAYS_ON, registered_tool_names
+
+    available = registered_tool_names()
+    chosen = set(selected or available)
+    grouped, placed = [], set()
+    for title, blurb, names in TOOL_GROUPS:
+        rows = [{"name": n, "checked": n in chosen, "always_on": n in ALWAYS_ON}
+                for n in names if n in available]
+        placed.update(r["name"] for r in rows)
+        if rows:
+            grouped.append({"title": title, "blurb": blurb, "tools": rows})
+
+    leftover = [{"name": n, "checked": n in chosen, "always_on": n in ALWAYS_ON}
+                for n in available if n not in placed]
+    if leftover:
+        grouped.append({"title": "Other", "blurb": "", "tools": leftover})
+    return grouped
 
 
 def _next_run_info(instruction, store) -> dict:

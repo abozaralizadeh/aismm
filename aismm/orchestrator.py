@@ -116,7 +116,35 @@ def run_single(instruction: Instruction, account: Account) -> dict:
     return _run_one(instruction, account, get_store())
 
 
-def _run_one(instruction: Instruction, account: Account, store) -> dict:
+def retry_run(run_id: str, prompt: str = "") -> dict:
+    """Run an earlier run's (instruction, account) pair again.
+
+    Produces a NEW run rather than mutating the old one: the failed attempt is
+    evidence and stays readable. ``prompt`` replaces the kickoff verbatim, which
+    is how the dashboard lets an operator fix a bad brief — or drop a stale
+    memory position out of it — and try again without editing the instruction
+    itself. Empty ``prompt`` recomposes the kickoff from the instruction as usual.
+    """
+    store = get_store()
+    original = store.get_run(run_id)
+    if not original:
+        return {"error": "not_found"}
+    instruction = store.get_instruction(original.instruction_id)
+    account = store.get_account(original.account_id)
+    if not instruction:
+        return {"error": "instruction_missing",
+                "message": "The instruction this run belonged to has been deleted."}
+    if not account:
+        return {"error": "account_missing",
+                "message": "The account this run targeted has been disconnected."}
+
+    logger.info("Retrying run %s (instruction='%s', %s prompt)", run_id[:8], instruction.name,
+                "edited" if prompt.strip() else "recomposed")
+    return _run_one(instruction, account, store, prompt_override=prompt)
+
+
+def _run_one(instruction: Instruction, account: Account, store,
+             prompt_override: str = "") -> dict:
     # A rate-limited account cannot publish, so don't spend a run researching,
     # downloading and generating media that would be refused at the last step.
     if instruction.publish_mode is PublishMode.live and cooldown.is_active(account):
@@ -144,7 +172,7 @@ def _run_one(instruction: Instruction, account: Account, store) -> dict:
                     instruction.media_pref.value)
         with _LockHeartbeat(store, lock_key):
             result = _run_async(_with_timeout(
-                run_for_account(account, instruction, store, run)))
+                run_for_account(account, instruction, store, run, prompt_override)))
         result["account_id"] = account.id
         logger.info("RUN DONE  %s | %.1fs | %s",
                     run.id[:8], time.monotonic() - started, result)

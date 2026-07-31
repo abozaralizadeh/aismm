@@ -176,3 +176,46 @@ def _media_block(query: str) -> str:
             if depth == 0:
                 return CSS[index:position]
     raise AssertionError(f"unbalanced braces after {query!r}")
+
+
+# --- row action buttons ------------------------------------------------------------- #
+# Adding a third button to the instructions table (Clear cooldown, which appears
+# only while an account is paused) broke the row: each button wrapped onto its own
+# line and Delete was clipped off the edge of the cell.
+
+def test_the_action_cell_is_a_table_cell_not_a_flex_container():
+    """display:flex on a <td> drops it out of the table layout entirely — the
+    buttons then overlap the columns beside them. The flex box must be inside."""
+    for path in TEMPLATE_FILES:
+        html = path.read_text()
+        assert '<td class="actions"' not in html, (
+            f"{path.name}: put the .actions flex box in a div inside the cell")
+
+
+def test_the_action_cell_shrinks_to_fit_its_buttons():
+    assert re.search(r"td\.actions-cell\s*\{[^}]*width:\s*1%", CSS), \
+        "the action column must shrink to fit, not be squeezed by the data columns"
+    assert re.search(r"td\.actions-cell\s*\{[^}]*white-space:\s*nowrap", CSS)
+
+
+def test_row_action_buttons_stay_on_one_line():
+    assert re.search(r"td\.actions-cell\s+\.actions\s*\{[^}]*flex-wrap:\s*nowrap", CSS)
+
+
+def test_button_labels_do_not_break_mid_button():
+    """"Clear cooldown" wrapping to two lines is what doubled the row height."""
+    assert re.search(r"^\.btn\s*\{[^}]*white-space:\s*nowrap", CSS, re.M | re.S)
+
+
+# --- the tool picker ----------------------------------------------------------------- #
+
+def test_the_tool_options_lay_out_horizontally():
+    """`.form label` sets flex-direction:column and outranks a lone class, which
+    stacked every checkbox on top of its own name."""
+    assert re.search(r"\.form\s+label\.multiselect-option\s*\{[^}]*flex-direction:\s*row", CSS), \
+        "needs `.form label.multiselect-option` to outrank `.form label`"
+
+
+def test_the_tool_picker_list_scrolls_rather_than_growing_unbounded():
+    assert re.search(r"\.multiselect-list\s*\{[^}]*max-height", CSS)
+    assert re.search(r"\.multiselect-list\s*\{[^}]*overflow-y:\s*auto", CSS)

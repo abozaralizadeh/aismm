@@ -180,6 +180,26 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus
   and never returns. `tests/test_responsive.py` enforces both; it also covers the viewport tag, the
   scrollable nav, and 44px tap targets.
+- **Never put `display:flex` on a `<td>`** — it drops the cell out of table layout and its contents
+  overlap the neighbouring columns. Row actions are `<td class="actions-cell"><div class="actions">`;
+  the cell is `width:1%` + `nowrap` so it shrinks to fit rather than being squeezed by the data
+  columns (adding the third *Clear cooldown* button wrapped each one onto its own line before this).
+- **`.form label` sets `flex-direction: column`** and, at (0,0,1,1), outranks any lone class — so a
+  row-shaped control inside a form needs `.form label.my-class`, not `.my-class`. This is why every
+  checkbox in the tool picker stacked on top of its own name at first; `.check` solves the same
+  problem with `!important`.
+- **Per-instruction tool selection** (`Instruction.tools_json`, `registry.build_tools(state,
+  enabled)`). Empty list = ALL, so a newly registered tool is available to instructions that never
+  narrowed their choice; `registry.ALWAYS_ON` (`publish`, `report_failure`) is never withheld or a
+  run could not end. `dashboard/app._selected_tools` must keep "nothing ticked" distinct from
+  "everything ticked" — both look like an empty list, and collapsing them would silently re-enable
+  every tool. The form posts a `tools_present` marker so a POST without the picker leaves the stored
+  selection alone instead of resetting it.
+- **Retry re-runs with a prompt override** (`orchestrator.retry_run` →
+  `run_for_account(..., prompt_override)`). It creates a NEW run — the failed one is the evidence —
+  and the override is used **verbatim** (`prompt_override.strip() or build_kickoff(...)`), so memory
+  and the note are deliberately NOT re-inlined: what the operator reads in the box is what the agent
+  gets. Everything else still applies (publish gate, lock, cooldown, duplicate guard).
 
 - **Widening a table is now safe**: `LocalStore._add_missing_columns` runs `ALTER TABLE ADD COLUMN`
   for any column the models declare and the DB lacks (Azure Table is schemaless, so it needs

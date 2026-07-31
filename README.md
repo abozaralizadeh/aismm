@@ -1001,6 +1001,38 @@ platform is still blocking, posting again now is exactly what extends the block.
 is deliberately kept**, so a refusal right after clearing resumes the escalation (2h, 4h, …) instead
 of restarting at 60 minutes — otherwise a clear-then-refused loop would never back off at all.
 
+### Which tools an instruction may use
+
+Every registered tool is available by default. The instruction form has a **Tools the agent may
+use** picker — a checkbox dropdown with a filter, grouped by capability (Essentials, Continuity,
+Research, Media, Instagram) — for narrowing that:
+
+- it keeps an instruction on task (a text-only account has no business calling Sora), and
+- it cuts the number of choices a smaller model has to weigh, which matters on the mini models.
+
+`publish` and `report_failure` are always on whatever you tick, since [a run has to be able to
+end](#a-run-ends-with-publish-or-report_failure). The filter and the *Select all* / *Clear* links
+compose, so typing `instagram` then *Clear* switches off just those eight.
+
+Leaving everything ticked stores "all" rather than a list of today's names, so a tool added in a
+later version is picked up automatically. Unticking everything is *not* the same thing — it stores
+just the two terminal tools.
+
+### Retrying a failed run
+
+Every run records the exact kickoff it was given. When one fails for a reason the prompt itself
+caused — a stale memory position, a brief pointing at the wrong page — open the run and use **Retry
+this run** (expanded by default on a failed run). The prompt comes pre-filled and is editable.
+
+It starts a **new** run against the same instruction and account; the failed one is left exactly as
+it is, since that is the evidence. The edited text is sent **verbatim** — memory and the operator
+note are not re-inlined — so what is in the box is precisely what the agent receives. Empty the box
+to rebuild the prompt from the instruction as it stands now.
+
+A retry is an ordinary run in every other respect: the publish-mode gate, the per-account lock, the
+cooldown check and the duplicate guard all apply. On a `live` instruction the form says so, because
+a successful retry posts for real.
+
 ### Files attached to an instruction
 
 An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):

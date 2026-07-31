@@ -114,6 +114,11 @@ class Instruction(SQLModel, table=True):
     # Unset, an interval schedule anchors to created_at instead of "now" at every
     # (re)registration — see aismm/schedules.py for why that distinction matters.
     schedule_start_at: datetime | None = Field(default=None)
+    # Which agent tools this instruction may use. Empty = all of them (the
+    # default). Narrow it to keep an instruction on task and to cut the number of
+    # choices a smaller model has to weigh. `publish`/`report_failure` are always
+    # available regardless — a run has to be able to end.
+    tools_json: str = "[]"
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
     # Label this instruction's posts as AI-generated. On by default (EU AI Act
@@ -133,6 +138,17 @@ class Instruction(SQLModel, table=True):
 
     def set_account_ids(self, ids: list[str]) -> None:
         self.account_ids_json = json.dumps(list(ids or []))
+
+    @property
+    def tools(self) -> list[str]:
+        """Selected tool names; empty list means "all tools"."""
+        try:
+            return list(json.loads(self.tools_json or "[]"))
+        except json.JSONDecodeError:
+            return []
+
+    def set_tools(self, names: list[str]) -> None:
+        self.tools_json = json.dumps(list(names or []))
 
 
 class Run(SQLModel, table=True):

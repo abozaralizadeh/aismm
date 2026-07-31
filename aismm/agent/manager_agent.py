@@ -26,11 +26,17 @@ logger = logging.getLogger("aismm.agent")
 MAX_TURNS = 30
 
 
-async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run) -> dict:
+async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
+                          prompt_override: str = "") -> dict:
     """Run the agent once for one account. Returns the terminal result dict.
 
     The publish tool records the outcome on ``state["result"]`` (and persists the
     Run / StagedPost). This function returns that result (or an error dict).
+
+    ``prompt_override`` replaces the composed kickoff verbatim — the dashboard's
+    retry, where an operator re-sends a failed run's prompt after editing it.
+    Memory and the operator note are NOT re-inlined in that case: the point is to
+    send exactly what is in the box, so what you read is what the agent gets.
     """
     caps = get_platform(account.platform).capabilities
     state: dict = {
@@ -46,13 +52,14 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     agent = Agent(
         name="SocialManager",
         instructions=MANAGER_INSTRUCTIONS,
-        tools=build_tools(state),
+        tools=build_tools(state, instruction.tools),
         model=build_model(),
         model_settings=ModelSettings(temperature=0.8),
     )
-    kickoff = build_kickoff(account=account, instruction=instruction,
-                            platform_caps=caps, state=instruction_state,
-                            files=attachments)
+    kickoff = (prompt_override.strip() or
+               build_kickoff(account=account, instruction=instruction,
+                             platform_caps=caps, state=instruction_state,
+                             files=attachments))
     # Keep the exact prompt on the Run: debugging a failure means seeing what the
     # agent was told, not what the instruction says now. run.prompt always stays
     # plain text even when the model also receives files natively.

@@ -32,22 +32,24 @@
       <td><span class="badge badge-{{ i.publish_mode.value }}">{{ i.publish_mode.value }}</span></td>
       <td class="small">{{ i.media_pref.value }}</td>
       <td>{{ "✓" if i.enabled else "—" }}</td>
-      <td class="actions">
+      <td class="actions-cell">
+        <div class="actions">
         <form method="post" action="{{ url_for('run_instruction_now', instruction_id=i.id) }}">
-          <button class="btn">Run now</button>
+          <button class="btn small">Run now</button>
         </form>
         {% if nr and nr.cooling %}
         <form method="post" action="{{ url_for('clear_instruction_cooldown', instruction_id=i.id) }}"
               onsubmit="return confirm('Lift the publishing cooldown for {{ nr.cooling|map(attribute='handle')|join(', ') }}?\n\nThe platform refused for volume reasons. If it is still blocking, posting again now can extend the block — and the next refusal will pause for longer, not reset.');">
-          <button class="btn" title="Publishing paused: {{ nr.cooling|map(attribute='for')|join(', ') }}">
+          <button class="btn small" title="Publishing paused: {{ nr.cooling|map(attribute='for')|join(', ') }}">
             Clear cooldown
           </button>
         </form>
         {% endif %}
         <form method="post" action="{{ url_for('delete_instruction', instruction_id=i.id) }}"
               onsubmit="return confirm('Delete this instruction?');">
-          <button class="btn btn-danger">Delete</button>
+          <button class="btn btn-danger small">Delete</button>
         </form>
+        </div>
       </td>
     </tr>
   {% endfor %}

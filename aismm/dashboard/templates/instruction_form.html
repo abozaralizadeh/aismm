@@ -53,6 +53,60 @@
     </div>
   </label>
 
+  {% set total = tool_groups | map(attribute='tools') | map('length') | sum %}
+  {% set picked = tool_groups | map(attribute='tools') | map('selectattr', 'checked')
+                              | map('list') | map('length') | sum %}
+  <div class="field">
+    <span class="field-label">Tools the agent may use</span>
+    <div class="multiselect" data-multiselect data-total="{{ total }}">
+      {# Lets the save route tell "picker submitted, nothing ticked" from
+         "picker wasn't on this form at all". #}
+      <input type="hidden" name="tools_present" value="1">
+      <button type="button" class="multiselect-toggle" data-ms-toggle aria-expanded="false">
+        <span data-ms-summary>{{ "All tools" if picked == total else picked ~ " of " ~ total ~ " tools" }}</span>
+        <span class="multiselect-caret" aria-hidden="true">▾</span>
+      </button>
+
+      <div class="multiselect-panel" data-ms-panel hidden>
+        <div class="multiselect-head">
+          <input type="search" class="multiselect-filter" data-ms-filter
+                 placeholder="Filter tools…" autocomplete="off">
+          <div class="multiselect-bulk">
+            <button type="button" class="linkish" data-ms-all>Select all</button>
+            <button type="button" class="linkish" data-ms-none>Clear</button>
+          </div>
+        </div>
+
+        <div class="multiselect-list" data-ms-list>
+          {% for group in tool_groups %}
+            <div class="multiselect-group" data-ms-group>
+              <div class="multiselect-group-title" data-ms-group-title>
+                {{ group.title }}
+                {% if group.blurb %}<span class="muted small">— {{ group.blurb }}</span>{% endif %}
+              </div>
+              {% for tool in group.tools %}
+                <label class="multiselect-option" data-ms-option data-name="{{ tool.name }}">
+                  <input type="checkbox" name="tools" value="{{ tool.name }}"
+                         {% if tool.checked or tool.always_on %}checked{% endif %}
+                         {% if tool.always_on %}data-ms-locked onclick="return false;"{% endif %}>
+                  <code>{{ tool.name }}</code>
+                  {% if tool.always_on %}<span class="muted small">always on</span>{% endif %}
+                </label>
+              {% endfor %}
+            </div>
+          {% endfor %}
+          <p class="muted small" data-ms-empty hidden>No tool matches that filter.</p>
+        </div>
+      </div>
+    </div>
+    <span class="hint">
+      Everything is on by default. Narrowing it keeps an instruction on task and gives a smaller
+      model fewer choices to weigh — a text-only account has no use for the video tools.
+      <code>publish</code> and <code>report_failure</code> stay on whatever you pick, since a run
+      has to be able to end. Leave all ticked and tools added in future are included automatically.
+    </span>
+  </div>
+
   <div class="grid-2">
     <label>Schedule
       <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
@@ -201,4 +255,75 @@
   <button class="btn btn-primary">Upload</button>
 </form>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Checkbox dropdown with a filter. Plain checkboxes underneath, so the form
+// submits normally and the page still works with scripting unavailable — the
+// panel is just always open in that case.
+document.querySelectorAll('[data-multiselect]').forEach(function (root) {
+  var toggle  = root.querySelector('[data-ms-toggle]');
+  var panel   = root.querySelector('[data-ms-panel]');
+  var filter  = root.querySelector('[data-ms-filter]');
+  var options = Array.prototype.slice.call(root.querySelectorAll('[data-ms-option]'));
+  var groups  = Array.prototype.slice.call(root.querySelectorAll('[data-ms-group]'));
+  var empty   = root.querySelector('[data-ms-empty]');
+  var summary = root.querySelector('[data-ms-summary]');
+  var total   = parseInt(root.dataset.total, 10);
+
+  function boxes() {
+    return options.map(function (o) { return o.querySelector('input'); });
+  }
+
+  function refreshSummary() {
+    var n = boxes().filter(function (b) { return b.checked; }).length;
+    summary.textContent = n === total ? 'All tools' : n + ' of ' + total + ' tools';
+  }
+
+  function open(state) {
+    panel.hidden = !state;
+    toggle.setAttribute('aria-expanded', String(state));
+    if (state) { filter.focus(); }
+  }
+
+  toggle.addEventListener('click', function () { open(panel.hidden); });
+
+  // Close on outside click / Escape, the way a native select behaves.
+  document.addEventListener('click', function (e) {
+    if (!root.contains(e.target)) { open(false); }
+  });
+  root.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { open(false); toggle.focus(); }
+  });
+
+  filter.addEventListener('input', function () {
+    var q = filter.value.trim().toLowerCase();
+    options.forEach(function (o) {
+      o.hidden = q !== '' && o.dataset.name.toLowerCase().indexOf(q) === -1;
+    });
+    // Hide a group heading whose every option filtered out.
+    groups.forEach(function (g) {
+      var visible = g.querySelectorAll('[data-ms-option]:not([hidden])').length;
+      g.hidden = visible === 0;
+    });
+    empty.hidden = groups.some(function (g) { return !g.hidden; });
+  });
+
+  // Bulk actions apply to what is currently VISIBLE, so they compose with the
+  // filter ("instagram" + Clear turns off just those).
+  function setVisible(state) {
+    options.filter(function (o) { return !o.hidden; }).forEach(function (o) {
+      var box = o.querySelector('input');
+      if (!box.hasAttribute('data-ms-locked')) { box.checked = state; }
+    });
+    refreshSummary();
+  }
+  root.querySelector('[data-ms-all]').addEventListener('click', function () { setVisible(true); });
+  root.querySelector('[data-ms-none]').addEventListener('click', function () { setVisible(false); });
+
+  root.addEventListener('change', refreshSummary);
+  refreshSummary();
+});
+</script>
 {% endblock %}

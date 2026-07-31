@@ -25,6 +25,32 @@
       <p class="muted small">This run predates prompt capture, so it wasn't recorded. Newer runs show it here.</p>
     {% endif %}
 
+    {% if instruction and account %}
+      <details class="prompt-block retry-block" {% if run.status.value == 'failed' %}open{% endif %}>
+        <summary>Retry this run
+          <span class="muted small">— send it again, with the prompt edited if you like</span>
+        </summary>
+        <form method="post" action="{{ url_for('retry_run', run_id=run.id) }}" class="form retry-form">
+          <label>Prompt to send
+            <textarea name="prompt" rows="14" class="mono small">{{ run.prompt }}</textarea>
+            <span class="hint">
+              Starts a <strong>new</strong> run against the same instruction and account — this one
+              stays as it is, so the failure is still readable. Sent <em>verbatim</em>: memory and the
+              operator note are not re-inlined, so what is in this box is exactly what the agent
+              gets. Useful for correcting a stale position or a bad brief without editing the
+              instruction. Empty the box to rebuild the prompt from the instruction as it is now.
+              {% if instruction.publish_mode.value == 'live' %}
+                <br><strong>This instruction is live</strong> — a successful retry posts for real.
+              {% endif %}
+            </span>
+          </label>
+          <div class="row">
+            <button class="btn btn-primary" type="submit">Retry run</button>
+          </div>
+        </form>
+      </details>
+    {% endif %}
+
     {% if instruction %}
       <details class="prompt-block">
         <summary>Instruction brief <span class="muted small">(as it is NOW — may have changed since)</span></summary>

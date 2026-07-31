@@ -185,6 +185,7 @@ class AzureStore(Store):
         return {
             "name": i.name, "brief": i.brief, "account_ids_json": i.account_ids_json,
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
+            "tools_json": i.tools_json,
             "publish_mode": i.publish_mode.value,
             "media_pref": i.media_pref.value, "enabled": i.enabled,
             "disclose_ai": i.disclose_ai,
@@ -197,6 +198,7 @@ class AzureStore(Store):
             id=e["RowKey"], name=e.get("name", ""), brief=e.get("brief", ""),
             account_ids_json=e.get("account_ids_json", "[]"), schedule=e.get("schedule", ""),
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
+            tools_json=e.get("tools_json", "[]"),
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
             media_pref=MediaPref(e.get("media_pref", "auto")),
             enabled=bool(e.get("enabled", True)),
