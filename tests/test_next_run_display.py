@@ -134,3 +134,106 @@ def test_cooldown_deadline_is_none_once_it_expires(store):
     assert cooldown.deadline(store.get_account(account.id)) is not None
     cooldown.clear(account, store)
     assert cooldown.deadline(account) is None
+
+
+# --- lifting a cooldown by hand ------------------------------------------------------ #
+
+@pytest.fixture()
+def dash(store, monkeypatch):
+    monkeypatch.setattr(app_module, "get_store", lambda: store)
+    monkeypatch.setattr(app_module.scheduler, "next_run_for", lambda _id: _utc(0.5))
+    monkeypatch.setattr(app_module.scheduler, "next_run_after", lambda _id, after: _utc(3))
+    application = app_module.create_app()
+    application.secret_key = "test"
+    return application
+
+
+def _cooling(store, hours=3):
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                external_id="1"), access_token="t")
+    instruction = store.upsert_instruction(Instruction(
+        name="Comicbook", schedule="every 1h", publish_mode=PublishMode.live,
+        account_ids_json=f'["{account.id}"]'))
+    cooldown.start(account, store, int(hours * 3600))
+    return instruction, account
+
+
+def test_clearing_lifts_the_cooldown(dash, store):
+    instruction, account = _cooling(store)
+    assert cooldown.is_active(store.get_account(account.id))
+
+    dash.test_client().post(f"/instructions/{instruction.id}/clear-cooldown")
+    assert cooldown.is_active(store.get_account(account.id)) is False
+
+
+def test_clearing_keeps_the_strike_count(dash, store):
+    """A human override is not evidence the platform stopped blocking.
+
+    Resetting the streak would restart the backoff at the base duration, so a
+    click-then-refused loop would never escalate.
+    """
+    instruction, account = _cooling(store)
+    cooldown.start(store.get_account(account.id), store, 3600)      # now at strike 2
+    before = cooldown.strike_count(store.get_account(account.id))
+
+    dash.test_client().post(f"/instructions/{instruction.id}/clear-cooldown")
+    assert cooldown.strike_count(store.get_account(account.id)) == before
+
+
+def test_the_next_refusal_resumes_the_escalation(dash, store):
+    """The consequence of keeping the strikes: no restart at 60 minutes."""
+    instruction, account = _cooling(store)
+    dash.test_client().post(f"/instructions/{instruction.id}/clear-cooldown")
+
+    held = cooldown.start(store.get_account(account.id), store, 3600)
+    assert held > 3600, "backoff restarted from the base instead of resuming"
+
+
+def test_the_button_appears_only_while_a_cooldown_is_active(dash, store):
+    instruction, account = _cooling(store)
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "Clear cooldown" in page
+
+    cooldown.clear(store.get_account(account.id), store)
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "Clear cooldown" not in page
+
+
+def test_the_button_warns_before_lifting(dash, store):
+    """It can extend a real block, so it must not be a silent one-click action."""
+    _instruction, _account = _cooling(store)
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "confirm(" in page
+    assert "can extend the block" in page
+
+
+def test_clearing_a_clean_instruction_says_so(dash, store):
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="x", external_id="1"),
+        access_token="t")
+    instruction = store.upsert_instruction(Instruction(
+        name="Clean", publish_mode=PublishMode.live,
+        account_ids_json=f'["{account.id}"]'))
+    response = dash.test_client().post(
+        f"/instructions/{instruction.id}/clear-cooldown", follow_redirects=True)
+    assert b"No active cooldown" in response.data
+
+
+def test_clearing_an_unknown_instruction_is_404(dash):
+    assert dash.test_client().post("/instructions/nope/clear-cooldown").status_code == 404
+
+
+def test_a_dry_run_instruction_still_shows_its_cooling_account(dash, store):
+    """dry_run never skips, but it shares the account with live instructions."""
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="shared", external_id="1"),
+        access_token="t")
+    instruction = store.upsert_instruction(Instruction(
+        name="Preview", publish_mode=PublishMode.dry_run,
+        account_ids_json=f'["{account.id}"]'))
+    cooldown.start(account, store, 3600)
+
+    info = app_module._next_run_info(store.get_instruction(instruction.id), store)
+    assert info["skipped"] is False          # dry_run is not blocked...
+    assert info["cooling"]                   # ...but the cooldown is still visible

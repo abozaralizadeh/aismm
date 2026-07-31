@@ -330,6 +330,36 @@ def create_app() -> Flask:
         flash("Run started — check Runs in a moment.", "success")
         return redirect(url_for("runs"))
 
+    @app.route("/instructions/<instruction_id>/clear-cooldown", methods=["POST"])
+    def clear_instruction_cooldown(instruction_id):
+        """Lift the publishing cooldown on this instruction's accounts, by hand.
+
+        An override, not a fix: the cooldown exists because the platform refused
+        for volume reasons, and knocking again before it has really lifted is what
+        makes Meta extend the block. The strike count is deliberately kept, so if
+        the next attempt is refused too the backoff resumes where it left off
+        instead of restarting at the base duration.
+        """
+        store = get_store()
+        instruction = store.get_instruction(instruction_id)
+        if not instruction:
+            abort(404)
+
+        lifted = []
+        for account_id in instruction.account_ids:
+            account = store.get_account(account_id)
+            if account and cooldown.clear(account, store, reset_strikes=False):
+                lifted.append(account.handle or account.external_id)
+
+        if lifted:
+            app.logger.warning("Publishing cooldown cleared by hand for %s", ", ".join(lifted))
+            flash(f"Cooldown cleared for {', '.join(lifted)}. If the platform is still "
+                  f"blocking, the next attempt will be refused and paused for longer.",
+                  "success")
+        else:
+            flash("No active cooldown on this instruction's accounts.", "success")
+        return redirect(request.referrer or url_for("instructions"))
+
     # ---- instruction attachments ----------------------------------------- #
     MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
@@ -524,13 +554,15 @@ def _next_run_info(instruction, store) -> dict:
     since one free account still makes the fire worth firing.
     """
     fires_at = scheduler.next_run_for(instruction.id)
-    info = {"at": fires_at, "blocked_until": None, "skipped": False}
-    if not fires_at or instruction.publish_mode is not PublishMode.live:
+    accounts = [a for a in (store.get_account(i) for i in instruction.account_ids) if a]
+    # Listed whatever the publish mode, so the operator can always see (and lift)
+    # a cooldown — a dry_run instruction still shares its account with live ones.
+    info = {"at": fires_at, "blocked_until": None, "skipped": False,
+            "cooling": [{"handle": a.handle or a.external_id, "for": cooldown.describe(a)}
+                        for a in accounts if cooldown.is_active(a)]}
+    if not fires_at or instruction.publish_mode is not PublishMode.live or not accounts:
         return info
 
-    accounts = [a for a in (store.get_account(i) for i in instruction.account_ids) if a]
-    if not accounts:
-        return info
     deadlines = [cooldown.deadline(a) for a in accounts]
     if not all(deadlines):
         return info                      # at least one account can still publish

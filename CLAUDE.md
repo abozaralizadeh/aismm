@@ -305,7 +305,10 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   right as the cooldown clears and knocks again, which — per the point above — extends the real
   block. Each `RateLimited` bumps a strike counter (`STRIKES_KEY`, next to the deadline in
   `account.meta`); a clean, non-reconciled publish resets it via `cooldown.clear`, so one bad hour
-  doesn't escalate every isolated refusal for the rest of the account's life. A **reconciled**
+  doesn't escalate every isolated refusal for the rest of the account's life. The dashboard's
+  **Clear cooldown** button calls `cooldown.clear(..., reset_strikes=False)` — a human override is
+  not evidence the platform stopped blocking, and resetting the streak there would let a
+  clear-then-refused loop restart at the base duration forever. A **reconciled**
   publish (the post landed despite the error) does NOT reset the streak — Meta is still signalling a
   limit even though this one got through.
 - **The agent must write memory AFTER publish returns**, not before. The prompt used to say

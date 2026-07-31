@@ -980,6 +980,13 @@ publishing paused until 10:39 UTC — earlier fires are skipped
 Only `live` mode is affected — `dry_run` calls no platform API and runs regardless — and only when
 *every* target account is blocked, since one free account still makes the fire worth firing.
 
+A **Clear cooldown** button appears next to *Run now* while any of the instruction's accounts is
+paused, so you can override the wait — after fixing the schedule, say, or when you know the block
+has lifted. It asks for confirmation first, because it is an override rather than a fix: if the
+platform is still blocking, posting again now is exactly what extends the block. The **strike count
+is deliberately kept**, so a refusal right after clearing resumes the escalation (2h, 4h, …) instead
+of restarting at 60 minutes — otherwise a clear-then-refused loop would never back off at all.
+
 ### Files attached to an instruction
 
 An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):

@@ -102,15 +102,26 @@ def start(account, store, seconds: int, *, reason: str = "") -> int:
     return held
 
 
-def clear(account, store) -> None:
-    """Lift the cooldown and reset the strike streak (a clean publish got through)."""
+def clear(account, store, *, reset_strikes: bool = True) -> bool:
+    """Lift the cooldown. Returns whether anything was actually cleared.
+
+    ``reset_strikes`` is true for the case this was built for — a clean publish
+    got through, so the platform is evidently happy again. A HUMAN lifting the
+    cooldown by hand passes false: they are overriding the wait, not providing
+    evidence that the block has gone, and the escalation must keep its place so
+    the next refusal doesn't restart at the base duration.
+    """
     meta = dict(account.meta or {})
-    had_either = meta.pop(META_KEY, None) is not None or meta.pop(STRIKES_KEY, None) is not None
-    if had_either:
+    cleared = meta.pop(META_KEY, None) is not None
+    if reset_strikes:
+        cleared = meta.pop(STRIKES_KEY, None) is not None or cleared
+    if cleared:
         account.set_meta(meta)
         store.upsert_account(account)
-        logger.info("Cleared the publishing cooldown for %s",
-                    account.handle or account.external_id)
+        logger.info("Cleared the publishing cooldown for %s%s",
+                    account.handle or account.external_id,
+                    "" if reset_strikes else " (strike count kept)")
+    return cleared
 
 
 def describe(account) -> str:
