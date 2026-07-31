@@ -83,6 +83,11 @@ _BLOCKED_SUBCODES = {2207051}
 _GONE_CODES = {803}
 _GONE_SUBCODES = {33}
 
+# How much of the profile grid to scan when deciding whether a post was archived.
+# Graph has no is_archived field; archived posts are simply missing from this
+# listing, so the scan depth is also how far back "archived" can be detected.
+_GRID_SCAN_LIMIT = 100
+
 # How far back to look when checking whether a failed media_publish actually
 # published. Generous enough to cover a slow container, short enough that an
 # earlier post of the same caption can't be mistaken for this one.
@@ -527,31 +532,69 @@ class Instagram(SocialPlatform):
     DEFAULT_MEDIA_METRICS = "reach,likes,comments,saved,shares"
     DEFAULT_ACCOUNT_METRICS = "reach,follower_count"
 
-    async def post_exists(self, access_token: str, external_id: str) -> bool | None:
-        """Is this media id still on the account, or was it deleted by hand?
+    async def post_exists(self, access_token: str, account: Account,
+                          external_id: str) -> bool | None:
+        """Is this media still on the profile grid — not deleted, not archived?
 
-        Graph answers a deleted (or otherwise unreachable) media id with an error
-        whose code is 100 / subcode 33 — "does not exist, cannot be loaded due to
-        missing permissions, or does not support this operation". Anything else
-        (rate limit, network, token trouble) is reported as ``None`` — "unknown" —
-        so the duplicate guard stays closed rather than opening on a bad connection.
+        Two signals, because Graph offers no "is_archived" field:
+
+        1. ``GET /{media-id}`` — a DELETED post answers with code 803 / subcode 33.
+           An archived one still resolves, so this alone cannot see archiving.
+        2. ``GET /{ig-user-id}/media`` — the profile listing **excludes archived
+           posts**. A media id that resolves but is absent from the listing has
+           been taken off the grid.
+
+        The trap in signal 2 is paging: the listing is one bounded page, so an old
+        post that is still live simply isn't in it. Absence therefore only means
+        "archived" when the post is NEWER than the oldest row we actually looked
+        at — otherwise we never covered its date and the honest answer is ``None``.
+
+        Anything else (rate limit, network, token trouble) is ``None`` too, so the
+        caller decides what an unknown means rather than this guessing.
         """
         if not external_id:
             return None
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(f"{GRAPH}/{external_id}", params={"fields": "id"},
+                r = await client.get(f"{GRAPH}/{external_id}",
+                                     params={"fields": "id,timestamp"},
                                      headers=_auth(access_token))
-            if r.status_code < 400:
+                if r.status_code >= 400:
+                    exc = httpx.HTTPStatusError("lookup failed", request=r.request,
+                                                response=r)
+                    message, err = _graph_error(exc)
+                    if (err.get("code") in _GONE_CODES
+                            or err.get("error_subcode") in _GONE_SUBCODES):
+                        logger.info("Instagram media %s was deleted (%s)",
+                                    external_id, message)
+                        return False
+                    logger.info("Could not determine whether media %s still exists: %s",
+                                external_id, message)
+                    return None
+                posted_at = _parse_graph_time(r.json().get("timestamp"))
+
+                listing = await client.get(
+                    f"{GRAPH}/{account.external_id}/media",
+                    params={"fields": "id,timestamp", "limit": _GRID_SCAN_LIMIT},
+                    headers=_auth(access_token))
+            if listing.status_code >= 400:
+                logger.info("Media exists but the profile listing is unreadable (HTTP %s); "
+                            "treating %s as still live", listing.status_code, external_id)
                 return True
-            exc = httpx.HTTPStatusError("lookup failed", request=r.request, response=r)
-            message, err = _graph_error(exc)
-            if err.get("code") in _GONE_CODES or err.get("error_subcode") in _GONE_SUBCODES:
-                logger.info("Instagram media %s is no longer on the account (%s)",
-                            external_id, message)
+
+            rows = listing.json().get("data", [])
+            if any(row.get("id") == external_id for row in rows):
+                return True
+
+            stamps = [s for s in (_parse_graph_time(row.get("timestamp")) for row in rows) if s]
+            oldest = min(stamps) if stamps else None
+            if posted_at and oldest and posted_at >= oldest:
+                # Inside the window we scanned, yet not on the grid -> archived.
+                logger.info("Instagram media %s resolves but is absent from the profile "
+                            "listing — treating it as ARCHIVED (not live)", external_id)
                 return False
-            logger.info("Could not determine whether media %s still exists: %s",
-                        external_id, message)
+            logger.info("Media %s is older than the %d posts scanned; cannot tell whether "
+                        "it is archived", external_id, len(rows))
             return None
         except Exception as exc:  # noqa: BLE001 - never fail a publish over this check
             logger.warning("Media existence check for %s failed: %s", external_id, exc)

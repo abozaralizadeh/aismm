@@ -132,15 +132,16 @@ async def _confirm_duplicate(account, store, platform, digests: list[str]):
         if external_id:
             try:
                 access_token, _refresh = store.get_tokens(account.id)
-                alive = (await platform.post_exists(access_token, external_id)
+                alive = (await platform.post_exists(access_token, account, external_id)
                          if access_token else None)
             except Exception as exc:  # noqa: BLE001 - verification must never raise
                 logger.warning("Could not verify whether %s is still live: %s",
                                external_id, exc)
 
         if alive is False:
-            logger.info("Ledger entry for %s refers to a post that is no longer on %s — "
-                        "allowing this content to be published again", external_id,
+            logger.info("Ledger entry for %s refers to a post that is no longer on the "
+                        "%s grid (deleted or archived) — allowing this content to be "
+                        "published again", external_id,
                         account.handle or account.external_id)
             publish_ledger.forget(account, store, entry.get("fp", ""))
             continue                    # another item may also be a duplicate

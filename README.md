@@ -806,9 +806,13 @@ Two deterministic guards now sit beside the publish-mode gate, where the AI disc
   every run, so identical art with fresh words would otherwise slip through. Approving a staged post
   goes through the same check.
 - **The account itself has the final say.** The ledger is only a record of what AISMM posted — it
-  can't know you deleted something in the Instagram app. So before a refusal actually blocks a post,
-  the recorded media id is checked against the live account: **if the post is gone, the entry is
-  dropped and the content publishes normally.** Only the refusal path pays for that lookup.
+  can't know you removed something in the Instagram app. So before a refusal actually blocks a post,
+  the recorded media id is checked against the live account: **if the post is deleted _or archived_,
+  the entry is dropped and the content publishes normally.** Archiving something is therefore a
+  perfectly good way to tell AISMM "post this again". Only the refusal path pays for that lookup.
+  (Archived detection scans the most recent 100 posts, since Graph has no `is_archived` field and
+  archived posts are simply missing from the profile listing — beyond that depth the answer is
+  "can't tell" rather than a guess.)
 - **If that check can't complete** (rate limited, network trouble), the post goes out anyway. For
   sequential content — a comic posted panel by panel — a wrongly skipped item breaks the running
   order and the gap is permanent, whereas a duplicate is two taps to delete. Set

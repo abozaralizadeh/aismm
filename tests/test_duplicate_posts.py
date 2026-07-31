@@ -28,6 +28,7 @@ from aismm.models import Account, Instruction, PlatformName, PublishMode, Run, R
 from aismm.tools.publish_tool import perform_publish
 
 IG_USER = "17841400000000000"
+ACCOUNT = Account(platform=PlatformName.instagram, external_id=IG_USER)
 PANEL = b"\xff\xd8\xff" + b"panel-2026-05-17" * 64
 OTHER = b"\xff\xd8\xff" + b"panel-2026-05-18" * 64
 
@@ -62,7 +63,7 @@ def live(store, monkeypatch, tmp_path):
         return PublishResult(url="https://www.instagram.com/p/ABC/", external_id="17999",
                              raw={})
 
-    async def post_exists(access_token, external_id):
+    async def post_exists(access_token, account, external_id):
         return True          # the earlier post really is still on the account
 
     monkeypatch.setattr(platform, "publish", publish)
@@ -622,7 +623,7 @@ def deletable(store, monkeypatch, tmp_path):
         state["on_account"].add(media_id)
         return PublishResult(url=f"https://i/p/{media_id}", external_id=media_id, raw={})
 
-    async def post_exists(access_token, external_id):
+    async def post_exists(access_token, account, external_id):
         if state["answer"] == "unknown":
             return None
         return external_id in state["on_account"]
@@ -793,7 +794,7 @@ def test_post_exists_reports_gone_for_a_deleted_media_id(monkeypatch):
 
     monkeypatch.setattr(instagram.httpx, "AsyncClient", lambda **kw: _Client())
     platform = registry.get_platform(PlatformName.instagram)
-    assert asyncio.run(platform.post_exists("token", "1")) is False
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "1")) is False
 
 
 def test_post_exists_reports_unknown_for_a_rate_limit(monkeypatch):
@@ -818,7 +819,7 @@ def test_post_exists_reports_unknown_for_a_rate_limit(monkeypatch):
 
     monkeypatch.setattr(instagram.httpx, "AsyncClient", lambda **kw: _Client())
     platform = registry.get_platform(PlatformName.instagram)
-    assert asyncio.run(platform.post_exists("token", "1")) is None
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "1")) is None
 
 
 def test_a_platform_without_the_check_keeps_ledger_only_behaviour():
@@ -826,4 +827,110 @@ def test_a_platform_without_the_check_keeps_ledger_only_behaviour():
     from aismm.platforms import registry
 
     twitter = registry.get_platform(PlatformName.twitter)
-    assert asyncio.run(twitter.post_exists("token", "1")) is None
+    assert asyncio.run(twitter.post_exists("token", ACCOUNT, "1")) is None
+
+
+# --- archived counts as "not live" --------------------------------------------------- #
+# Graph has no is_archived field. An archived post still resolves by id but is
+# dropped from the profile listing, so absence from the listing is the signal —
+# guarded by a timestamp check so an old-but-live post isn't misread as archived.
+
+def _graph_pair(monkeypatch, media_response, listing_response):
+    """Stub the two GETs post_exists makes, in order."""
+    from aismm.platforms import instagram
+
+    calls = {"n": 0}
+
+    class _Resp:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self._payload = payload
+            self.request = httpx.Request("GET", "https://graph.facebook.com/v21.0/x")
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **kw):
+            calls["n"] += 1
+            status, payload = media_response if calls["n"] == 1 else listing_response
+            return _Resp(status, payload)
+
+    monkeypatch.setattr(instagram.httpx, "AsyncClient", lambda **kw: _Client())
+
+
+def _stamp(hours_ago):
+    moment = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S+0000")
+
+
+def test_an_archived_post_is_reported_as_not_live(monkeypatch):
+    """Resolves by id, but absent from the grid listing it should appear in."""
+    from aismm.platforms import registry
+
+    _graph_pair(
+        monkeypatch,
+        (200, {"id": "17999", "timestamp": _stamp(5)}),
+        (200, {"data": [{"id": "other-1", "timestamp": _stamp(1)},
+                        {"id": "other-2", "timestamp": _stamp(20)}]}),
+    )
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is False
+
+
+def test_a_post_on_the_grid_is_reported_as_live(monkeypatch):
+    from aismm.platforms import registry
+
+    _graph_pair(
+        monkeypatch,
+        (200, {"id": "17999", "timestamp": _stamp(5)}),
+        (200, {"data": [{"id": "17999", "timestamp": _stamp(5)},
+                        {"id": "other", "timestamp": _stamp(1)}]}),
+    )
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is True
+
+
+def test_a_post_older_than_the_scanned_window_is_unknown_not_archived(monkeypatch):
+    """The paging trap: we simply never looked back far enough to say."""
+    from aismm.platforms import registry
+
+    _graph_pair(
+        monkeypatch,
+        (200, {"id": "17999", "timestamp": _stamp(500)}),      # much older
+        (200, {"data": [{"id": "a", "timestamp": _stamp(1)},
+                        {"id": "b", "timestamp": _stamp(10)}]}),
+    )
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is None
+
+
+def test_an_unreadable_listing_leaves_the_post_treated_as_live(monkeypatch):
+    """The media itself resolved; without the grid we must not claim it is archived."""
+    from aismm.platforms import registry
+
+    _graph_pair(
+        monkeypatch,
+        (200, {"id": "17999", "timestamp": _stamp(5)}),
+        (403, {"error": {"message": "Application request limit reached", "code": 4}}),
+    )
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is True
+
+
+def test_an_empty_grid_with_no_timestamps_is_unknown(monkeypatch):
+    from aismm.platforms import registry
+
+    _graph_pair(
+        monkeypatch,
+        (200, {"id": "17999", "timestamp": _stamp(5)}),
+        (200, {"data": []}),
+    )
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is None

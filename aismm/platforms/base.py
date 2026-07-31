@@ -137,16 +137,19 @@ class SocialPlatform(ABC):
         both — the publish tool checks ``Capabilities`` before calling.
         """
 
-    async def post_exists(self, access_token: str, external_id: str) -> bool | None:
-        """Is this post still live on the platform?
+    async def post_exists(self, access_token: str, account: Account,
+                          external_id: str) -> bool | None:
+        """Is this post still PUBLICLY on the account?
 
-        ``True`` yes, ``False`` it is gone (deleted), ``None`` cannot tell — either
-        this platform has no way to check, or the check itself failed.
+        ``True`` yes, ``False`` no — deleted **or archived**, ``None`` cannot tell
+        (this platform has no way to check, or the check itself failed).
+
+        "Archived" counts as gone on purpose: a post the human pulled off the grid
+        is not something followers can see, so its content should be publishable
+        again — the same reasoning as a deletion.
 
         The [publish ledger](../publish_ledger.py) is only a local *record* of what
-        we posted; the account itself is the authority. A human who deletes a post
-        by hand must be able to have it published again, so the ledger asks here
-        before refusing a duplicate. The default is ``None`` so a platform without
-        an implementation keeps the ledger-only behaviour.
+        we posted; the account itself is the authority. The default is ``None`` so
+        a platform without an implementation keeps the ledger-only behaviour.
         """
         return None

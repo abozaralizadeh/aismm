@@ -315,9 +315,12 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 - **The ACCOUNT is the authority on what is published, not the ledger.** The ledger records what we
   posted; it cannot know a human deleted a post by hand, and a stale entry would make that content
   unpublishable forever. So a ledger hit is verified against the platform before it refuses
-  (`publish_tool._confirm_duplicate` → `SocialPlatform.post_exists`, which Instagram implements via
-  `GET /{media-id}`; Graph answers a deleted id with code 803 / subcode 33). Gone → `forget` the
-  entry and publish. Only the rare refusal path pays for the call. `None` means *cannot tell* (no
+  (`publish_tool._confirm_duplicate` → `SocialPlatform.post_exists`). Gone → `forget` the entry and
+  publish. **Archived counts as gone**, which needs TWO Graph calls because there is no
+  `is_archived` field: `GET /{media-id}` (a *deleted* id answers code 803 / subcode 33; an archived
+  one still resolves) plus `GET /{ig-user-id}/media`, whose listing **excludes archived posts**.
+  Absence from that listing only means archived when the post is newer than the oldest row scanned —
+  otherwise paging simply never reached its date, and the answer is `None`, not `False`. Only the rare refusal path pays for the call. `None` means *cannot tell* (no
   support, rate limited, network) and **publishes anyway** by default: for sequential content a
   wrongly skipped item breaks the running order permanently, while a duplicate is deletable.
   `PUBLISH_DUPLICATE_GUARD_STRICT=1` restores fail-closed. `_confirm_duplicate` returns
