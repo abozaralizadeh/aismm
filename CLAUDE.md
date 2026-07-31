@@ -402,11 +402,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   `profile_views`, non-Reels `video_views`), so `DEFAULT_*_METRICS` stays minimal and overridable.
   Comments/insights need the `instagram_manage_comments` / `instagram_manage_insights` scopes — an
   account connected before those were added must be reconnected.
-- **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so an optional
-  analytics permission blocks publishing too. `Instagram.scopes` is a property splitting
-  `REQUIRED_SCOPES` (what publishing needs) from `OPTIONAL_SCOPES`; `instagram_manage_insights`
-  needs App Review and is **not** in `DEFAULT_SCOPES`. `INSTAGRAM_SCOPES` overrides the list
-  outright once an app is approved. Never add a review-gated scope to the default set.
+- **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so a review-gated
+  analytics permission blocks publishing too — that is what `Invalid Scopes:
+  instagram_manage_insights` was. `Instagram.scopes` is a property splitting `REQUIRED_SCOPES` (what
+  publishing needs) from `OPTIONAL_SCOPES` (comments + insights, both App-Review gated).
+  `DEFAULT_SCOPES` is currently all of them, so an app **without** insights approval cannot connect
+  until `INSTAGRAM_SCOPES` strips it back — that env var replaces the list outright and is the
+  documented escape hatch. If connect failures recur, the fix is to drop the review-gated scopes
+  from the default, not to add retry logic: the refusal happens on Meta's page, before the callback,
+  so AISMM never sees it.
 - **Instagram needs a PUBLIC media URL** — it fetches media, no binary upload. Assets are served at
   `DASHBOARD_BASE_URL<REVERSE_PROXY_PREFIX>/assets/<file>`; the IG integration raises if that
   resolves to localhost. X / YouTube / TikTok upload bytes directly.

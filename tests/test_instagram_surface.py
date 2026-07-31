@@ -310,29 +310,27 @@ def test_comment_scopes_are_requested():
     assert "instagram_manage_comments" in get_platform(PlatformName.instagram).scopes
 
 
-def test_insights_is_not_requested_by_default():
-    """Meta rejects the WHOLE dialog on one unavailable scope.
+def test_insights_is_requested_by_default():
+    """Deliberate: the default asks for the full set, insights included.
 
-    ``instagram_manage_insights`` needs App Review, and an app without it got
-    "Invalid Scopes: instagram_manage_insights" — which blocked connecting at
-    all, including publishing, which does not need insights. It is opt-in now.
+    Meta rejects the WHOLE dialog on one unavailable scope, so an app that has
+    not been granted `instagram_manage_insights` gets "Invalid Scopes: …" and
+    cannot connect at all — the escape hatch is INSTAGRAM_SCOPES, tested below.
     """
-    assert "instagram_manage_insights" not in get_platform(PlatformName.instagram).scopes
+    assert "instagram_manage_insights" in get_platform(PlatformName.instagram).scopes
 
 
-def test_insights_can_be_opted_into(monkeypatch):
+def test_a_publish_only_app_can_strip_the_review_gated_scopes(monkeypatch):
+    """The recovery path when the dialog refuses: ask for less."""
     import dataclasses
 
     from aismm import config as config_module
-    from aismm.platforms import instagram as ig_module
 
-    full = " ".join(Instagram.REQUIRED_SCOPES + Instagram.OPTIONAL_SCOPES)
-    monkeypatch.setattr(ig_module, "settings",
-                        dataclasses.replace(config_module.settings, instagram_scopes=full),
-                        raising=False)
-    monkeypatch.setattr(config_module, "settings",
-                        dataclasses.replace(config_module.settings, instagram_scopes=full))
-    assert "instagram_manage_insights" in get_platform(PlatformName.instagram).scopes
+    monkeypatch.setattr(config_module, "settings", dataclasses.replace(
+        config_module.settings, instagram_scopes=" ".join(Instagram.REQUIRED_SCOPES)))
+    scopes = get_platform(PlatformName.instagram).scopes
+    assert "instagram_manage_insights" not in scopes
+    assert "instagram_content_publish" in scopes      # can still publish
 
 
 def test_the_scope_override_accepts_commas_or_spaces(monkeypatch):

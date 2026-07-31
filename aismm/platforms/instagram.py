@@ -209,14 +209,16 @@ class Instagram(SocialPlatform):
         "pages_read_engagement",
         "business_management",
     )
-    # Needs App Review before an app may even ask for it. Comments is usually
-    # granted with Standard Access; insights commonly is not, which is the scope
-    # that has actually blocked connections in the wild.
+    # Engagement/analytics. Both need App Review before an app may ask for them,
+    # and `instagram_manage_insights` is the one that has actually blocked
+    # connections in the wild ("Invalid Scopes: instagram_manage_insights") —
+    # it is in the default set, so an app without it must strip it back out via
+    # INSTAGRAM_SCOPES until App Review grants it.
     OPTIONAL_SCOPES = (
         "instagram_manage_comments",   # reply/hide/delete comments
         "instagram_manage_insights",   # media + account metrics
     )
-    DEFAULT_SCOPES = REQUIRED_SCOPES + ("instagram_manage_comments",)
+    DEFAULT_SCOPES = REQUIRED_SCOPES + OPTIONAL_SCOPES
 
     @property
     def scopes(self) -> list[str]:  # type: ignore[override]

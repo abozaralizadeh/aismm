@@ -771,26 +771,26 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 
 > **Scopes, and why one bad one breaks everything.** Meta rejects the *entire* login dialog if your
 > app cannot request even a single scope you ask for — `Invalid Scopes: instagram_manage_insights` —
-> so an optional analytics permission takes publishing down with it. AISMM therefore asks only for
-> what publishing needs plus comments:
+> which blocks connecting at all, **including publishing**, which doesn't need insights. The default
+> asks for the full set:
 >
 > ```
-> instagram_basic  instagram_content_publish  pages_show_list
-> pages_read_engagement  business_management  instagram_manage_comments
+> instagram_basic  instagram_content_publish  pages_show_list  pages_read_engagement
+> business_management  instagram_manage_comments  instagram_manage_insights
 > ```
 >
-> `instagram_manage_insights` needs App Review and is **not requested by default**. Once it's
-> approved, add it via `INSTAGRAM_SCOPES` in `.env` (commas or spaces, and it replaces the list
-> outright):
+> Both `instagram_manage_comments` and `instagram_manage_insights` need **App Review**. If your app
+> hasn't been granted insights, the dialog refuses everything — set `INSTAGRAM_SCOPES` in `.env` to
+> the list minus that scope (commas or spaces; it replaces the default outright):
 >
 > ```bash
-> INSTAGRAM_SCOPES="instagram_basic instagram_content_publish pages_show_list pages_read_engagement business_management instagram_manage_comments instagram_manage_insights"
+> INSTAGRAM_SCOPES="instagram_basic instagram_content_publish pages_show_list pages_read_engagement business_management instagram_manage_comments"
 > ```
 >
-> If a connect is still refused, strip `INSTAGRAM_SCOPES` back to the four publishing permissions and
-> add the rest as review grants them. An **already-connected account must be reconnected** for any
-> scope change to take effect — until then those tools return a permissions error. Reconnect from
-> **Accounts → Connect**.
+> The bare minimum that can still publish is the first four. Check what your app actually has under
+> **App Review → Permissions and Features** and match the list to it. An **already-connected account
+> must be reconnected** for any scope change to take effect — until then those tools return a
+> permissions error. Reconnect from **Accounts → Connect**.
 
 > **Replies are not covered by the publish mode.** `dry_run`/`approval` gate *posts*; a reply or a
 > moderation action happens immediately. That's deliberate — an approval queue for comment replies
