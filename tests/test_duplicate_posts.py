@@ -62,16 +62,33 @@ def live(store, monkeypatch, tmp_path):
         return PublishResult(url="https://www.instagram.com/p/ABC/", external_id="17999",
                              raw={})
 
-    monkeypatch.setattr(platform, "publish", publish)
+    async def post_exists(access_token, external_id):
+        return True          # the earlier post really is still on the account
 
-    def run_publish(data: bytes, caption="Panel 4 of 2026-05-17", placement="feed"):
-        path = tmp_path / f"panel-{len(calls)}-{hash(data) & 0xffff}.jpg"
-        path.write_bytes(data)
+    monkeypatch.setattr(platform, "publish", publish)
+    # Without this the guard would call the real Graph API to verify a refusal.
+    monkeypatch.setattr(platform, "post_exists", post_exists)
+
+    def run_publish(data, caption="Panel 4 of 2026-05-17", placement="feed"):
+        """Publish one image, or a carousel when ``data`` is a list of byte strings.
+
+        Each call writes to a FRESH path, mirroring the real agent: it re-downloads
+        the panel every run, so identical content lands at a different filename.
+        The guard must key on the bytes, never the path.
+        """
+        blobs = data if isinstance(data, list) else [data]
+        paths = []
+        for index, blob in enumerate(blobs):
+            path = tmp_path / f"panel-{len(calls)}-{index}-{hash(blob) & 0xffff}.jpg"
+            path.write_bytes(blob)
+            paths.append(str(path))
+
         run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
         state = {"account": store.get_account(account.id), "instruction": instruction,
                  "store": store, "run": run, "assets": []}
-        result = asyncio.run(perform_publish(state, caption, asset_path=str(path),
-                                             media_kind="image", placement=placement))
+        result = asyncio.run(perform_publish(state, caption, asset_path=paths[0],
+                                             media_kind="image", placement=placement,
+                                             asset_paths=paths if len(paths) > 1 else None))
         return result, run, state
 
     return run_publish, calls, account, store
@@ -97,7 +114,7 @@ def test_the_refusal_tells_the_agent_to_advance_its_memory(live):
     run_publish(PANEL)
     second, _run, _state = run_publish(PANEL)
     assert "update_memory" in second["message"]
-    assert "ALREADY published" in second["message"]
+    assert "ALREADY live" in second["message"]
     assert second["url"] == "https://www.instagram.com/p/ABC/"
 
 
@@ -159,7 +176,13 @@ def test_fingerprint_is_stable_for_identical_bytes(tmp_path, monkeypatch):
     assert publish_ledger.fingerprint([str(one)]) != publish_ledger.fingerprint([str(three)])
 
 
-def test_a_carousel_fingerprints_all_of_its_items(tmp_path, monkeypatch):
+def test_a_carousel_yields_one_fingerprint_per_item(tmp_path, monkeypatch):
+    """NOT one combined digest for the whole post.
+
+    Hashing all items together is what let the duplicate through: a panel posted
+    alone and then re-posted as item 1 of a carousel produced two different
+    combined digests, so the guard never fired.
+    """
     import dataclasses
 
     from aismm import assets, config as config_module
@@ -169,9 +192,13 @@ def test_a_carousel_fingerprints_all_of_its_items(tmp_path, monkeypatch):
     one, two = tmp_path / "a.jpg", tmp_path / "b.jpg"
     one.write_bytes(PANEL)
     two.write_bytes(OTHER)
-    both = publish_ledger.fingerprint([str(one), str(two)])
-    assert both != publish_ledger.fingerprint([str(one)])
-    assert both != publish_ledger.fingerprint([str(two)])
+
+    both = publish_ledger.fingerprints([str(one), str(two)])
+    assert len(both) == 2
+    # Each item's fingerprint is the SAME whether it is posted alone or in a set.
+    assert both[0] == publish_ledger.fingerprints([str(one)])[0]
+    assert both[1] == publish_ledger.fingerprints([str(two)])[0]
+    assert both[0] != both[1]
 
 
 def test_an_unreadable_asset_does_not_block_publishing():
@@ -479,3 +506,324 @@ def test_non_instagram_accounts_are_ignored(store):
         Account(platform=PlatformName.twitter, external_id="x"), access_token="t")
     assert reconcile._published_posts(account, store) == []
     assert reconcile.reconcile_all(store) == []
+
+
+# --- the carousel hole: an item already posted alone -------------------------------- #
+# Live regression. A comic panel was published as a single post (467662-byte JPEG),
+# then three hours later published AGAIN as item 1 of a two-photo carousel. Both
+# runs recorded a fingerprint and neither matched the other, because the ledger
+# hashed every item of a post into ONE digest. The unit a follower sees repeated
+# is the ITEM, so that is what must be fingerprinted.
+
+def test_an_item_posted_alone_cannot_return_inside_a_carousel(live):
+    run_publish, calls, _account, _store = live
+    first, _run, _state = run_publish(PANEL)
+    assert first["status"] == "published"
+
+    second, run, state = run_publish([PANEL, OTHER])          # carousel reusing it
+    assert second["error"] == "already_published"
+    assert len(calls) == 1, "the carousel was published despite reusing a posted panel"
+    assert state["result"]["duplicate"] is True
+
+
+def test_the_refusal_names_which_item_was_the_duplicate(live):
+    run_publish, _calls, _account, _store = live
+    run_publish(PANEL)
+    second, _run, _state = run_publish([OTHER, PANEL])
+    assert "Item 2 of 2" in second["message"]
+    assert "ALREADY live" in second["message"]
+
+
+def test_an_item_from_a_carousel_cannot_be_reposted_alone(live):
+    """The mirror case — every item of a carousel is remembered individually."""
+    run_publish, calls, _account, _store = live
+    run_publish([PANEL, OTHER])
+    second, _run, _state = run_publish(OTHER)
+    assert second["error"] == "already_published"
+    assert len(calls) == 1
+
+
+def test_a_carousel_of_entirely_new_items_still_publishes(live):
+    run_publish, calls, _account, _store = live
+    run_publish(PANEL)
+    third = b"\xff\xd8\xff" + b"panel-2026-05-19" * 64
+    second, _run, _state = run_publish([OTHER, third])
+    assert second["status"] == "published"
+    assert len(calls) == 2
+
+
+def test_every_carousel_item_lands_in_the_ledger(live):
+    run_publish, _calls, account, store = live
+    run_publish([PANEL, OTHER])
+    entries = (store.get_account(account.id).meta or {})[publish_ledger.META_KEY]
+    assert len(entries) == 2
+    assert all(e["url"] == "https://www.instagram.com/p/ABC/" for e in entries)
+
+
+def test_find_any_reports_the_index_of_the_offending_item(store):
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, external_id=IG_USER), access_token="t")
+    publish_ledger.record(account, store, ["fp-b"], url="https://i/p/1")
+    found = publish_ledger.find_any(store.get_account(account.id), ["fp-a", "fp-b", "fp-c"])
+    assert found is not None
+    index, entry = found
+    assert index == 1 and entry["url"] == "https://i/p/1"
+
+
+def test_find_any_is_none_when_nothing_matches(store):
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, external_id=IG_USER), access_token="t")
+    assert publish_ledger.find_any(account, ["fp-a", "fp-b"]) is None
+    assert publish_ledger.find_any(account, []) is None
+
+
+def test_the_same_item_in_a_story_is_still_not_a_feed_duplicate(live):
+    """Placement stays part of each item's identity."""
+    run_publish, calls, _account, _store = live
+    run_publish([PANEL, OTHER], placement="feed")
+    second, _run, _state = run_publish(PANEL, placement="story")
+    assert second["status"] == "published"
+    assert len(calls) == 2
+
+
+# --- the account is the authority, not the ledger ------------------------------------ #
+# The ledger records what we published; it cannot know that a human went and
+# deleted a post by hand. Blocking on a stale record would make that content
+# unpublishable forever, so a refusal is verified against the live account first.
+
+@pytest.fixture()
+def deletable(store, monkeypatch, tmp_path):
+    """Like ``live``, but the fake platform tracks which media ids still exist."""
+    import dataclasses
+
+    from aismm import assets, config as config_module
+    from aismm.platforms import registry
+    from aismm.platforms.base import PublishResult
+
+    monkeypatch.setattr(assets, "settings",
+                        dataclasses.replace(config_module.settings, data_dir=tmp_path))
+    monkeypatch.setattr("aismm.tools.publish_tool.media.normalize_image",
+                        lambda data, **kw: data)
+
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                external_id=IG_USER), access_token="t")
+    instruction = store.upsert_instruction(
+        Instruction(name="Comicbook", publish_mode=PublishMode.live))
+    platform = registry.get_platform(PlatformName.instagram)
+    monkeypatch.setattr(registry, "get_platform", lambda *a, **kw: platform)
+
+    state = {"calls": [], "on_account": set(), "next_id": 1, "answer": "real"}
+
+    async def publish(**kwargs):
+        state["calls"].append(kwargs)
+        media_id = str(17000 + state["next_id"])
+        state["next_id"] += 1
+        state["on_account"].add(media_id)
+        return PublishResult(url=f"https://i/p/{media_id}", external_id=media_id, raw={})
+
+    async def post_exists(access_token, external_id):
+        if state["answer"] == "unknown":
+            return None
+        return external_id in state["on_account"]
+
+    monkeypatch.setattr(platform, "publish", publish)
+    monkeypatch.setattr(platform, "post_exists", post_exists)
+
+    def run_publish(data, caption="Panel 4", placement="feed"):
+        blobs = data if isinstance(data, list) else [data]
+        paths = []
+        for index, blob in enumerate(blobs):
+            path = tmp_path / f"p-{len(state['calls'])}-{index}-{hash(blob) & 0xffff}.jpg"
+            path.write_bytes(blob)
+            paths.append(str(path))
+        run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
+        run_state = {"account": store.get_account(account.id), "instruction": instruction,
+                     "store": store, "run": run, "assets": []}
+        return asyncio.run(perform_publish(
+            run_state, caption, asset_path=paths[0], media_kind="image",
+            placement=placement, asset_paths=paths if len(paths) > 1 else None))
+
+    return run_publish, state, account, store
+
+
+def test_a_post_deleted_by_hand_can_be_published_again(deletable):
+    """The user's case: they removed the post from Instagram themselves."""
+    run_publish, fake, _account, _store = deletable
+    first = run_publish(PANEL)
+    assert first["status"] == "published"
+
+    fake["on_account"].clear()                    # deleted in the Instagram app
+    second = run_publish(PANEL)
+    assert second["status"] == "published", "a deleted post must not block re-publishing"
+    assert len(fake["calls"]) == 2
+
+
+def test_the_stale_entry_is_removed_not_just_ignored(deletable):
+    """Otherwise every future run pays for the same pointless existence check."""
+    run_publish, fake, account, store = deletable
+    run_publish(PANEL)
+    fake["on_account"].clear()
+    run_publish(PANEL)
+
+    entries = (store.get_account(account.id).meta or {})[publish_ledger.META_KEY]
+    assert len(entries) == 1, "the dead entry should be gone, replaced by the new one"
+
+
+def test_a_post_that_is_still_live_is_still_refused(deletable):
+    """The guard must not weaken for posts that really are there."""
+    run_publish, fake, _account, _store = deletable
+    run_publish(PANEL)
+    second = run_publish(PANEL)
+    assert second["error"] == "already_published"
+    assert len(fake["calls"]) == 1
+
+
+def test_an_inconclusive_check_publishes_rather_than_skipping(deletable):
+    """Default is fail-OPEN.
+
+    For sequential content — a comic posted panel by panel — a wrongly skipped
+    item breaks the running order and the gap is not recoverable, whereas a
+    duplicate is two taps to delete. A CONFIRMED duplicate is still refused.
+    """
+    run_publish, fake, _account, _store = deletable
+    run_publish(PANEL)
+    fake["answer"] = "unknown"                    # rate limited / network trouble
+    second = run_publish(PANEL)
+    assert second["status"] == "published"
+    assert len(fake["calls"]) == 2
+
+
+def test_strict_mode_refuses_an_inconclusive_check(deletable, monkeypatch):
+    """PUBLISH_DUPLICATE_GUARD_STRICT=1 restores fail-closed for accounts that
+    would rather have a gap than a duplicate."""
+    import dataclasses
+
+    from aismm import config as config_module
+    from aismm.tools import publish_tool
+
+    monkeypatch.setattr(publish_tool, "settings", dataclasses.replace(
+        config_module.settings, publish_duplicate_guard_strict=True))
+
+    run_publish, fake, _account, _store = deletable
+    run_publish(PANEL)
+    fake["answer"] = "unknown"
+    second = run_publish(PANEL)
+    assert second["error"] == "already_published"
+    assert len(fake["calls"]) == 1
+
+
+def test_an_unverified_refusal_does_not_tell_the_agent_to_advance(deletable, monkeypatch):
+    """The item may never have gone out — advancing would drop it from the run order."""
+    import dataclasses
+
+    from aismm import config as config_module
+    from aismm.tools import publish_tool
+
+    monkeypatch.setattr(publish_tool, "settings", dataclasses.replace(
+        config_module.settings, publish_duplicate_guard_strict=True))
+
+    run_publish, fake, _account, _store = deletable
+    run_publish(PANEL)
+    fake["answer"] = "unknown"
+    second = run_publish(PANEL)
+    assert "could not be confirmed" in second["message"]
+    assert "Do NOT advance your position" in second["message"]
+    assert "update_memory" not in second["message"]
+
+
+def test_a_confirmed_refusal_says_the_post_is_still_live(deletable):
+    """The opposite case: verified, so the agent SHOULD advance past it."""
+    run_publish, _fake, _account, _store = deletable
+    run_publish(PANEL)
+    second = run_publish(PANEL)
+    assert "still on the account" in second["message"]
+    assert "update_memory" in second["message"]
+
+
+def test_a_carousel_with_one_deleted_and_one_live_item_is_still_refused(deletable):
+    """Only the deleted item is forgiven; the live one still blocks the post."""
+    run_publish, fake, _account, _store = deletable
+    run_publish(PANEL)
+    live_id = next(iter(fake["on_account"]))
+    run_publish(OTHER)
+    fake["on_account"] = {live_id}                # the OTHER post was deleted
+
+    third = run_publish([OTHER, PANEL])           # OTHER forgiven, PANEL still live
+    assert third["error"] == "already_published"
+    assert len(fake["calls"]) == 2
+
+
+def test_an_entry_with_no_media_id_stays_blocking(store, monkeypatch):
+    """Nothing to verify against, so the guard stays closed."""
+    from aismm.platforms import registry
+    from aismm.tools.publish_tool import _confirm_duplicate
+
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, external_id=IG_USER), access_token="t")
+    publish_ledger.record(account, store, ["fp-a"], url="https://i/p/1")   # no external_id
+    platform = registry.get_platform(PlatformName.instagram)
+
+    found = asyncio.run(_confirm_duplicate(
+        store.get_account(account.id), store, platform, ["fp-a"]))
+    assert found is not None
+
+
+def test_post_exists_reports_gone_for_a_deleted_media_id(monkeypatch):
+    """Graph answers a deleted id with code 803 / subcode 33."""
+    from aismm.platforms import instagram, registry
+
+    class _Response:
+        status_code = 400
+        request = httpx.Request("GET", "https://graph.facebook.com/v21.0/1")
+
+        def json(self):
+            return {"error": {"message": "Unsupported get request. Object does not exist",
+                              "code": 803, "error_subcode": 33, "type": "GraphMethodException"}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **kw):
+            return _Response()
+
+    monkeypatch.setattr(instagram.httpx, "AsyncClient", lambda **kw: _Client())
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", "1")) is False
+
+
+def test_post_exists_reports_unknown_for_a_rate_limit(monkeypatch):
+    from aismm.platforms import instagram, registry
+
+    class _Response:
+        status_code = 403
+        request = httpx.Request("GET", "https://graph.facebook.com/v21.0/1")
+
+        def json(self):
+            return {"error": {"message": "Application request limit reached", "code": 4}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **kw):
+            return _Response()
+
+    monkeypatch.setattr(instagram.httpx, "AsyncClient", lambda **kw: _Client())
+    platform = registry.get_platform(PlatformName.instagram)
+    assert asyncio.run(platform.post_exists("token", "1")) is None
+
+
+def test_a_platform_without_the_check_keeps_ledger_only_behaviour():
+    """The base default is 'cannot tell', so other platforms are unaffected."""
+    from aismm.platforms import registry
+
+    twitter = registry.get_platform(PlatformName.twitter)
+    assert asyncio.run(twitter.post_exists("token", "1")) is None

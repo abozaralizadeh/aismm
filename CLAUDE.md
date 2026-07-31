@@ -312,6 +312,24 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   and `perform_publish` **refuses** a fingerprint already in the ledger. Same reasoning as the AI
   disclosure and the publish gate: a guarantee that must hold on every path cannot live in
   model-written prose. Key on the MEDIA, never the caption — the agent rewrites the caption each run.
+- **The ACCOUNT is the authority on what is published, not the ledger.** The ledger records what we
+  posted; it cannot know a human deleted a post by hand, and a stale entry would make that content
+  unpublishable forever. So a ledger hit is verified against the platform before it refuses
+  (`publish_tool._confirm_duplicate` → `SocialPlatform.post_exists`, which Instagram implements via
+  `GET /{media-id}`; Graph answers a deleted id with code 803 / subcode 33). Gone → `forget` the
+  entry and publish. Only the rare refusal path pays for the call. `None` means *cannot tell* (no
+  support, rate limited, network) and **publishes anyway** by default: for sequential content a
+  wrongly skipped item breaks the running order permanently, while a duplicate is deletable.
+  `PUBLISH_DUPLICATE_GUARD_STRICT=1` restores fail-closed. `_confirm_duplicate` returns
+  `(index, entry, confirmed)` — keep the third element: a *confirmed* refusal tells the agent to
+  `update_memory` and advance, an *unverified* one must tell it NOT to advance, or an item that
+  never actually posted gets skipped out of the sequence for good.
+- **One fingerprint PER ITEM, not per post** (`publish_ledger.fingerprints` + `find_any`). The first
+  version hashed every item of a post into one combined digest, so a panel published alone and then
+  published again as item 1 of a two-photo carousel produced two *different* digests and the guard
+  never fired — it happened twice on the live account. The unit a follower sees repeated is the item,
+  so a carousel is a duplicate if **any** of its items was already posted, and the refusal names
+  which one. `MAX_ENTRIES` is sized for items, not posts.
 - **A `media_publish` failure after the container is FINISHED means UNKNOWN, not failed**
   (`Instagram._find_recent_published`). Meta already holds the media at that point, and a code-4
   refusal on the last step can still have published. Treating it as failure left the position

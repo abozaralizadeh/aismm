@@ -136,3 +136,17 @@ class SocialPlatform(ABC):
         ``feed`` / ``story`` / ``reel``. Platforms that support neither can ignore
         both — the publish tool checks ``Capabilities`` before calling.
         """
+
+    async def post_exists(self, access_token: str, external_id: str) -> bool | None:
+        """Is this post still live on the platform?
+
+        ``True`` yes, ``False`` it is gone (deleted), ``None`` cannot tell — either
+        this platform has no way to check, or the check itself failed.
+
+        The [publish ledger](../publish_ledger.py) is only a local *record* of what
+        we posted; the account itself is the authority. A human who deletes a post
+        by hand must be able to have it published again, so the ledger asks here
+        before refusing a duplicate. The default is ``None`` so a platform without
+        an implementation keeps the ledger-only behaviour.
+        """
+        return None

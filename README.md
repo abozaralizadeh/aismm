@@ -799,11 +799,22 @@ the byte-identical image again.
 Two deterministic guards now sit beside the publish-mode gate, where the AI disclosure lives:
 
 - **A publish ledger.** Every successful live publish fingerprints its media (sha256 of the bytes
-  plus the placement) into the account's `meta`, in code. A `publish` call whose fingerprint is
-  already there is **refused** with `already_published`, and the message tells the agent to record
-  the item as done and advance. Keyed on the media, not the caption — the agent rewrites captions
+  plus the placement) into the account's `meta`, in code — **one fingerprint per item**, not one per
+  post. A `publish` call is **refused** with `already_published` if *any* of its items is already in
+  the ledger, and the message names which item, so a two-photo carousel cannot smuggle back a panel
+  that already went out on its own. Keyed on the media, not the caption — the agent rewrites captions
   every run, so identical art with fresh words would otherwise slip through. Approving a staged post
   goes through the same check.
+- **The account itself has the final say.** The ledger is only a record of what AISMM posted — it
+  can't know you deleted something in the Instagram app. So before a refusal actually blocks a post,
+  the recorded media id is checked against the live account: **if the post is gone, the entry is
+  dropped and the content publishes normally.** Only the refusal path pays for that lookup.
+- **If that check can't complete** (rate limited, network trouble), the post goes out anyway. For
+  sequential content — a comic posted panel by panel — a wrongly skipped item breaks the running
+  order and the gap is permanent, whereas a duplicate is two taps to delete. Set
+  `PUBLISH_DUPLICATE_GUARD_STRICT=1` to refuse instead, where an accidental duplicate costs more
+  than a gap. A *confirmed* duplicate is refused either way, and an unverified refusal explicitly
+  tells the agent **not** to advance its position, so the item is retried rather than dropped.
 - **Reconciliation after an ambiguous failure.** When Instagram's `media_publish` fails *after* the
   container reached `FINISHED`, Meta already had the media and may have posted it anyway — the
   outcome is unknown, not failed. AISMM reads the account's recent posts and, if one carrying our

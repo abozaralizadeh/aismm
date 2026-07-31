@@ -37,8 +37,9 @@ logger = logging.getLogger("aismm.publish_ledger")
 META_KEY = "published_fingerprints"
 
 # Enough history to catch a re-post across a few scheduled runs, small enough to
-# stay well inside the account meta's size budget.
-MAX_ENTRIES = 40
+# stay well inside the account meta's size budget. One entry PER ITEM now, so a
+# run of carousels eats these faster than one-per-post did.
+MAX_ENTRIES = 120
 # How long a fingerprint blocks a re-post. A legitimate re-post of the same media
 # (a "best of" repeat) is rare; an accidental duplicate happens within hours.
 DEFAULT_TTL_DAYS = 30
@@ -48,26 +49,40 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def fingerprint(asset_paths: list[str], placement: str = "feed") -> str:
-    """Content identity for a post: the media bytes + where it goes.
+def fingerprints(asset_paths: list[str], placement: str = "feed") -> list[str]:
+    """Content identity **per item**: each file's bytes + where the post goes.
 
-    Returns "" when there are no readable bytes to fingerprint — a text-only post
-    has no media identity, and an unreadable asset must not block publishing.
+    ONE FINGERPRINT PER ITEM, not one per post. Hashing every item into a single
+    combined digest is what let a duplicate through: a panel published on its own
+    and then published again as item 1 of a two-photo carousel produced two
+    different combined digests, so the guard never fired and the same panel went
+    out twice. An item is the unit a follower actually sees repeated.
+
+    Placement is part of each item's identity, so the same art may legitimately go
+    out once as a feed post and once as a story.
+
+    Unreadable assets are skipped rather than blocking the post — a missing file is
+    the business of the media-presence checks in ``perform_publish``.
     """
     from .assets import read_bytes
 
-    digest = hashlib.sha256()
-    digest.update(f"{(placement or 'feed').lower()}\n".encode())
-    hashed_any = False
+    prefix = f"{(placement or 'feed').lower()}\n".encode()
+    digests: list[str] = []
     for path in asset_paths or []:
         try:
-            digest.update(hashlib.sha256(read_bytes(path)).digest())
+            data = read_bytes(path)
         except Exception as exc:  # noqa: BLE001 - never block a post on the guard
             logger.warning("Could not fingerprint %s (%s); skipping the duplicate guard "
                            "for this asset", path, exc)
             continue
-        hashed_any = True
-    return digest.hexdigest() if hashed_any else ""
+        digests.append(hashlib.sha256(prefix + hashlib.sha256(data).digest()).hexdigest())
+    return digests
+
+
+def fingerprint(asset_paths: list[str], placement: str = "feed") -> str:
+    """First item's fingerprint, for callers that publish exactly one asset."""
+    digests = fingerprints(asset_paths, placement)
+    return digests[0] if digests else ""
 
 
 def _entries(account) -> list[dict]:
@@ -99,18 +114,37 @@ def find(account, digest: str, *, ttl_days: int = DEFAULT_TTL_DAYS) -> dict | No
     return None
 
 
-def record(account, store, digest: str, *, url: str = "", external_id: str = "",
+def find_any(account, digests: list[str], *,
+             ttl_days: int = DEFAULT_TTL_DAYS) -> tuple[int, dict] | None:
+    """First already-published ITEM in this post, as ``(index, entry)``.
+
+    A carousel is a duplicate if ANY of its items was already published — that is
+    the case the old per-post fingerprint missed.
+    """
+    for index, digest in enumerate(digests or []):
+        entry = find(account, digest, ttl_days=ttl_days)
+        if entry is not None:
+            return index, entry
+    return None
+
+
+def record(account, store, digest, *, url: str = "", external_id: str = "",
            instruction_id: str = "") -> None:
     """Remember that this account published this content. Never fatal.
+
+    ``digest`` may be one fingerprint or a list of them (one per carousel item);
+    every item is recorded, so a later post reusing any single one is caught.
 
     Called on the live-publish success path, in code, so the record exists whether
     or not the agent gets round to writing its memory.
     """
-    if not digest:
+    digests = [d for d in ([digest] if isinstance(digest, str) else list(digest or [])) if d]
+    if not digests:
         return
-    entries = [e for e in _entries(account) if e.get("fp") != digest]
-    entries.append({"fp": digest, "at": _now().isoformat(), "url": url,
-                    "id": external_id, "instruction": instruction_id})
+    entries = [e for e in _entries(account) if e.get("fp") not in set(digests)]
+    stamp = _now().isoformat()
+    entries.extend({"fp": d, "at": stamp, "url": url,
+                    "id": external_id, "instruction": instruction_id} for d in digests)
     meta = dict(account.meta or {})
     meta[META_KEY] = entries[-MAX_ENTRIES:]
     try:
@@ -120,8 +154,33 @@ def record(account, store, digest: str, *, url: str = "", external_id: str = "",
         logger.warning("Could not record the publish fingerprint for %s: %s",
                        account.handle or account.external_id, exc)
         return
-    logger.info("Recorded publish fingerprint %s for %s%s", digest[:12],
+    logger.info("Recorded %d publish fingerprint(s) %s for %s%s", len(digests),
+                ", ".join(d[:12] for d in digests),
                 account.handle or account.external_id, f" ({url})" if url else "")
+
+
+def forget(account, store, digest: str) -> None:
+    """Drop a fingerprint — the post it recorded is no longer on the account.
+
+    The ledger is a record of what we posted, not of what is *currently live*. A
+    human deleting a post by hand must be able to have it published again, so a
+    refusal that turns out to reference a deleted post removes the entry instead
+    of blocking that content forever.
+    """
+    entries = [e for e in _entries(account) if e.get("fp") != digest]
+    if len(entries) == len(_entries(account)):
+        return
+    meta = dict(account.meta or {})
+    meta[META_KEY] = entries
+    try:
+        account.set_meta(meta)
+        store.upsert_account(account)
+    except Exception as exc:  # noqa: BLE001 - never block a publish on bookkeeping
+        logger.warning("Could not forget fingerprint %s for %s: %s", digest[:12],
+                       account.handle or account.external_id, exc)
+        return
+    logger.info("Forgot publish fingerprint %s for %s — the post is no longer on the "
+                "account", digest[:12], account.handle or account.external_id)
 
 
 def describe_entry(entry: dict) -> str:

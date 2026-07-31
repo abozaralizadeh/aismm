@@ -78,6 +78,11 @@ class RateLimited(RuntimeError):
 _RATE_LIMIT_CODES = {4, 17, 32}
 _BLOCKED_SUBCODES = {2207051}
 
+# "Unsupported get request. Object does not exist…" — what Graph says about a
+# media id that has been deleted. Used to tell "gone" apart from "can't reach it".
+_GONE_CODES = {803}
+_GONE_SUBCODES = {33}
+
 # How far back to look when checking whether a failed media_publish actually
 # published. Generous enough to cover a slow container, short enough that an
 # earlier post of the same caption can't be mistaken for this one.
@@ -521,6 +526,36 @@ class Instagram(SocialPlatform):
     # website_clicks…), so keep the default set small and let callers override.
     DEFAULT_MEDIA_METRICS = "reach,likes,comments,saved,shares"
     DEFAULT_ACCOUNT_METRICS = "reach,follower_count"
+
+    async def post_exists(self, access_token: str, external_id: str) -> bool | None:
+        """Is this media id still on the account, or was it deleted by hand?
+
+        Graph answers a deleted (or otherwise unreachable) media id with an error
+        whose code is 100 / subcode 33 — "does not exist, cannot be loaded due to
+        missing permissions, or does not support this operation". Anything else
+        (rate limit, network, token trouble) is reported as ``None`` — "unknown" —
+        so the duplicate guard stays closed rather than opening on a bad connection.
+        """
+        if not external_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{GRAPH}/{external_id}", params={"fields": "id"},
+                                     headers=_auth(access_token))
+            if r.status_code < 400:
+                return True
+            exc = httpx.HTTPStatusError("lookup failed", request=r.request, response=r)
+            message, err = _graph_error(exc)
+            if err.get("code") in _GONE_CODES or err.get("error_subcode") in _GONE_SUBCODES:
+                logger.info("Instagram media %s is no longer on the account (%s)",
+                            external_id, message)
+                return False
+            logger.info("Could not determine whether media %s still exists: %s",
+                        external_id, message)
+            return None
+        except Exception as exc:  # noqa: BLE001 - never fail a publish over this check
+            logger.warning("Media existence check for %s failed: %s", external_id, exc)
+            return None
 
     async def list_media(self, access_token: str, account: Account, *, limit: int = 10,
                          fields: str = "") -> list[dict]:

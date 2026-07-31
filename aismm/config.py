@@ -243,6 +243,13 @@ class Settings:
     # Refuse to publish a caption that narrates the run's own failure. See
     # tools/publish_tool.meta_caption_reason.
     publish_content_guard: bool = True
+    # What the duplicate guard does when it CANNOT confirm whether the earlier
+    # post is still on the account (rate limited, network trouble, no token).
+    # False (default) publishes anyway: for sequential content — a comic posted
+    # panel by panel — a wrongly skipped item breaks the running order, while a
+    # duplicate is two taps to delete. Set true where an accidental duplicate
+    # costs more than a gap. A CONFIRMED duplicate is always refused either way.
+    publish_duplicate_guard_strict: bool = False
 
     @property
     def db_path(self) -> Path:
@@ -370,6 +377,8 @@ def load_settings() -> Settings:
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
         memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
         publish_content_guard=_bool(os.getenv("PUBLISH_CONTENT_GUARD"), True),
+        publish_duplicate_guard_strict=_bool(
+            os.getenv("PUBLISH_DUPLICATE_GUARD_STRICT"), False),
     )
 
 

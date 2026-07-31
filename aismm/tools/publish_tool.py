@@ -106,6 +106,47 @@ def _schedule_advice(instruction) -> str:
     return ""
 
 
+async def _confirm_duplicate(account, store, platform, digests: list[str]):
+    """A ledger hit, but only if the post it refers to is STILL on the account.
+
+    Returns ``(index, entry, confirmed)`` or ``None``. ``confirmed`` distinguishes
+    *the earlier post is definitely still live* from *we could not check* — they
+    are not the same claim and must not produce the same message. Telling the
+    agent "this was ALREADY published, advance your position" on an unverified
+    guess is how a panel gets skipped out of a sequence permanently.
+
+    The ledger records what we published; it cannot know that a human went and
+    deleted a post by hand. Blocking on a stale record would make that content
+    unpublishable forever, so before refusing we ask the platform whether the
+    recorded post is still there, and drop the entry if it is gone. Only the
+    refusal path pays for this call, which is rare.
+    """
+    while True:
+        duplicate = publish_ledger.find_any(account, digests)
+        if not duplicate:
+            return None
+        index, entry = duplicate
+        external_id = entry.get("id", "")
+
+        alive = None
+        if external_id:
+            try:
+                access_token, _refresh = store.get_tokens(account.id)
+                alive = (await platform.post_exists(access_token, external_id)
+                         if access_token else None)
+            except Exception as exc:  # noqa: BLE001 - verification must never raise
+                logger.warning("Could not verify whether %s is still live: %s",
+                               external_id, exc)
+
+        if alive is False:
+            logger.info("Ledger entry for %s refers to a post that is no longer on %s — "
+                        "allowing this content to be published again", external_id,
+                        account.handle or account.external_id)
+            publish_ledger.forget(account, store, entry.get("fp", ""))
+            continue                    # another item may also be a duplicate
+        return index, entry, alive is True
+
+
 async def perform_publish(state: dict, caption: str, asset_path: str = "",
                           media_kind: str = "auto", asset_paths: list[str] | None = None,
                           placement: str = "feed") -> dict:
@@ -244,18 +285,46 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # supposed to know from its memory, but the memory is model-written prose and
     # a run that published then failed to record it made the next run post the
     # same panel twice. This is the deterministic backstop.
-    digest = publish_ledger.fingerprint(paths, placement)
-    already = publish_ledger.find(account, digest)
-    if already:
-        message = (f"This exact media was ALREADY published to "
-                   f"{account.handle or account.platform.value} on "
-                   f"{publish_ledger.describe_entry(already)}. Not posting it again. The item "
-                   f"is DONE: call update_memory to record it as published and advance your "
-                   f"position, then finish with report_failure if there is nothing new left "
-                   f"to post this run.")
-        logger.warning("Refusing a duplicate publish for %s (fingerprint %s, first posted %s)",
-                       account.handle or account.external_id, digest[:12],
-                       already.get("at", "?"))
+    digests = publish_ledger.fingerprints(paths, placement)
+    duplicate = await _confirm_duplicate(account, store, platform, digests)
+    if duplicate and not duplicate[2] and not settings.publish_duplicate_guard_strict:
+        # The ledger remembers posting this, but we could NOT confirm the post is
+        # still on the account. Publishing is the better failure here: a duplicate
+        # is two taps to delete, while wrongly skipping an item breaks the running
+        # order of sequential content and the gap is not recoverable.
+        index, entry = duplicate[0], duplicate[1]
+        logger.warning("Ledger says item %d/%d was published (%s) but that could not be "
+                       "confirmed against %s — publishing anyway. Set "
+                       "PUBLISH_DUPLICATE_GUARD_STRICT=1 to refuse instead.",
+                       index + 1, len(digests), entry.get("url") or entry.get("at", "?"),
+                       account.handle or account.external_id)
+        duplicate = None
+
+    if duplicate:
+        index, already, confirmed = duplicate
+        which = (f"Item {index + 1} of {len(digests)} ({paths[index].rsplit('/', 1)[-1]})"
+                 if len(digests) > 1 else "This exact media")
+        if confirmed:
+            message = (f"{which} is ALREADY live on "
+                       f"{account.handle or account.platform.value} — posted "
+                       f"{publish_ledger.describe_entry(already)}, and still on the account. "
+                       f"Not posting it again — a carousel counts as a duplicate if ANY of "
+                       f"its items was already posted. That item is DONE: call update_memory "
+                       f"to record it as published and advance your position, then either "
+                       f"publish only the items you have NOT posted before, or finish with "
+                       f"report_failure if nothing new is left this run.")
+        else:
+            # Unverified. Do NOT tell the agent to advance — it may never have gone out.
+            message = (f"{which} looks like something already published "
+                       f"{publish_ledger.describe_entry(already)}, but that could not be "
+                       f"confirmed against the account right now. Refusing to risk a "
+                       f"duplicate. Do NOT advance your position — leave it where it is and "
+                       f"finish with report_failure, so the next run retries this same item.")
+        logger.warning("Refusing a duplicate publish for %s (item %d/%d, fingerprint %s, "
+                       "first posted %s, still-live=%s)",
+                       account.handle or account.external_id, index + 1, len(digests),
+                       digests[index][:12], already.get("at", "?"),
+                       "yes" if confirmed else "unverified")
         run.status = RunStatus.failed
         run.error = message
         run.log = (run.log + "\nREFUSED: duplicate of an already-published post.").strip()
@@ -307,7 +376,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # Record the outcome in CODE, before returning to the agent. The agent is told
     # to write its memory after publish returns; when it doesn't, this is still
     # what stops the next run from posting the same thing again.
-    publish_ledger.record(account, store, digest, url=result.url,
+    publish_ledger.record(account, store, digests, url=result.url,
                           external_id=result.external_id, instruction_id=instruction.id)
 
     # The post landed, but Instagram had answered media_publish with a rate-limit

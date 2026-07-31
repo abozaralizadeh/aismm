@@ -21,6 +21,7 @@ from .models import (
 from .platforms.instagram import RateLimited
 from .platforms.registry import get_platform
 from .store import get_store
+from .tools.publish_tool import _confirm_duplicate
 
 logger = logging.getLogger("aismm.orchestrator")
 
@@ -195,15 +196,26 @@ def approve_staged(staged_id: str) -> dict:
     paths = staged.asset_paths or ([staged.asset_path] if staged.asset_path else [])
     placement = staged.placement or "feed"
 
-    digest = publish_ledger.fingerprint(paths, placement)
-    already = publish_ledger.find(account, digest)
-    if already:
-        logger.warning("Refusing to approve a duplicate of an already-published post (%s)",
-                       already.get("url") or already.get("at"))
+    digests = publish_ledger.fingerprints(paths, placement)
+    # Same reality check as the agent's path: a post the human deleted by hand
+    # must not block its content from ever being published again.
+    duplicate = _run_async(_confirm_duplicate(account, store, platform, digests))
+    if duplicate:
+        index, already, confirmed = duplicate
+        logger.warning("Refusing to approve a duplicate of an already-published post "
+                       "(item %d/%d, %s, still-live=%s)", index + 1, len(digests),
+                       already.get("url") or already.get("at"),
+                       "yes" if confirmed else "unverified")
+        which = f"Item {index + 1} of this post" if len(digests) > 1 else "This exact media"
+        # A human is watching this one and can just click again, so the approval
+        # path stays strict even when the check was inconclusive.
+        state = ("is still live on the account" if confirmed
+                 else "looks already published, though that could not be confirmed just now")
         return {"error": "already_published",
-                "message": (f"This exact media was already published on "
-                            f"{publish_ledger.describe_entry(already)}. Not posting it twice — "
-                            f"reject this staged post instead.")}
+                "message": (f"{which} {state} — posted "
+                            f"{publish_ledger.describe_entry(already)}. Not posting it twice. "
+                            f"Reject this staged post, or try again in a few minutes if you "
+                            f"believe the earlier one was deleted.")}
 
     try:
         result = _run_async(platform.publish(
@@ -221,7 +233,7 @@ def approve_staged(staged_id: str) -> dict:
         logger.exception("Approval publish failed")
         return {"error": "publish_failed", "message": str(exc)}
 
-    publish_ledger.record(account, store, digest, url=result.url,
+    publish_ledger.record(account, store, digests, url=result.url,
                           external_id=result.external_id,
                           instruction_id=staged.instruction_id)
     staged.status = StagedStatus.published
