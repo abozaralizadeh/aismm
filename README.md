@@ -965,6 +965,21 @@ without ever firing, with nothing in the log to say so. The anchor is what makes
 For a time-of-day or cron schedule there is no drift to fix, and *Starts* simply delays the first
 fire until that moment.
 
+#### "Next run" means the next *post*, not the next tick
+
+A `live` instruction whose account is in a [publishing cooldown](#rate-limits-and-action-is-blocked)
+is skipped before it does any work, so the scheduler's next fire time can be a run that publishes
+nothing. **Next run** therefore shows the first fire that will actually get past the cooldown, with
+the reason underneath:
+
+```
+2026-07-31 10:46 UTC
+publishing paused until 10:39 UTC — earlier fires are skipped
+```
+
+Only `live` mode is affected — `dry_run` calls no platform API and runs regardless — and only when
+*every* target account is blocked, since one free account still makes the fire worth firing.
+
 ### Files attached to an instruction
 
 An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):

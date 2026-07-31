@@ -196,8 +196,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   the log. The anchor is `instruction.schedule_start_at or instruction.created_at`, so phase survives
   a rebuild. Cron parts don't drift; there the anchor only gates "don't fire before". Note
   `CronTrigger.from_crontab` takes **no** `start_date` — use `_cron_from_crontab`.
-  `scheduler.next_run_for(id)` is the dashboard's "Next run" readout (live scheduler state, `None`
-  when the scheduler isn't running in this process).
+  `scheduler.next_run_for(id)` is the raw next fire (live scheduler state, `None` when the scheduler
+  isn't running in this process); `next_run_after(id, when)` asks the triggers for the first fire at
+  or after a moment, which the dashboard needs because the next *fire* is not the next *post*.
+- **"Next run" in the UI must mirror `_run_one`'s skip rule** (`dashboard/app._next_run_info`). A
+  `live` run whose account is in a cooldown is skipped before doing any work, so showing the raw
+  fire time promised a run that the log then reported as "Skipping … rate-limited". Only `live` mode
+  and only when EVERY target account is blocked — one free account still makes the fire worth
+  firing, and `dry_run` calls no API so it never skips. Keep this in step with the orchestrator if
+  that condition changes.
 - **gpt-image-2 ≠ gpt-image-1** ([tools/image_tool.py](aismm/tools/image_tool.py)): image-2 takes
   arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
   transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a

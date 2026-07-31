@@ -65,8 +65,13 @@
         <code>0 9 * * *</code> · <code>every 6h; 08:00 mon</code>
         {% if instruction and instruction.schedule %}
           <br><strong>Reads as:</strong> {{ schedule_readback }}
-          {% if instruction and next_run %}
-            <br><strong>Next run:</strong> {{ next_run.strftime('%Y-%m-%d %H:%M') }} UTC
+          {% if instruction and next_run and next_run.at %}
+            <br><strong>Next run:</strong> {{ next_run.at.strftime('%Y-%m-%d %H:%M') }} UTC
+            {% if next_run.skipped %}
+              <br><span class="muted">Publishing is paused for this account until
+              {{ next_run.blocked_until.strftime('%Y-%m-%d %H:%M') }} UTC (platform rate
+              limit), so any scheduled fire before then is skipped without posting.</span>
+            {% endif %}
           {% endif %}
         {% endif %}
       </span>

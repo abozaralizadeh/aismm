@@ -127,6 +127,28 @@ def next_run_for(instruction_id: str) -> datetime | None:
     return min(times) if times else None
 
 
+def next_run_after(instruction_id: str, after: datetime) -> datetime | None:
+    """First fire of this instruction at or after ``after``.
+
+    Used to answer "when will something actually happen?" when the next scheduled
+    fire is going to be skipped — a rate-limited account, say. Asks the triggers
+    directly rather than the jobs' cached ``next_run_time``, which only knows
+    about the very next one.
+    """
+    sched = get_scheduler()
+    if not sched.running:
+        return None
+    prefix = f"instr:{instruction_id}"
+    times = []
+    for job in sched.get_jobs():
+        if job.id != prefix and not job.id.startswith(f"{prefix}:"):
+            continue
+        fire = job.trigger.get_next_fire_time(None, after)
+        if fire:
+            times.append(fire)
+    return min(times) if times else None
+
+
 def start() -> BackgroundScheduler:
     sched = get_scheduler()
     if not sched.running:

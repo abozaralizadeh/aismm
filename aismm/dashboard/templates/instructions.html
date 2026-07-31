@@ -18,8 +18,14 @@
       <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
       <td class="small">{{ i.account_ids|length }}</td>
       <td class="mono small">{{ i.schedule or "—" }}</td>
-      <td class="small nowrap">
-        {% if next_runs.get(i.id) %}{{ next_runs[i.id].strftime('%Y-%m-%d %H:%M') }} UTC
+      <td class="small">
+        {% set nr = next_runs.get(i.id) %}
+        {% if nr and nr.at %}
+          <span class="nowrap">{{ nr.at.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+          {% if nr.skipped %}
+            <div class="muted">publishing paused until
+              {{ nr.blocked_until.strftime('%H:%M') }} UTC — earlier fires are skipped</div>
+          {% endif %}
         {% elif i.schedule %}<span class="muted">not scheduled</span>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>

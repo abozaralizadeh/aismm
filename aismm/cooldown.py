@@ -51,12 +51,18 @@ def _parse(value) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def deadline(account) -> datetime | None:
+    """When this account may publish again, or ``None`` when it is not blocked."""
+    parsed = _parse((account.meta or {}).get(META_KEY))
+    return parsed if parsed and parsed > _now() else None
+
+
 def remaining_seconds(account) -> int:
     """How long this account is still blocked from publishing. 0 when clear."""
-    deadline = _parse((account.meta or {}).get(META_KEY))
-    if deadline is None:
+    ends = _parse((account.meta or {}).get(META_KEY))
+    if ends is None:
         return 0
-    return max(int((deadline - _now()).total_seconds()), 0)
+    return max(int((ends - _now()).total_seconds()), 0)
 
 
 def is_active(account) -> bool:

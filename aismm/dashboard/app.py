@@ -20,7 +20,7 @@ from werkzeug.utils import secure_filename
 
 from ..config import settings
 from ..assets import public_url
-from .. import attachments
+from .. import attachments, cooldown
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
@@ -248,8 +248,9 @@ def create_app() -> Flask:
     # ---- instructions ---------------------------------------------------- #
     @app.route("/instructions")
     def instructions():
-        instrs = get_store().list_instructions()
-        next_runs = {i.id: scheduler.next_run_for(i.id) for i in instrs}
+        store = get_store()
+        instrs = store.list_instructions()
+        next_runs = {i.id: _next_run_info(i, store) for i in instrs}
         return render_template("instructions.html", instructions=instrs, next_runs=next_runs)
 
     @app.route("/instructions/new")
@@ -272,7 +273,7 @@ def create_app() -> Flask:
                                accounts=store.list_accounts(), settings=settings,
                                schedule_readback=describe_schedule(
                                    instr.schedule, starts_at=instr.schedule_start_at),
-                               next_run=scheduler.next_run_for(instr.id),
+                               next_run=_next_run_info(instr, store),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions", methods=["POST"])
@@ -510,6 +511,38 @@ def _refresh_scheduler() -> None:
             scheduler.refresh_jobs()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _next_run_info(instruction, store) -> dict:
+    """When this instruction next fires, and whether that fire will do anything.
+
+    The scheduler's next fire time is not the same as the next POST: the
+    orchestrator skips a ``live`` run whose account is in a publishing cooldown
+    (``_run_one``), so showing the raw fire time promised a run that would be
+    logged as "Skipping … rate-limited" a minute later. Mirrors that same rule —
+    only ``live`` mode is affected, and only when EVERY target account is blocked,
+    since one free account still makes the fire worth firing.
+    """
+    fires_at = scheduler.next_run_for(instruction.id)
+    info = {"at": fires_at, "blocked_until": None, "skipped": False}
+    if not fires_at or instruction.publish_mode is not PublishMode.live:
+        return info
+
+    accounts = [a for a in (store.get_account(i) for i in instruction.account_ids) if a]
+    if not accounts:
+        return info
+    deadlines = [cooldown.deadline(a) for a in accounts]
+    if not all(deadlines):
+        return info                      # at least one account can still publish
+
+    blocked_until = max(deadlines)
+    if fires_at > blocked_until:
+        return info                      # the cooldown clears before that fire
+
+    info["skipped"] = True
+    info["blocked_until"] = blocked_until
+    info["at"] = scheduler.next_run_after(instruction.id, blocked_until) or fires_at
+    return info
 
 
 def _parse_datetime_local(value: str) -> dt.datetime | None:
