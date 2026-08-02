@@ -497,6 +497,19 @@ go idle, forces `loading="lazy"` images to load, and scrolls — without that yo
 skeleton ("Generating…") and no images at all. If a page is still not ready, pass `wait_for` with a
 CSS selector (`"img[alt^=Panel]"`) and it will wait for that element to appear.
 
+**Content behind a button is a different problem, and waiting never fixes it.** A modal, tab or
+accordion may not have its content in the page *at all* until the control is pressed — an `<img>` can
+sit there with no `src` whatsoever. So the result also lists the page's clickable `buttons` with
+ready-to-use selectors, and `click` presses one before reading:
+
+```python
+browse_page(url, click="#charSheetLink")   # opens the modal, then reads the page
+```
+
+Buttons are not links, so they never appear under `links` — without the `buttons` list the agent
+cannot even discover that such a control exists. If the selector matches nothing the page is still
+read and the result carries `click_failed` telling the agent to check `buttons`.
+
 Use it when the brief names a specific site; `web_search` remains better for open research.
 
 ```bash

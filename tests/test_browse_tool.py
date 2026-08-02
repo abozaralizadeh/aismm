@@ -234,3 +234,154 @@ def test_save_media_accepts_an_octet_stream_png(monkeypatch, tmp_path):
     assert result["kind"] == "image"
     assert result["asset_path"].endswith(".png")
     assert state["assets"][0]["kind"] == "image"
+
+
+# --- content that does not exist until you click it ---------------------------------- #
+# The live failure: a comic page kept its character reference sheet in a modal
+# whose <img> had NO src attribute at all until a button set it. No amount of
+# waiting could reveal it, and the button was a <button>, so it never appeared
+# under `links` either — the agent could neither see the image nor discover the
+# control, and correctly reported it could not complete the post.
+
+class _FakePage:
+    """Playwright page stand-in whose DOM changes only when clicked."""
+
+    def __init__(self, *, click_selector="#charSheetLink", click_raises=False):
+        self._click_selector = click_selector
+        self._click_raises = click_raises
+        self.clicked = []
+        self.revealed = False
+
+    async def goto(self, *a, **kw):
+        return None
+
+    async def wait_for_load_state(self, *a, **kw):
+        return None
+
+    async def wait_for_selector(self, *a, **kw):
+        return None
+
+    async def wait_for_timeout(self, *a, **kw):
+        return None
+
+    async def click(self, selector, **kw):
+        if self._click_raises or selector != self._click_selector:
+            raise RuntimeError(f"no element matches {selector}")
+        self.clicked.append(selector)
+        self.revealed = True
+
+    async def title(self):
+        return "ComicBook"
+
+    async def evaluate(self, script):
+        # The image-extraction script also mentions innerText (it reads captions),
+        # so key on the text script's own selector instead.
+        if "article, main" in script:
+            return "Episode text"
+        if "loading" in script or "scrollTo" in script:      # force-lazy-images
+            return None
+        images = [{"src": f"https://cdn/panel{n}.png", "alt": f"Panel {n}",
+                   "width": 1024, "height": 1024} for n in (1, 2)]
+        if self.revealed:
+            images.append({"src": "https://cdn/charsheet.png", "alt": "",
+                           "width": 1536, "height": 1024})
+        return images
+
+    async def eval_on_selector_all(self, selector, script):
+        if selector.startswith("a[href]"):
+            return [{"text": "Home", "href": "https://genbox/"}]
+        if "button" in selector:
+            return [{"label": "Characters", "selector": "#charSheetLink"},
+                    {"label": "Next", "selector": "#btnNext"}]
+        return []
+
+    async def close(self):
+        return None
+
+
+def _browser_with(page, monkeypatch):
+    from aismm.tools import browse_tool
+
+    class _Browser:
+        async def new_page(self):
+            return page
+
+    async def fake_get_browser(_state):
+        return _Browser()
+
+    monkeypatch.setattr(browse_tool, "get_browser", fake_get_browser)
+    # These tests are about the DOM, not the SSRF guard, which would refuse the
+    # made-up hostnames below before the page was ever opened.
+    monkeypatch.setattr(browse_tool, "is_public_url", lambda url: (True, ""))
+
+
+def test_a_modal_image_is_invisible_without_a_click(monkeypatch):
+    """Reproduces exactly what the agent hit."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    page = _FakePage()
+    _browser_with(page, monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://genbox/comicbook?date=2026-05-25"))
+
+    assert [i["alt"] for i in result["images"]] == ["Panel 1", "Panel 2"]
+    assert page.clicked == []
+
+
+def test_clicking_reveals_it(monkeypatch):
+    from aismm.tools.browse_tool import perform_browse_page
+
+    page = _FakePage()
+    _browser_with(page, monkeypatch)
+    result = asyncio.run(perform_browse_page(
+        {}, "https://genbox/comicbook?date=2026-05-25", click="#charSheetLink"))
+
+    assert page.clicked == ["#charSheetLink"]
+    assert result["clicked"] == "#charSheetLink"
+    assert any("charsheet" in i["url"] for i in result["images"])
+
+
+def test_buttons_are_reported_so_the_control_is_discoverable(monkeypatch):
+    """Without this the agent cannot even know a Characters button exists —
+    buttons are not links, so they never show up under `links`."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    _browser_with(_FakePage(), monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://genbox/comicbook"))
+
+    selectors = [b["selector"] for b in result["buttons"]]
+    assert "#charSheetLink" in selectors
+    assert all(b["href"] != "#charSheetLink" for b in result["links"])
+
+
+def test_a_click_that_matches_nothing_is_reported_not_fatal(monkeypatch):
+    """The page is still read; the agent is told to check `buttons`."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    page = _FakePage(click_raises=True)
+    _browser_with(page, monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://genbox/x", click="#nope"))
+
+    assert result["clicked"] == ""
+    assert "buttons" in result["click_failed"]
+    assert result["images"], "the page should still have been read"
+
+
+def test_no_click_key_when_none_was_asked_for(monkeypatch):
+    from aismm.tools.browse_tool import perform_browse_page
+
+    _browser_with(_FakePage(), monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://genbox/x"))
+    assert "clicked" not in result and "click_failed" not in result
+
+
+def test_the_tool_docstring_points_at_buttons_when_something_is_missing():
+    """That is the discovery path; it has to be in what the model reads."""
+    from aismm.tools import browse_tool
+
+    state = {}
+    tool = browse_tool._make_browse_page(state)
+    if tool is None:
+        pytest.skip("playwright not installed")
+    doc = tool.description if hasattr(tool, "description") else tool.__doc__
+    assert "buttons" in doc
+    assert "click" in doc

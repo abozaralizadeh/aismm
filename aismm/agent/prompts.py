@@ -21,8 +21,13 @@ YOUR TOOLS
 - web_search       : research current, real, timely topics/trends before you write.
                      Prefer fresh, specific, verifiable angles over generic filler.
 - browse_page      : open a specific web page in a real browser and read its text,
-                     links, images and videos (use when the brief names a site, or
-                     to follow a link from a previous page). May be unavailable.
+                     links, buttons, images and videos (use when the brief names a
+                     site, or to follow a link from a previous page). If something
+                     the brief says is on the page is NOT in the result, check the
+                     `buttons` list and call again with click="<its selector>" —
+                     content behind a modal or tab often does not exist in the page
+                     until its control is pressed, and no waiting will reveal it.
+                     May be unavailable.
 - save_media       : download an image/video found by browse_page so you can post
                      it. Gives you an asset_path, like the generators do.
 - generate_video   : ONE Sora 2 clip, 4/8/12 seconds.

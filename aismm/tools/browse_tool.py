@@ -39,6 +39,9 @@ logger = logging.getLogger("aismm.tools.browse")
 _NAV_TIMEOUT_MS = 45_000
 _IDLE_TIMEOUT_MS = 15_000      # client-side rendering settle
 _SELECTOR_TIMEOUT_MS = 20_000
+# A modal's image is often fetched only once it is opened, and networkidle can
+# report clear before the new <img> has even been given its src.
+_CLICK_SETTLE_MS = 2_000
 _TEXT_LIMIT = 12_000          # chars of page text returned to the model
 _LINK_LIMIT = 60
 _MEDIA_LIMIT = 40
@@ -255,7 +258,7 @@ def _is_decorative(image: dict) -> bool:
 
 
 async def perform_browse_page(state: dict, url: str, scroll: bool = True,
-                              wait_for: str = "") -> dict:
+                              wait_for: str = "", click: str = "") -> dict:
     """Render one page and extract text/links/media (extracted for testability).
 
     Waiting is the hard part: many pages render their real content from
@@ -263,6 +266,15 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
     loading skeleton ("Generating…") and none of the images. We therefore wait
     for the network to go idle, optionally for a caller-supplied selector, and
     then force lazy images to load before reading the DOM.
+
+    ``click`` handles the other half: content that does not exist until something
+    is pressed. A comic page kept its character sheet in a modal whose ``<img>``
+    carried **no src at all** until a button set it — invisible to any amount of
+    waiting, and the button was a ``<button>`` so it wasn't in ``links`` either.
+    Clicking first, then extracting, is the only way to reach that.
+
+    ``buttons`` is returned for the same reason: without it the agent cannot even
+    discover that such a control exists.
     """
     ok, why = is_public_url(url)
     if not ok:
@@ -283,6 +295,23 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
                     await page.wait_for_selector(wait_for, timeout=_SELECTOR_TIMEOUT_MS)
                 except Exception:  # noqa: BLE001
                     logger.info("wait_for selector %r never appeared on %s", wait_for, url)
+            clicked = ""
+            if click:
+                try:
+                    await page.click(click, timeout=_SELECTOR_TIMEOUT_MS)
+                    clicked = click
+                    # Whatever the click opened has to fetch and paint before we
+                    # read the DOM — a modal image typically has no src until now.
+                    try:
+                        await page.wait_for_load_state("networkidle",
+                                                       timeout=_IDLE_TIMEOUT_MS)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await page.wait_for_timeout(_CLICK_SETTLE_MS)
+                    logger.info("Clicked %r on %s before reading", click, url)
+                except Exception as exc:  # noqa: BLE001 - report, keep the page
+                    logger.info("click selector %r did not work on %s: %s", click, url, exc)
+
             if scroll:
                 await page.evaluate(_LOAD_IMAGES_JS)
                 # One more settle: scrolling usually triggers further fetches.
@@ -297,6 +326,17 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
             links = await page.eval_on_selector_all(
                 "a[href]", "els => els.map(e => ({text: e.innerText.trim().slice(0, 120),"
                            " href: e.href})).filter(l => l.href.startsWith('http'))")
+            # Clickable controls that are NOT links, so the agent can discover a
+            # modal/tab/accordion it would otherwise never know about. Selectors
+            # are handed back ready to pass straight to `click`.
+            buttons = await page.eval_on_selector_all(
+                "button, [role=button], summary",
+                "els => els.map(e => ({"
+                "  label: (e.innerText || e.getAttribute('aria-label') || '').trim().slice(0, 60),"
+                "  selector: e.id ? '#' + e.id"
+                "    : (e.getAttribute('aria-label') ? '[aria-label=\"' +"
+                "        e.getAttribute('aria-label') + '\"]' : '')"
+                "})).filter(b => b.label && b.selector)")
             images = await page.evaluate(_EXTRACT_IMAGES_JS)
             videos = await page.eval_on_selector_all(
                 "video, video source",
@@ -337,17 +377,35 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
         if len(video_urls) >= _MEDIA_LIMIT:
             break
 
-    logger.info("browse_page %s -> %d chars, %d image(s), %d link(s)",
-                url, len(text), len(kept), len(links or []))
-    return {
+    controls, seen_selectors = [], set()
+    for button in buttons or []:
+        selector = button.get("selector", "")
+        if selector and selector not in seen_selectors:
+            seen_selectors.add(selector)
+            controls.append(button)
+        if len(controls) >= _LINK_LIMIT:
+            break
+
+    logger.info("browse_page %s -> %d chars, %d image(s), %d link(s), %d button(s)%s",
+                url, len(text), len(kept), len(links or []), len(controls),
+                f", clicked {clicked!r}" if clicked else "")
+    result = {
         "url": url,
         "title": title,
         "text": text[:_TEXT_LIMIT],
         "text_truncated": truncated,
         "links": [{"text": l["text"], "href": l["href"]} for l in (links or [])[:_LINK_LIMIT]],
+        "buttons": controls,
         "images": kept,
         "videos": video_urls,
     }
+    if click:
+        result["clicked"] = clicked
+        if not clicked:
+            result["click_failed"] = (
+                f"Nothing matched {click!r}, so the page was read unchanged. Check the "
+                f"`buttons` list for a selector that exists.")
+    return result
 
 
 def _make_browse_page(state: dict):
@@ -355,18 +413,26 @@ def _make_browse_page(state: dict):
         return None
 
     @function_tool
-    async def browse_page(url: str, scroll: bool = True, wait_for: str = "") -> dict:
+    async def browse_page(url: str, scroll: bool = True, wait_for: str = "",
+                          click: str = "") -> dict:
         """Open a web page in a real browser and read it.
 
         Runs JavaScript, so it works on pages that a plain HTTP fetch returns
-        empty. Returns the page title, its visible text, its links, and its
-        media. Each image comes back as
+        empty. Returns the page title, its visible text, its links, its clickable
+        ``buttons``, and its media. Each image comes back as
         ``{url, alt, width, height, caption}`` — ``alt`` often identifies it
         ("Panel 1"), ``caption`` is the text of the block around it (a comic
         panel's dialogue, a figure's caption), and ``url`` is the FULL-resolution
         source when the page exposes one. Pass that ``url`` to ``save_media`` to
         download it for posting. Decorative images (favicons, tracking pixels,
         anything under 64px) are filtered out.
+
+        **If something you were told exists is not in the result, look at
+        ``buttons``.** Content behind a modal, tab or accordion may not be in the
+        page at all until its control is pressed — an image can sit there with no
+        ``src`` whatsoever — and no amount of waiting will reveal it. Call again
+        with ``click`` set to that button's ``selector``. Buttons are not links,
+        so they never appear under ``links``.
 
         Args:
             url: Absolute http(s) URL to open.
@@ -377,8 +443,12 @@ def _make_browse_page(state: dict):
                 Use it when the content is drawn by JavaScript and the first
                 attempt came back with a placeholder ("Loading…", "Generating…")
                 or no images — e.g. "img[alt^=Panel]" or ".comic-panels img".
+            click: Optional CSS selector to CLICK before reading, for content that
+                only exists once opened — e.g. "#charSheetLink" to open a
+                character-sheet modal. Take the selector from ``buttons``. The
+                result reports ``clicked``, or ``click_failed`` if nothing matched.
         """
-        return await perform_browse_page(state, url, scroll, wait_for)
+        return await perform_browse_page(state, url, scroll, wait_for, click)
 
     return browse_page
 

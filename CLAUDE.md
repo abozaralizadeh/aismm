@@ -280,6 +280,12 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   and accept a `wait_for` selector. Images are returned as `{url, alt, width, height, caption}` with
   `url` preferring `data-full`/`data-src`/`srcset` over the `src` thumbnail — an agent working
   through numbered panels needs the alt text and the surrounding dialogue, not a bare URL.
+  **Some content does not exist until you CLICK it**, so `browse_page` takes a `click` selector and
+  returns a `buttons` list. A comic page kept its character sheet in a modal whose `<img>` had no
+  `src` attribute at all until a button set it — unreachable by any amount of waiting — and the
+  control was a `<button>`, so it wasn't in `links` either: the agent could neither see the image nor
+  discover the thing that reveals it, and correctly reported it couldn't finish. `buttons` is the
+  discovery path; keep it in the tool docstring and the prompt.
   **`save_media` sniffs bytes, never trusts `Content-Type`** (`sniff_media`): blobs uploaded without
   a content type serve `application/octet-stream`, which made real PNGs unpostable. Magic numbers →
   Pillow → content-type → URL extension, but a declared non-media type (text/html, pdf) still wins
