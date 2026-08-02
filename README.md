@@ -831,6 +831,31 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 > would make them useless — but it means an instruction with comment duties acts on the live account
 > even in `dry_run`. Keep that in mind when writing the brief.
 
+### Stories, and the music question
+
+**Stories are supported.** `publish(..., placement="story")` creates a `media_type=STORIES`
+container. Two things to know:
+
+- **A story carries no caption.** Graph ignores it, so any words have to be *in the image*.
+- **A story is 9:16, not 4:5.** Instagram's 4:5 floor is a *feed* limit; applying it to a story pads
+  a correct 1080×1920 image out to 1552×1920 and it publishes pillarboxed. Story placements now use
+  their own aspect range (`story_min_image_ratio`), so a 9:16 image is left alone.
+
+Because `/media` doesn't list stories, a story that fails at the last step is never reconciled the
+way a feed post is — the [duplicate ledger](#the-same-post-never-goes-out-twice) guards that case
+instead.
+
+**Music is not supported, and cannot be.** Meta's Content Publishing API has **no parameter for
+attaching a track from Instagram's audio library** — not for reels, not for stories. The container
+takes `image_url`/`video_url`, `media_type`, `caption`, `is_carousel_item`, `upload_type`,
+`is_ai_generated` and the branded-content fields, and nothing else. Third-party schedulers that
+advertise "add music" either post a draft you finish in the app, or embed the audio in the file.
+
+So the only audio that reaches a post is audio **already in the video file** — which is what
+`generate_video` and `create_video_sequence` produce (Sora clips carry their own soundtrack, and
+[merging](#video-longer-than-one-clip) preserves it). Adding a licensed track from Instagram's
+library still has to be done by hand in the app afterwards.
+
 ### Media never carries over between runs
 
 Asset files outlive the run that made them, but the agent cannot publish a path it merely *remembers*:

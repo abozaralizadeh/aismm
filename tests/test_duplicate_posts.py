@@ -934,3 +934,64 @@ def test_an_empty_grid_with_no_timestamps_is_unknown(monkeypatch):
     )
     platform = registry.get_platform(PlatformName.instagram)
     assert asyncio.run(platform.post_exists("token", ACCOUNT, "17999")) is None
+
+
+# --- a story is a different shape from the feed -------------------------------------- #
+# Instagram's 4:5 floor applies to FEED posts. Applying it to a story pads a
+# correct 9:16 image out to 0.8, so the story publishes pillarboxed — bars down
+# both sides. It "succeeds" and looks broken, which is worse than failing.
+
+def _story_sized_png(width, height):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (20, 40, 80)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _normalized(tmp_path, monkeypatch, data, placement):
+    import dataclasses
+    import io
+
+    from PIL import Image
+
+    from aismm import assets, config as config_module
+    from aismm.models import PlatformName
+    from aismm.platforms.registry import get_platform
+    from aismm.tools.publish_tool import _normalize_image_for
+
+    monkeypatch.setattr(assets, "settings",
+                        dataclasses.replace(config_module.settings, data_dir=tmp_path))
+    src = tmp_path / f"{placement}.png"
+    src.write_bytes(data)
+    caps = get_platform(PlatformName.instagram).capabilities
+    out = _normalize_image_for(str(src), caps, "instagram", placement)
+    return Image.open(io.BytesIO(assets.read_bytes(out)))
+
+
+def test_a_story_keeps_its_nine_by_sixteen_shape(tmp_path, monkeypatch):
+    img = _normalized(tmp_path, monkeypatch, _story_sized_png(1080, 1920), "story")
+    assert (img.width, img.height) == (1080, 1920)
+    assert abs(img.width / img.height - 0.5625) < 0.01
+
+
+def test_a_feed_post_is_still_padded_to_the_feed_floor(tmp_path, monkeypatch):
+    """The story relaxation must not loosen the feed, which really is 4:5."""
+    img = _normalized(tmp_path, monkeypatch, _story_sized_png(1080, 1920), "feed")
+    assert img.width / img.height >= 0.79
+
+
+def test_a_very_tall_story_is_still_brought_into_range(tmp_path, monkeypatch):
+    """Relaxed is not unlimited — 0.5 is the story floor."""
+    img = _normalized(tmp_path, monkeypatch, _story_sized_png(400, 1600), "story")
+    assert img.width / img.height >= 0.49
+
+
+def test_a_platform_without_story_limits_uses_the_feed_ones():
+    from aismm.models import PlatformName
+    from aismm.platforms.registry import get_platform
+
+    caps = get_platform(PlatformName.twitter).capabilities
+    assert caps.story_min_image_ratio is None       # falls back, no special-casing

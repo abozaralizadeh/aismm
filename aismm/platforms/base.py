@@ -43,6 +43,12 @@ class Capabilities:
     min_image_ratio: float | None = None     # width / height
     max_image_ratio: float | None = None
     max_image_width: int | None = None
+    # Stories are a different shape from the feed — 9:16 (0.5625) is the native
+    # one. Padding a story to the FEED's minimum ratio publishes it with bars
+    # down both sides, so a platform whose story limits differ declares them here
+    # and `perform_publish` picks the set that matches the placement.
+    story_min_image_ratio: float | None = None
+    story_max_image_ratio: float | None = None
 
 
 @dataclass

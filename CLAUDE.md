@@ -313,6 +313,16 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   comes back as a misleading "Media download has failed". Flatten alpha before JPEG (Pillow raises
   otherwise), and **pad, never crop**, to fix a ratio. Conversion is best-effort: on failure pass
   the original through so the platform's error surfaces. Video isn't re-encoded (no ffmpeg dep).
+- **A STORY is 9:16; the 4:5 floor is a FEED limit.** `Capabilities` carries `story_min_image_ratio`
+  / `story_max_image_ratio` and `_normalize_image_for` takes the `placement`, because padding a
+  correct 1080×1920 story up to 0.8 published it pillarboxed — succeeded, looked broken. A platform
+  that declares no story limits falls back to the feed ones.
+- **There is NO music/audio parameter in the Content Publishing API.** A container takes
+  `image_url`/`video_url`, `media_type`, `caption`, `is_carousel_item`, `upload_type`,
+  `is_ai_generated` and branded-content fields — nothing for Instagram's audio library. Audio can
+  only arrive already inside the video file (Sora clips carry their own; `video.concat_clips`
+  preserves it). Don't add a "music" argument; it cannot be implemented, and the publish docstring
+  says so to stop the agent claiming a soundtrack in a caption.
 - **Instagram placements** ([platforms/instagram.py](aismm/platforms/instagram.py)): carousel =
   child containers with `is_carousel_item=true` and NO caption, then a `CAROUSEL` parent carrying the
   caption + `children=<ids>`; a video child is `media_type=VIDEO` (**not** `REELS`, which is

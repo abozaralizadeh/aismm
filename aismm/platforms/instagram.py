@@ -183,9 +183,14 @@ class Instagram(SocialPlatform):
         # as "Media download has failed" with no hint that the FILE is the problem.
         image_formats=("jpg", "jpeg"),
         max_image_bytes=8 * 1024 * 1024,
-        min_image_ratio=0.8,       # 4:5
+        min_image_ratio=0.8,       # 4:5   — FEED posts only
         max_image_ratio=1.91,      # 1.91:1
         max_image_width=1440,
+        # A story is 9:16 (0.5625). Padding one up to the feed's 4:5 minimum
+        # publishes it pillarboxed — bars down both sides — which is what made
+        # stories "not work" while still technically succeeding.
+        story_min_image_ratio=0.5,
+        story_max_image_ratio=1.91,
         supports_carousel=True,
         supports_stories=True,
         max_carousel_items=10,

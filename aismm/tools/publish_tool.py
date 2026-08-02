@@ -67,8 +67,14 @@ def meta_caption_reason(caption: str) -> str:
     return ""
 
 
-def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
+def _normalize_image_for(asset_path: str, caps, platform_name: str,
+                         placement: str = "feed") -> str:
     """Re-encode an image to what ``platform_name`` accepts; return the new path.
+
+    The aspect limits depend on the PLACEMENT. A story is 9:16 while the feed
+    bottoms out at 4:5, so applying the feed's minimum to a story pads it to
+    pillarbox — the post succeeds and looks broken, which is worse than failing.
+    A platform that doesn't declare story limits keeps using the feed ones.
 
     Returns the original path unchanged when the platform declares no image
     constraints, or when conversion fails — a publish attempt with the original
@@ -76,12 +82,16 @@ def _normalize_image_for(asset_path: str, caps, platform_name: str) -> str:
     """
     if not (caps.image_formats or caps.max_image_bytes or caps.min_image_ratio):
         return asset_path
+    min_ratio, max_ratio = caps.min_image_ratio, caps.max_image_ratio
+    if placement == "story" and caps.story_min_image_ratio is not None:
+        min_ratio = caps.story_min_image_ratio
+        max_ratio = caps.story_max_image_ratio or max_ratio
     try:
         converted = media.normalize_image(
             read_bytes(asset_path),
             max_bytes=caps.max_image_bytes,
-            min_ratio=caps.min_image_ratio,
-            max_ratio=caps.max_image_ratio,
+            min_ratio=min_ratio,
+            max_ratio=max_ratio,
             max_width=caps.max_image_width,
         )
     except Exception as exc:  # noqa: BLE001 - never block a post on conversion
@@ -241,7 +251,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # here (before staging) so the preview, the approval queue and the live post
     # all reference the SAME converted file.
     # Every image in the post needs converting, not just the first.
-    paths = [_normalize_image_for(p, caps, account.platform.value)
+    paths = [_normalize_image_for(p, caps, account.platform.value, placement)
              if kind_from_path(p) == "image" else p for p in paths]
     asset_path = paths[0] if paths else ""
 
@@ -432,6 +442,16 @@ def _make_publish(state: dict):
                 stories carry no caption — put the words in the image instead.
             asset_path: Path to a generated media asset, or "" for a text-only post.
             media_kind: "auto" (infer from asset), or "text"/"image"/"video".
+            asset_paths: Several files for one post (a carousel), in order.
+            placement: "feed" (default), "story", or "reel". A story image should
+                be 9:16 — pass the right shape and it is kept; a feed image is
+                padded to 4:5 instead.
+
+        NO SOUNDTRACK. There is no way to attach a track from Instagram's music
+        library through the API — it has no parameter for it. Audio can only
+        reach a post by already being IN the video file, which is what
+        generate_video / create_video_sequence produce. Never tell a caption that
+        a song was added.
 
         Returns a status dict. The publish mode (dry-run / approval / live) is set
         on the instruction and enforced here — you do not control it.
