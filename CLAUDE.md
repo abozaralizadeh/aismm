@@ -306,6 +306,22 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 - **JPEGs are written BASELINE, not progressive** ([media.py](aismm/media.py)) — Meta's pipeline is
   unreliable with progressive JPEGs and only reports it as container status ERROR (2207076). Ratio
   padding also targets ~1% inside the platform's bounds; landing exactly on 0.8 is a coin flip.
+- **Publish quality is deliberately high, and measured** ([media.py](aismm/media.py)). Three settings
+  were quietly softening every post: a first pass at q88 while using 3% of Instagram's 8 MB budget,
+  `subsampling="4:2:0"` (invisible on photos, brutal on the line art and lettering this app posts),
+  and Pillow's default *bicubic* for what is always a DOWNscale. Now q95 + full chroma (`subsampling=0`)
+  + LANCZOS, backing off only when a byte cap bites. On a line-art panel that moved PSNR 24.5 → 26.6 dB,
+  where **26.60 dB is the ceiling set by the 1536→1440 resize itself** — i.e. the encode is now
+  essentially free. Keep `tests/test_media_conversion.py`'s ceiling test: it is what stops the next
+  "just lower quality a bit to save bytes" change.
+- **`optimize=True` needs `ImageFile.MAXBLOCK` raised** at these qualities, or Pillow raises "broken
+  data stream when writing image file" on a dense image. Sized to the image, with a no-optimize
+  fallback.
+- **`normalize_image` returns the input UNTOUCHED when it already complies** (`_already_compliant`).
+  Re-encoding a JPEG that needs nothing is a free generation of loss, and publishing the same asset
+  twice used to degrade it twice.
+- **Ratio fit runs BEFORE the width clamp.** Padding widens the image, so clamping first let a
+  1000×2000 come out 1616 wide — past the very `max_image_width` just applied.
 - **Images are normalized before publishing** ([media.py](aismm/media.py), called from
   `perform_publish` so preview/approval/live share one converted file). Platform limits live on
   `Capabilities` (`image_formats`, `max_image_bytes`, `min/max_image_ratio`, `max_image_width`);

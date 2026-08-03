@@ -31,7 +31,21 @@ import math
 
 logger = logging.getLogger("aismm.media")
 
-_JPEG_QUALITIES = (88, 80, 72, 64, 55)
+# Start as close to visually lossless as JPEG gets and only back off if the
+# platform's byte cap forces it. The first attempt used to be 88, which threw
+# away detail for nothing: a 1440px panel lands around 2-3% of Instagram's 8 MB
+# allowance, so there is a lot of headroom to spend on quality.
+_JPEG_QUALITIES = (95, 90, 85, 78, 70, 60)
+
+# 4:4:4 — full chroma resolution. 4:2:0 halves the colour planes, which is
+# invisible on a photo and very visible on the things this app actually posts:
+# line art, lettering, saturated flat colour. Only used once the size cap bites.
+_SUBSAMPLING_FULL = 0
+_SUBSAMPLING_HALF = "4:2:0"
+
+# Quality at or above this keeps full chroma; below it we are already fighting
+# for bytes, so the colour planes go too.
+_FULL_CHROMA_ABOVE = 85
 
 
 def _load(data: bytes):
@@ -95,14 +109,35 @@ def _fit_ratio(image, min_ratio: float, max_ratio: float):
 def _encode(image, max_bytes: int | None) -> bytes:
     """Encode as JPEG, backing off on quality then size until it fits."""
     def _jpeg(img, quality) -> bytes:
-        buffer = io.BytesIO()
-        # BASELINE, not progressive: Meta's media pipeline is unreliable with
-        # progressive JPEGs and reports it only as an opaque processing failure
-        # (container status ERROR / code 2207076). Baseline 4:2:0 is the format
-        # every platform's decoder handles.
-        img.save(buffer, format="JPEG", quality=quality, optimize=True,
-                 progressive=False, subsampling="4:2:0")
-        return buffer.getvalue()
+        from PIL import ImageFile
+
+        subsampling = (_SUBSAMPLING_FULL if quality >= _FULL_CHROMA_ABOVE
+                       else _SUBSAMPLING_HALF)
+        # `optimize` runs the encoder through a single output block, and Pillow's
+        # default is far too small for a dense image at high quality — it raises
+        # "broken data stream when writing image file" / "Suspension not allowed
+        # here". Size the block to the image and it is fine.
+        previous = ImageFile.MAXBLOCK
+        ImageFile.MAXBLOCK = max(previous, img.width * img.height * 3 + 65536)
+        try:
+            buffer = io.BytesIO()
+            # BASELINE, not progressive: Meta's media pipeline is unreliable with
+            # progressive JPEGs and reports it only as an opaque processing
+            # failure (container status ERROR / code 2207076). Baseline is the
+            # format every platform's decoder handles.
+            img.save(buffer, format="JPEG", quality=quality, optimize=True,
+                     progressive=False, subsampling=subsampling)
+            return buffer.getvalue()
+        except OSError:
+            # Still unhappy (an enormous image): drop `optimize`, which only buys
+            # a few percent of size and is the part that needs the big block.
+            logger.info("JPEG optimize pass failed at q%d; encoding without it", quality)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=quality, progressive=False,
+                     subsampling=subsampling)
+            return buffer.getvalue()
+        finally:
+            ImageFile.MAXBLOCK = previous
 
     data = _jpeg(image, _JPEG_QUALITIES[0])
     if not max_bytes or len(data) <= max_bytes:
@@ -113,9 +148,12 @@ def _encode(image, max_bytes: int | None) -> bytes:
         if len(data) <= max_bytes:
             return data
 
+    from PIL import Image
+
     scaled = image
     for _ in range(4):               # halve area until it fits
-        scaled = scaled.resize((max(scaled.width // 2, 1), max(scaled.height // 2, 1)))
+        scaled = scaled.resize((max(scaled.width // 2, 1), max(scaled.height // 2, 1)),
+                               Image.LANCZOS)
         data = _jpeg(scaled, _JPEG_QUALITIES[-1])
         if len(data) <= max_bytes:
             logger.info("Scaled image down to %dx%d to fit %d bytes",
@@ -123,6 +161,44 @@ def _encode(image, max_bytes: int | None) -> bytes:
             return data
     logger.warning("Could not get the image under %d bytes (got %d)", max_bytes, len(data))
     return data
+
+
+def _already_compliant(data: bytes, *, max_bytes, min_ratio, max_ratio, max_width) -> bool:
+    """Is this file already publishable exactly as it is?
+
+    Re-encoding a JPEG that needs nothing done to it costs a generation of
+    quality for no benefit, so check first. Deliberately conservative: anything
+    unreadable, non-JPEG, animated or with an alpha channel returns False and
+    goes through the normal path.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            if (image.format or "").upper() != "JPEG":
+                return False           # PNG/WebP must be converted regardless
+            if getattr(image, "n_frames", 1) > 1:
+                return False
+            width, height = image.size
+            if not (width and height):
+                return False
+            if max_bytes and len(data) > max_bytes:
+                return False
+            if max_width and width > max_width:
+                return False
+            ratio = width / height
+            if min_ratio and ratio < min_ratio:
+                return False
+            if max_ratio and ratio > max_ratio:
+                return False
+            # EXIF orientation is applied by _load(); if one is set the pixels on
+            # disk are not what we would publish, so it is not a no-op.
+            exif = image.getexif()
+            if exif and exif.get(0x0112, 1) not in (0, 1):
+                return False
+        return True
+    except Exception:  # noqa: BLE001 - unreadable here means "convert it"
+        return False
 
 
 def normalize_image(
@@ -133,16 +209,36 @@ def normalize_image(
     max_ratio: float | None = None,
     max_width: int | None = None,
 ) -> bytes:
-    """Return JPEG bytes that satisfy the given constraints."""
+    """Return JPEG bytes that satisfy the given constraints.
+
+    Returns the input UNTOUCHED when it already satisfies all of them. Every
+    re-encode of a JPEG is generation loss, so the best conversion is the one
+    that doesn't happen.
+    """
+    if _already_compliant(data, max_bytes=max_bytes, min_ratio=min_ratio,
+                          max_ratio=max_ratio, max_width=max_width):
+        logger.info("Image already meets this platform's limits (%d bytes) — "
+                    "publishing it as-is", len(data))
+        return data
+
     image = _flatten(_load(data))
 
-    if max_width and image.width > max_width:
-        height = max(round(image.height * max_width / image.width), 1)
-        image = image.resize((max_width, height))
-        logger.info("Resized image to %dx%d (max width %d)", max_width, height, max_width)
-
+    # Ratio FIRST, width second. Padding widens the image, so clamping the width
+    # before padding let a tall 1000x2000 come out 1616 wide — over the very
+    # limit we had just applied. Doing it in this order means the final width is
+    # always the one the platform asked for, and it is still a single resample.
     if min_ratio and max_ratio:
         image = _fit_ratio(image, min_ratio, max_ratio)
+
+    if max_width and image.width > max_width:
+        from PIL import Image
+
+        height = max(round(image.height * max_width / image.width), 1)
+        # LANCZOS, not Pillow's default bicubic: this is a DOWNscale, where
+        # bicubic visibly softens edges and lettering. It costs a little CPU once
+        # per post and is the difference between crisp and mushy line art.
+        image = image.resize((max_width, height), Image.LANCZOS)
+        logger.info("Resized image to %dx%d (max width %d)", max_width, height, max_width)
 
     return _encode(image, max_bytes)
 

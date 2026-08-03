@@ -730,10 +730,27 @@ else with `Media download has failed` — an error that points at the URL when t
 | WebP scraped from a page, PNG from `generate_image` | re-encoded to JPEG |
 | Transparency (RGBA/palette) | flattened onto a background — JPEG has no alpha |
 | 1024×1536 portrait (ratio 0.67, below Instagram's 0.8 floor) | **padded** to the nearest allowed ratio |
-| Wider than 1440px, or over 8 MB | downscaled; JPEG quality steps down until it fits |
+| Wider than 1440px, or over 8 MB | downscaled with LANCZOS; JPEG quality steps down only if still too big |
+| Already a compliant JPEG | left **exactly** as it is — no re-encode, no generation loss |
 
 Padding rather than cropping is deliberate: cropping an AI-generated image can cut the subject out.
-The pad colour is sampled from the image, so the bars are unobtrusive.
+The pad colour is sampled from the image, so the bars are unobtrusive. Ratio is fixed *before* the
+width clamp, so a padded image can never come out wider than the platform's limit.
+
+**Quality is kept as high as the platform allows.** The first JPEG pass is **q95 with full 4:4:4
+chroma**, downscaling uses **LANCZOS**, and quality only steps down if the byte cap actually bites —
+a 1440px panel uses a few percent of Instagram's 8 MB, so there is no reason to spend that budget on
+compression. Measured on a line-art panel:
+
+| | PSNR vs source |
+|---|---|
+| LANCZOS downscale only, no JPEG — the ceiling | 26.60 dB |
+| **What AISMM publishes now** | **26.57 dB** |
+| Previous settings (q88, 4:2:0, bicubic) | 24.52 dB |
+
+In other words the encode is now essentially free; everything left is the unavoidable 1536→1440
+resize. And an image that **already** meets the platform's limits is passed through byte-for-byte
+rather than re-encoded, so publishing the same asset twice doesn't degrade it twice.
 
 Conversion runs inside the publish gate, so the dry-run preview, the approval queue and the live post
 all reference the same converted file — and with blob storage on, the converted JPEG is the one
