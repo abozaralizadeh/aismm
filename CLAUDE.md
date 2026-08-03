@@ -108,7 +108,17 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   error '402 Payment Required'" told the agent nothing. `Twitter._api_error` explains 402 (billing,
   buy credits at console.x.com), 401/403 (token) and 429 (rate limit) distinctly, and EVERY X call
   path routes through it — `_upload_media` and `fetch_identity` used `raise_for_status()` and so
-  leaked the raw message.
+  leaked the raw message. **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
+  is the generic "One or more parameters to your request was invalid" while `errors[].message` names
+  the actual parameter.
+- **X media upload uses the SUB-PATH endpoints, not `command=`**
+  ([platforms/twitter.py](aismm/platforms/twitter.py) `_upload_media`): `POST
+  /2/media/upload/initialize` (**JSON**, `total_bytes` a real integer), `/{id}/append` (multipart,
+  `segment_index`), `/{id}/finalize`. X still documents the legacy `command=INIT|APPEND|FINALIZE`
+  form-parameter shape on `POST /2/media/upload`, but it 400s — that is the migration-era shell.
+  Only the STATUS poll still goes through `GET /2/media/upload?command=STATUS`. `media_type` is
+  **sniffed from the bytes** (`_media_type`), since `initialize` validates it and a PNG announced as
+  `image/jpeg` is a 400.
 - **Platforms subclass `SocialPlatform`** ([platforms/base.py](aismm/platforms/base.py)): declare
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is

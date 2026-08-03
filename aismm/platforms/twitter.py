@@ -29,6 +29,35 @@ logger = logging.getLogger("aismm.platforms.twitter")
 API = "https://api.x.com/2"
 _CHUNK = 4 * 1024 * 1024  # <5MB per APPEND
 
+# initialize validates media_type against this list, so a PNG announced as
+# image/jpeg is a 400 rather than a re-encode. The bytes are the authority —
+# same reasoning as browse_tool.sniff_media: a path extension can lie, and
+# nothing upstream guarantees the generator wrote a JPEG.
+_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _media_type(data: bytes, path: str, media_kind: str) -> str:
+    for magic, mime in _MAGIC:
+        if data.startswith(magic):
+            return mime
+    if data[4:8] == b"ftyp":
+        return "video/mp4"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    if ext in {"jpg", "jpeg"}:
+        return "image/jpeg"
+    if ext in {"png", "gif", "webp"}:
+        return f"image/{ext}"
+    if ext in {"mp4", "mov", "webm"}:
+        return "video/mp4" if ext == "mov" else f"video/{ext}"
+    return "video/mp4" if media_kind == "video" else "image/jpeg"
+
 
 def split_thread(text: str, limit: int, max_posts: int, pin_suffix: str = "") -> list[str]:
     """Break a long caption into posts that each fit ``limit``.
@@ -132,31 +161,45 @@ class Twitter(SocialPlatform):
         return Identity(external_id=data.get("id", ""), handle=data.get("username", ""))
 
     async def _upload_media(self, client, access_token, path, media_kind) -> str:
-        media_type = "video/mp4" if media_kind == "video" else "image/jpeg"
-        category = "tweet_video" if media_kind == "video" else "tweet_image"
+        """Chunked upload via the v2 **sub-path** endpoints, returning the media id.
+
+        X documents two shapes: the legacy ``command=INIT|APPEND|FINALIZE`` form
+        parameters on ``POST /2/media/upload``, and dedicated
+        ``/initialize``, ``/{id}/append``, ``/{id}/finalize`` endpoints. The
+        command form rejected our INIT with a bare 400 ("One or more parameters
+        to your request was invalid") — it is the migration-era shell, and
+        ``initialize`` wants a **JSON** body with ``total_bytes`` as a real
+        integer, not a form field. Use the dedicated endpoints; they are the
+        documented contract now.
+        """
         data = read_bytes(path)   # blob-aware: falls back to Azure when local is gone
+        media_type = _media_type(data, path, media_kind)
+        category = "tweet_video" if media_kind == "video" else "tweet_image"
         headers = {"Authorization": f"Bearer {access_token}"}
         url = f"{API}/media/upload"
 
-        # INIT
-        r = await client.post(url, headers=headers, data={
-            "command": "INIT", "total_bytes": str(len(data)),
-            "media_type": media_type, "media_category": category})
+        # INITIALIZE — JSON, and total_bytes must be a number.
+        r = await client.post(f"{url}/initialize", headers=headers,
+                              json={"media_type": media_type, "total_bytes": len(data),
+                                    "media_category": category})
         if r.status_code >= 400:
             raise self._api_error(r)
-        media_id = str(r.json()["data"]["id"] if "data" in r.json() else r.json()["media_id"])
+        body = r.json()
+        media_id = str((body.get("data") or body).get("id") or body.get("media_id") or "")
+        if not media_id:
+            raise RuntimeError(f"X media initialize returned no id: {str(body)[:300]}")
 
-        # APPEND (chunked)
+        # APPEND (chunked) — multipart, one segment per chunk.
         for idx, start in enumerate(range(0, len(data), _CHUNK)):
             chunk = data[start:start + _CHUNK]
-            r = await client.post(url, headers=headers,
-                                  data={"command": "APPEND", "media_id": media_id, "segment_index": str(idx)},
+            r = await client.post(f"{url}/{media_id}/append", headers=headers,
+                                  data={"segment_index": str(idx)},
                                   files={"media": ("chunk", chunk, "application/octet-stream")})
             if r.status_code >= 400:
                 raise self._api_error(r)
 
         # FINALIZE
-        r = await client.post(url, headers=headers, data={"command": "FINALIZE", "media_id": media_id})
+        r = await client.post(f"{url}/{media_id}/finalize", headers=headers)
         if r.status_code >= 400:
             raise self._api_error(r)
         info = r.json().get("data", r.json())
@@ -263,14 +306,24 @@ class Twitter(SocialPlatform):
         Payment Required'") tells you nothing actionable, and the cause is not a
         bug in the post: X moved to **pay-per-use credits** in February 2026, so
         an account with no credits cannot publish at all.
+
+        ``detail`` and ``errors[]`` are BOTH reported. On a 400 the top-level
+        detail is the useless generic "One or more parameters to your request
+        was invalid" while ``errors[].message`` names the actual parameter —
+        reading detail alone turned a precise complaint into a guessing game
+        during the media-upload migration.
         """
         try:
             body = response.json()
         except Exception:  # noqa: BLE001
             body = {}
-        detail = (body.get("detail") or body.get("title")
-                  or (body.get("errors") or [{}])[0].get("message")
-                  or (response.text or "")[:300])
+        specifics = [str(e.get("message") or e.get("detail") or "").strip()
+                     for e in (body.get("errors") or []) if isinstance(e, dict)]
+        specifics = [s for s in specifics if s]
+        detail = body.get("detail") or body.get("title") or (response.text or "")[:300]
+        for extra in specifics:
+            if extra not in detail:
+                detail = f"{detail} ({extra})" if detail else extra
         hint = ""
         if response.status_code == 402:
             hint = (" — this is BILLING, not a problem with the post. The X API is "

@@ -44,7 +44,8 @@ def api(monkeypatch):
     """Record every X API call; return plausible responses."""
     from aismm.platforms import twitter as tw
 
-    calls = {"uploads": [], "tweets": [], "gets": [], "deletes": []}
+    calls = {"uploads": [], "tweets": [], "gets": [], "deletes": [],
+             "appends": [], "finalizes": []}
 
     class _Resp:
         def __init__(self, payload, status=200):
@@ -67,12 +68,15 @@ def api(monkeypatch):
             return False
 
         async def post(self, url, **kw):
-            if url.endswith("/media/upload"):
-                data = kw.get("data", {})
-                if data.get("command") == "INIT":
-                    calls["uploads"].append(data)
-                    return _Resp({"data": {"id": f"media{len(calls['uploads'])}"}})
-                return _Resp({"data": {"id": "media"}})
+            if url.endswith("/media/upload/initialize"):
+                calls["uploads"].append(kw.get("json", {}))
+                return _Resp({"data": {"id": f"media{len(calls['uploads'])}"}})
+            if url.endswith("/append"):
+                calls["appends"].append((url, kw.get("data", {})))
+                return _Resp({"data": {"expires_at": 1}})
+            if url.endswith("/finalize"):
+                calls["finalizes"].append(url)
+                return _Resp({"data": {"id": url.split("/")[-2]}})
             calls["tweets"].append(kw.get("json", {}))
             return _Resp({"data": {"id": "1799"}})
 
@@ -135,6 +139,47 @@ def test_a_text_only_post_uploads_nothing(api):
                              asset_path="", media_kind="text", asset_paths=None))
     assert api["uploads"] == []
     assert "media" not in api["tweets"][0]
+
+
+# --- the media upload contract ------------------------------------------------------- #
+#
+# The command=INIT|APPEND|FINALIZE form on POST /2/media/upload answered a real
+# republish with a bare 400 ("One or more parameters to your request was
+# invalid"). These pin the dedicated sub-path endpoints that replaced it.
+
+def test_initialize_sends_json_with_a_numeric_total_bytes(api):
+    """A form-encoded total_bytes is what the 400 was about."""
+    _publish(asset_path="/a.jpg", asset_paths=None)
+    init = api["uploads"][0]
+    assert init["total_bytes"] == len(b"\xff\xd8\xffdata")
+    assert isinstance(init["total_bytes"], int)
+    assert init["media_category"] == "tweet_image"
+    assert "command" not in init
+
+
+def test_the_media_type_is_sniffed_from_the_bytes(api, monkeypatch):
+    """A PNG announced as image/jpeg is rejected by initialize."""
+    from aismm.platforms import twitter as tw
+
+    monkeypatch.setattr(tw, "read_bytes", lambda p: b"\x89PNG\r\n\x1a\npixels")
+    _publish(asset_path="/a.jpg", asset_paths=None)   # extension lies; bytes win
+    assert api["uploads"][0]["media_type"] == "image/png"
+
+
+def test_append_and_finalize_address_the_media_by_id(api):
+    _publish(asset_path="/a.jpg", asset_paths=None)
+    url, data = api["appends"][0]
+    assert url.endswith("/media/upload/media1/append")
+    assert data["segment_index"] == "0"
+    assert api["finalizes"] == ["https://api.x.com/2/media/upload/media1/finalize"]
+
+
+def test_a_large_asset_is_appended_in_segments(api, monkeypatch):
+    from aismm.platforms import twitter as tw
+
+    monkeypatch.setattr(tw, "read_bytes", lambda p: b"\xff\xd8\xff" + b"0" * (tw._CHUNK * 2))
+    _publish(asset_path="/big.jpg", asset_paths=None)
+    assert [d["segment_index"] for _u, d in api["appends"]] == ["0", "1", "2"]
 
 
 def test_no_single_post_exceeds_280(api):
@@ -510,3 +555,25 @@ def test_a_402_while_POSTING_is_explained_too(monkeypatch):
                                  asset_path="", media_kind="text"))
     assert "BILLING" in str(exc.value)
     assert "console.x.com" in str(exc.value)
+
+
+def test_the_specific_parameter_complaint_is_not_swallowed(monkeypatch):
+    """The 400 that broke media upload said only "One or more parameters to your
+    request was invalid" — X named the real problem in errors[], and reading
+    detail alone reduced a precise complaint to a guessing game."""
+    _failing_get(monkeypatch, 400, {
+        "detail": "One or more parameters to your request was invalid.",
+        "errors": [{"message": "total_bytes must be an integer"}]})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    assert "total_bytes must be an integer" in str(exc.value)
+    assert "One or more parameters" in str(exc.value)
+
+
+def test_a_repeated_message_is_not_printed_twice(monkeypatch):
+    _failing_get(monkeypatch, 400, {"detail": "bad id", "errors": [{"message": "bad id"}]})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    assert str(exc.value).count("bad id") == 1
