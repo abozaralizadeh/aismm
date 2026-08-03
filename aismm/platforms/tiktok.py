@@ -89,7 +89,18 @@ class TikTok(SocialPlatform):
         return Identity(external_id=user.get("open_id", ""), handle=user.get("display_name", ""))
 
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
-                      instruction=None) -> PublishResult:
+                      instruction=None, asset_paths=None, placement="feed") -> PublishResult:
+        """Upload one video.
+
+        ``asset_paths`` / ``placement`` are part of the :class:`SocialPlatform`
+        contract and are always passed; TikTok is single-video here, so extra
+        paths are refused rather than silently dropped.
+        """
+        if asset_paths and len(asset_paths) > 1:
+            raise RuntimeError(
+                f"TikTok takes one video per post; {len(asset_paths)} assets were passed. "
+                f"Publish them separately.")
+        asset_path = asset_path or (asset_paths[0] if asset_paths else "")
         if media_kind != "video" or not asset_path:
             raise RuntimeError("TikTok requires a video asset; generate a video first.")
         # Read up front: the bytes may live in blob storage rather than on disk.

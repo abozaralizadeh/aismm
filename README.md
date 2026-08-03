@@ -848,6 +848,29 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 > would make them useless — but it means an instruction with comment duties acts on the live account
 > even in `dry_run`. Keep that in mind when writing the brief.
 
+### What the agent can do on X (Twitter)
+
+The same shape as the Instagram surface, and likewise only present on runs that target an X account.
+
+**Publishing** goes through the one gated `publish` tool. X takes **up to 4 images** in a post
+(`asset_paths=[…]`) or **one video** — mixed sets are refused, and the 280-character limit is
+enforced.
+
+| Tool | What it's for |
+|---|---|
+| `x_recent_posts` | what the account already posted, with engagement counts — stops it repeating itself and shows its own voice |
+| `x_mentions` | posts that mentioned the account |
+| `x_reply_to_post` | answer one publicly, in the account's voice (posts immediately, like the Instagram reply tool) |
+| `x_post_metrics` | impressions, likes, reposts, replies for one post |
+| `x_profile` | bio, follower and post counts |
+| `x_delete_post` | remove one of the account's own posts — a factual error, a duplicate |
+
+> **X's Free plan is write-only.** It can post, reply and delete, but every *read* above needs at
+> least the **Basic** plan and returns 403 otherwise. The error says so explicitly rather than
+> returning an empty list, because "this account has no posts" and "your plan can't read posts"
+> deserve very different responses — and the agent is told that a plan limit is not a reason to fail
+> a run it can still write.
+
 ### Stories, and the music question
 
 **Stories are supported.** `publish(..., placement="story")` creates a `media_type=STORIES`

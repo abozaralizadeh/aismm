@@ -59,7 +59,19 @@ class YouTube(SocialPlatform):
         return Identity(external_id=ch["id"], handle=ch["snippet"].get("title", ""))
 
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
-                      instruction=None) -> PublishResult:
+                      instruction=None, asset_paths=None, placement="feed") -> PublishResult:
+        """Upload one video.
+
+        ``asset_paths`` / ``placement`` are part of the :class:`SocialPlatform`
+        contract and are always passed; YouTube is single-video, so the extra
+        paths are refused rather than silently dropped. ``Capabilities`` already
+        declares no carousel, so `perform_publish` normally catches this first.
+        """
+        if asset_paths and len(asset_paths) > 1:
+            raise RuntimeError(
+                f"YouTube takes one video per upload; {len(asset_paths)} assets were passed. "
+                f"Publish them as separate videos.")
+        asset_path = asset_path or (asset_paths[0] if asset_paths else "")
         if media_kind != "video" or not asset_path:
             raise RuntimeError("YouTube requires a video asset; generate a video first.")
         # Read up front: the bytes may live in blob storage rather than on disk.

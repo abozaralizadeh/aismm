@@ -86,6 +86,19 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   OAuth connect needs them; publishing uses the stored token, so `get_platform(name)` without creds
   is fine there. Add a platform → add a `setup_guides.GUIDES` entry too, or its Apps page shows a
   bare placeholder.
+- **`publish()` MUST take the full keyword set** — `perform_publish` always passes `asset_paths`
+  and `placement`. Python doesn't check override signatures, so Twitter/YouTube/TikTok kept the old
+  narrower signature after Instagram grew carousels, and the first ever X publish died with
+  `got an unexpected keyword argument 'asset_paths'` — *after* a full run of browsing and image
+  generation. `tests/test_store_interface.py` and `scripts/preflight.py` now both bind the real call
+  against every registered platform, so adding a platform (or widening the base signature) fails
+  before deploy rather than on someone's first post.
+- **Platform-specific tool modules mirror each other** (`instagram_tools.py`, `twitter_tools.py`):
+  every factory returns `None` unless the run targets that platform, so an IG run isn't handed the
+  six X tools. Write tools (reply, delete) act immediately and are deliberately NOT behind
+  `publish_mode` — that gate is about posts. **X's Free plan is write-only**: reads 403, so the
+  error text names the plan and the prompt tells the agent that's a plan limit, not a reason to fail
+  the run.
 - **Platforms subclass `SocialPlatform`** ([platforms/base.py](aismm/platforms/base.py)): declare
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is

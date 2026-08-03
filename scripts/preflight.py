@@ -46,6 +46,40 @@ def _check_store_backends() -> None:
                  if not problems else "Store interface: MISMATCH")
 
 
+def _check_publish_signatures() -> None:
+    """Every platform must accept what perform_publish always sends.
+
+    Python does not check override signatures, so a platform missing
+    ``asset_paths``/``placement`` looks fine until the first real publish, which
+    then dies with TypeError *after* the agent has spent a run producing media.
+    """
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.publish)
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        actual = names(cls.publish)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.publish() is missing {', '.join(sorted(missing))} — "
+                f"perform_publish passes these on every call, so publishing to "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("publish() is missing" in p for p in problems):
+        notes.append(f"Publish contract: {len(registered_platforms())} platform(s) OK")
+
+
 def _check_imports() -> None:
     """Import everything a worker imports at boot, minus the side effects."""
     import aismm.dashboard.app  # noqa: F401  - route + template wiring
@@ -72,7 +106,8 @@ def _check_config() -> None:
 
 
 def main() -> int:
-    for check in (_check_store_backends, _check_imports, _check_config):
+    for check in (_check_store_backends, _check_imports, _check_publish_signatures,
+                  _check_config):
         try:
             check()
         except Exception as exc:  # noqa: BLE001 - any failure here blocks the deploy

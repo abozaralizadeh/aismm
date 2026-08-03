@@ -668,6 +668,10 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
      ("instagram_recent_posts", "instagram_comments", "instagram_reply_to_comment",
       "instagram_moderate_comment", "instagram_insights", "instagram_publishing_limit",
       "instagram_profile", "instagram_mentions")),
+    ("X (Twitter)", "Reading the timeline and replying. Ignored on other platforms; "
+                    "the reads need at least X's Basic plan.",
+     ("x_recent_posts", "x_mentions", "x_reply_to_post", "x_post_metrics",
+      "x_profile", "x_delete_post")),
 ]
 
 

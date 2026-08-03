@@ -141,11 +141,35 @@ def _gate(store, account, **kwargs):
     return asyncio.run(perform_publish(state, "caption", **kwargs)), state
 
 
-def test_gate_rejects_a_carousel_on_a_platform_without_one(store):
+def test_gate_rejects_a_carousel_on_a_platform_without_one(store, monkeypatch):
+    """Stubbed capabilities, not a real platform: this is about the GATE.
+
+    It used to use X as the no-carousel example, which quietly stopped testing
+    anything the day X gained 4-image posts.
+    """
+    import dataclasses
+
+    from aismm.platforms import registry
+
     twitter = store.upsert_account(Account(platform=PlatformName.twitter, external_id="1"),
                                    access_token="t")
+    platform = registry.get_platform(PlatformName.twitter)
+    monkeypatch.setattr(platform, "capabilities",
+                        dataclasses.replace(platform.capabilities, supports_carousel=False))
+    monkeypatch.setattr(registry, "get_platform", lambda *a, **kw: platform)
+
     result, _ = _gate(store, twitter, asset_paths=["/a.jpg", "/b.jpg"], media_kind="image")
     assert result["error"] == "unsupported_placement"
+
+
+def test_x_accepts_four_images_but_not_five(store):
+    """X's real limit, enforced by the gate before any upload happens."""
+    twitter = store.upsert_account(Account(platform=PlatformName.twitter, external_id="1"),
+                                   access_token="t")
+    five = [f"/{n}.jpg" for n in range(5)]
+    result, _ = _gate(store, twitter, asset_paths=five, media_kind="image")
+    assert result["error"] == "too_many_items"
+    assert "4" in result["message"]
 
 
 def test_gate_rejects_a_story_on_a_platform_without_one(store):

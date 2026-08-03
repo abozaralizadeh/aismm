@@ -76,3 +76,58 @@ def test_preflight_detects_a_missing_method(monkeypatch):
     preflight.problems.clear()
     preflight._check_store_backends()
     assert preflight.problems and "count_runs" in preflight.problems[0]
+
+
+# --- every platform must honour the publish contract --------------------------------- #
+# `perform_publish` ALWAYS passes asset_paths and placement. Instagram grew them
+# when carousels/stories were added; the other three never did, so the first real
+# publish on X died with `Twitter.publish() got an unexpected keyword argument
+# 'asset_paths'` — after the agent had browsed, generated an image and written its
+# memory. Python does not check override signatures, so this test does.
+
+import inspect as _inspect
+
+import pytest as _pytest
+
+from aismm.models import PlatformName as _PlatformName
+from aismm.platforms.base import SocialPlatform as _SocialPlatform
+from aismm.platforms.registry import (
+    get_platform_class as _get_platform_class,
+    registered_platforms as _registered_platforms,
+)
+
+
+def _publish_kwargs(func) -> set:
+    signature = _inspect.signature(func)
+    if any(p.kind is _inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+        return set()          # **kwargs accepts anything
+    return {name for name, p in signature.parameters.items() if name != "self"}
+
+
+@_pytest.mark.parametrize("name", _registered_platforms(), ids=lambda n: n.value)
+def test_publish_accepts_every_argument_the_publish_tool_sends(name):
+    required = _publish_kwargs(_SocialPlatform.publish)
+    actual = _publish_kwargs(_get_platform_class(name).publish)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.publish() is missing {sorted(missing)} — perform_publish passes "
+        f"these on every call, so the first publish would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _registered_platforms(), ids=lambda n: n.value)
+def test_publish_is_callable_with_the_full_keyword_set(name):
+    """Bind the real call `perform_publish` makes — catches order/kind mistakes too."""
+    signature = _inspect.signature(_get_platform_class(name).publish)
+    signature.bind_partial(
+        None, access_token="t", account=None, caption="c", asset_path="/a.jpg",
+        media_kind="image", instruction=None, asset_paths=["/a.jpg"], placement="feed")
+
+
+@_pytest.mark.parametrize("name", _registered_platforms(), ids=lambda n: n.value)
+def test_carousel_capability_matches_reality(name):
+    """A platform that says it takes several items must accept several paths."""
+    caps = _get_platform_class(name).capabilities
+    if caps.supports_carousel:
+        assert caps.max_carousel_items > 1

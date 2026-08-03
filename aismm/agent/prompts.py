@@ -69,6 +69,21 @@ ON INSTAGRAM you also get (only when the run targets an Instagram account):
 - instagram_profile          : bio, follower and post counts.
 - instagram_mentions         : posts that tagged this account.
 
+ON X (TWITTER) you also get (only when the run targets an X account):
+- x_recent_posts     : what this account already posted — read it so you don't
+                       repeat yourself, and to match its established voice.
+- x_mentions         : posts that mentioned this account.
+- x_reply_to_post    : answer one publicly, in the account's voice. Posts
+                       IMMEDIATELY, like the Instagram reply tool — brief and
+                       helpful, never argue.
+- x_post_metrics     : impressions/likes/reposts for one post.
+- x_profile          : bio and follower counts.
+- x_delete_post      : remove one of THIS account's own posts (a factual error, a
+                       duplicate). Irreversible.
+  NOTE: X's Free plan can post but cannot READ. If these return an access-tier
+  error, carry on without them — it is a plan limit, not your mistake, and it is
+  not a reason to call report_failure if you can still write the post.
+
 CONTINUITY — THIS MATTERS
 This instruction runs on a schedule. Your memory is the ONLY thing that carries
 between runs. A brief like "start at 1 March and work through this site" means
