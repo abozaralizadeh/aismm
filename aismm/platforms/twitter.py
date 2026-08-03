@@ -30,6 +30,73 @@ API = "https://api.x.com/2"
 _CHUNK = 4 * 1024 * 1024  # <5MB per APPEND
 
 
+def split_thread(text: str, limit: int, max_posts: int, pin_suffix: str = "") -> list[str]:
+    """Break a long caption into posts that each fit ``limit``.
+
+    Splits on the largest natural boundary that works — paragraph, then sentence,
+    then word — so a thought is never cut mid-word and rarely mid-sentence.
+    Numbered ``n/m`` once there is more than one post, which is the X convention
+    and tells a reader how much is coming; the counter is inside the limit, not
+    added on top of it.
+
+    ``pin_suffix`` is moved from the end of the text to the FIRST post. That is
+    for the AI-disclosure label: it is appended to the caption, so on a thread it
+    would otherwise land on the last post — invisible to anyone who only sees
+    post 1 in their timeline, which is exactly the "first exposure" the label
+    exists to cover.
+
+    The text is truncated only if it cannot fit in ``max_posts`` — a bound that
+    exists so a runaway caption can't post fifty times.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    pin = (pin_suffix or "").strip()
+    if pin and text.endswith(pin):
+        text = text[: -len(pin)].strip()
+        if not text:
+            return [pin]
+    else:
+        pin = ""
+
+    if len(text) + (len(pin) + 2 if pin else 0) <= limit:
+        return [f"{text}\n\n{pin}" if pin else text]
+
+    # " 99/99" — reserved up front so numbering can never push a post over.
+    counter_room = 7
+    budget = max(limit - counter_room, 40)
+    first_budget = max(budget - (len(pin) + 2 if pin else 0), 40)
+
+    parts: list[str] = []
+    remaining = text
+    while remaining and len(parts) < max_posts:
+        # Post 1 gives up room to the pinned label.
+        room = first_budget if not parts else budget
+        if len(remaining) <= room:
+            parts.append(remaining)
+            break
+        window = remaining[: room + 1]
+        # Prefer a paragraph break, then a sentence end, then any whitespace.
+        floor = room // 3
+        cut = max(window.rfind("\n\n"), window.rfind("\n"))
+        if cut < floor:
+            sentence = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+            cut = sentence + 1 if sentence >= floor else -1
+        if cut < floor:
+            space = window.rfind(" ")
+            cut = space if space > 0 else room
+        parts.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+
+    if pin:
+        parts[0] = f"{parts[0]}\n\n{pin}"
+    if len(parts) == 1:
+        return parts
+    total = len(parts)
+    return [f"{part} {index}/{total}" for index, part in enumerate(parts, start=1)]
+
+
 class Twitter(SocialPlatform):
     name = PlatformName.twitter
     capabilities = Capabilities(
@@ -39,12 +106,15 @@ class Twitter(SocialPlatform):
         needs_public_media_url=False,
         default_orientation="landscape",
         caption_limit=280,
-        notes="280 chars. Up to 4 images OR 1 video per post. "
-              "Media via chunked upload (media.write scope).",
+        notes="280 chars per post, auto-threaded beyond that. "
+              "Up to 4 images OR 1 video. Media via chunked upload (media.write scope).",
         # X allows four images in one post — the same "carousel" idea, so the
         # publish tool's item-count check covers it without special-casing.
         supports_carousel=True,
         max_carousel_items=4,
+        # Anything over 280 becomes a thread rather than being cut off.
+        supports_threads=True,
+        max_thread_posts=25,
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
@@ -56,7 +126,8 @@ class Twitter(SocialPlatform):
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(f"{API}/users/me",
                                  headers={"Authorization": f"Bearer {access_token}"})
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise self._api_error(r)
             data = r.json().get("data", {})
         return Identity(external_id=data.get("id", ""), handle=data.get("username", ""))
 
@@ -71,7 +142,8 @@ class Twitter(SocialPlatform):
         r = await client.post(url, headers=headers, data={
             "command": "INIT", "total_bytes": str(len(data)),
             "media_type": media_type, "media_category": category})
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise self._api_error(r)
         media_id = str(r.json()["data"]["id"] if "data" in r.json() else r.json()["media_id"])
 
         # APPEND (chunked)
@@ -80,11 +152,13 @@ class Twitter(SocialPlatform):
             r = await client.post(url, headers=headers,
                                   data={"command": "APPEND", "media_id": media_id, "segment_index": str(idx)},
                                   files={"media": ("chunk", chunk, "application/octet-stream")})
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise self._api_error(r)
 
         # FINALIZE
         r = await client.post(url, headers=headers, data={"command": "FINALIZE", "media_id": media_id})
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise self._api_error(r)
         info = r.json().get("data", r.json())
         processing = info.get("processing_info")
 
@@ -93,7 +167,8 @@ class Twitter(SocialPlatform):
             await asyncio.sleep(processing.get("check_after_secs", 3))
             r = await client.get(url, headers=headers,
                                  params={"command": "STATUS", "media_id": media_id})
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise self._api_error(r)
             processing = r.json().get("data", r.json()).get("processing_info")
         if processing and processing.get("state") == "failed":
             raise RuntimeError(f"X media processing failed: {processing.get('error')}")
@@ -109,43 +184,86 @@ class Twitter(SocialPlatform):
         argument 'asset_paths'`` after the agent had already generated the image.
         """
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-        payload: dict = {"text": caption[: self.capabilities.caption_limit]}
+        caps = self.capabilities
         paths = [p for p in (asset_paths or [asset_path]) if p]
         # One video, or up to four images — X refuses a mixed set.
         if media_kind == "video":
             paths = paths[:1]
         else:
-            paths = paths[: self.capabilities.max_carousel_items]
+            paths = paths[: caps.max_carousel_items]
+
+        # The disclosure label is appended to the caption, so on a thread it would
+        # land on the LAST post — unseen by anyone who only meets post 1 in their
+        # timeline. Pin it to the first instead.
+        from .. import disclosure
+
+        posts = split_thread(caption, caps.caption_limit, caps.max_thread_posts,
+                             pin_suffix=disclosure.label() if disclosure.enabled(instruction)
+                             else "")
+        if not posts:
+            posts = [""]
 
         async with httpx.AsyncClient(timeout=120) as client:
+            media_ids: list[str] = []
             # No os.path.exists gate: the bytes may live in blob storage.
             if media_kind in {"image", "video"} and paths:
                 media_ids = [await self._upload_media(client, access_token, path, media_kind)
                              for path in paths]
-                payload["media"] = {"media_ids": media_ids}
-            r = await client.post(f"{API}/tweets", headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json().get("data", {})
-        tweet_id = data.get("id", "")
+
+            first_id = ""
+            reply_to = ""
+            for index, text in enumerate(posts):
+                payload: dict = {"text": text}
+                # Media rides on the FIRST post: that is the one shown in a
+                # timeline, and X would otherwise repeat the image down the thread.
+                if media_ids and index == 0:
+                    payload["media"] = {"media_ids": media_ids}
+                if reply_to:
+                    payload["reply"] = {"in_reply_to_tweet_id": reply_to}
+                r = await client.post(f"{API}/tweets", headers=headers, json=payload)
+                if r.status_code >= 400:
+                    if first_id:
+                        # The thread is already partly public; report what exists
+                        # rather than losing the id of what did go out.
+                        logger.error("Thread broke at post %d/%d: %s",
+                                     index + 1, len(posts), self._api_error(r))
+                        break
+                    raise self._api_error(r)
+                data = r.json().get("data", {})
+                reply_to = data.get("id", "")
+                if index == 0:
+                    first_id, first_data = reply_to, data
+
+        if len(posts) > 1:
+            logger.info("Posted an X thread of %d posts (%d chars)", len(posts), len(caption or ""))
         handle = account.handle or "i"
-        return PublishResult(url=f"https://x.com/{handle}/status/{tweet_id}" if tweet_id else "",
-                             external_id=tweet_id, raw=data)
+        return PublishResult(
+            url=f"https://x.com/{handle}/status/{first_id}" if first_id else "",
+            external_id=first_id,
+            raw={**first_data, "thread_posts": len(posts)} if first_id else {})
 
 
     # ------------------------------------------------------------------ #
     # Reading and engagement
     #
-    # NOTE ON ACCESS TIERS: X's Free tier is essentially write-only (posting and
-    # deleting). Every READ here — timeline, mentions, metrics — needs at least
-    # Basic, and returns 403 on Free. The tools surface that verbatim rather than
-    # pretending the account is empty, because "no posts" and "your plan cannot
-    # read posts" call for very different responses from the agent.
+    # NOTE ON BILLING: since February 2026 the X API is PAY-PER-USE with no free
+    # tier — you buy credits and every call, read or write, spends them. An
+    # account out of credits gets 402 on everything, including posting. The tools
+    # surface that verbatim rather than pretending the account is empty, because
+    # "no posts", "not allowed" and "out of credits" need very different
+    # responses from the agent.
     # ------------------------------------------------------------------ #
     TWEET_FIELDS = "id,text,created_at,public_metrics,conversation_id,referenced_tweets"
 
     @staticmethod
     def _api_error(response: httpx.Response) -> RuntimeError:
-        """X errors are JSON; surface the reason instead of a bare status code."""
+        """X errors are JSON; surface the reason instead of a bare status code.
+
+        402 gets spelled out because httpx's own message ("Client error '402
+        Payment Required'") tells you nothing actionable, and the cause is not a
+        bug in the post: X moved to **pay-per-use credits** in February 2026, so
+        an account with no credits cannot publish at all.
+        """
         try:
             body = response.json()
         except Exception:  # noqa: BLE001
@@ -154,9 +272,17 @@ class Twitter(SocialPlatform):
                   or (body.get("errors") or [{}])[0].get("message")
                   or (response.text or "")[:300])
         hint = ""
-        if response.status_code in (401, 403):
-            hint = (" — X's Free tier is write-only; reading posts, mentions or metrics "
-                    "needs at least the Basic plan.")
+        if response.status_code == 402:
+            hint = (" — this is BILLING, not a problem with the post. The X API is "
+                    "pay-per-use and your developer account has no credits left. "
+                    "Buy credits at https://console.x.com and retry; nothing in the "
+                    "post or the account connection needs changing.")
+        elif response.status_code in (401, 403):
+            hint = (" — the token is rejected or the app lacks access for this call. "
+                    "Check the app's permissions and that the account is still "
+                    "connected; reads and writes both consume API credits.")
+        elif response.status_code == 429:
+            hint = " — rate limited; wait before retrying."
         return RuntimeError(f"X API {response.status_code}: {detail}{hint}")
 
     async def _get(self, access_token: str, path: str, params: dict) -> dict:
@@ -219,8 +345,8 @@ class Twitter(SocialPlatform):
                           external_id: str) -> bool | None:
         """Is this post still up? Used by the duplicate guard before it refuses.
 
-        ``None`` when it cannot tell — including the Free tier's 403, where
-        "cannot read" must not be mistaken for "was deleted".
+        ``None`` when it cannot tell — including a 402/403, where "cannot check"
+        must not be mistaken for "was deleted".
         """
         if not external_id:
             return None

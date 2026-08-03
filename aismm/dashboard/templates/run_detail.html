@@ -25,10 +25,38 @@
       <p class="muted small">This run predates prompt capture, so it wasn't recorded. Newer runs show it here.</p>
     {% endif %}
 
-    {% if instruction and account %}
+    {% if instruction and account and (run.caption or run.asset_path) %}
       <details class="prompt-block retry-block" {% if run.status.value == 'failed' %}open{% endif %}>
-        <summary>Retry this run
-          <span class="muted small">— send it again, with the prompt edited if you like</span>
+        <summary>Publish this again
+          <span class="muted small">— same media, no agent, nothing regenerated</span>
+        </summary>
+        <form method="post" action="{{ url_for('republish_run', run_id=run.id) }}"
+              class="form retry-form">
+          <label>Caption
+            <textarea name="caption" rows="5" class="small">{{ run.caption }}</textarea>
+            <span class="hint">
+              Sends the <strong>{{ run.asset_paths|length }}</strong> asset(s) this run already
+              produced, exactly as they are — no model call, no new image or video, nothing to pay
+              for twice. Use this when the <em>publish</em> failed rather than the content: a rate
+              limit, an expired token, X out of API credits. It still goes through the publish gate,
+              the AI label and the duplicate guard, so a post that actually went out won't be
+              duplicated.
+              {% if run.placement and run.placement != 'feed' %}
+                <br>Placement: <code>{{ run.placement }}</code>.
+              {% endif %}
+            </span>
+          </label>
+          <div class="row">
+            <button class="btn btn-primary" type="submit">Publish again</button>
+          </div>
+        </form>
+      </details>
+    {% endif %}
+
+    {% if instruction and account %}
+      <details class="prompt-block retry-block">
+        <summary>Re-run the agent
+          <span class="muted small">— starts over: fresh research and NEW media</span>
         </summary>
         <form method="post" action="{{ url_for('retry_run', run_id=run.id) }}" class="form retry-form">
           <label>Prompt to send
@@ -39,13 +67,16 @@
               operator note are not re-inlined, so what is in this box is exactly what the agent
               gets. Useful for correcting a stale position or a bad brief without editing the
               instruction. Empty the box to rebuild the prompt from the instruction as it is now.
+              <br><strong>This regenerates the media</strong> — a new Sora clip or image, costing
+              time and API spend. If the content was fine and only the publish failed, use
+              <em>Publish this again</em> above instead.
               {% if instruction.publish_mode.value == 'live' %}
                 <br><strong>This instruction is live</strong> — a successful retry posts for real.
               {% endif %}
             </span>
           </label>
           <div class="row">
-            <button class="btn btn-primary" type="submit">Retry run</button>
+            <button class="btn" type="submit">Re-run the agent</button>
           </div>
         </form>
       </details>

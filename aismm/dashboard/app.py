@@ -586,6 +586,34 @@ def create_app() -> Flask:
             asset_url=public_url(run.asset_path) if run.asset_path else "",
         )
 
+    @app.route("/runs/<run_id>/republish", methods=["POST"])
+    def republish_run(run_id):
+        """Send this run's existing media again — no agent, no regeneration.
+
+        The usual reason a run failed is the publish step, not the content: a
+        rate limit, an expired token, X out of API credits. Re-running the agent
+        for that costs a fresh Sora clip or image and produces *different*
+        content than the one already reviewed.
+        """
+        store = get_store()
+        if not store.get_run(run_id):
+            abort(404)
+        caption = request.form.get("caption", "")
+
+        def _republish():
+            app.logger.info("Republish of run %s started", run_id[:8])
+            try:
+                orchestrator.republish_run(run_id, caption)
+            except Exception:  # noqa: BLE001 - a silent thread is undebuggable
+                app.logger.exception("Republish of run %s failed", run_id[:8])
+            finally:
+                app.logger.info("Republish of run %s finished", run_id[:8])
+
+        threading.Thread(target=_republish, name=f"republish:{run_id[:8]}",
+                         daemon=True).start()
+        flash("Publishing that run's media again — check Runs in a moment.", "success")
+        return redirect(url_for("runs"))
+
     @app.route("/runs/<run_id>/retry", methods=["POST"])
     def retry_run(run_id):
         store = get_store()
@@ -669,7 +697,7 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
       "instagram_moderate_comment", "instagram_insights", "instagram_publishing_limit",
       "instagram_profile", "instagram_mentions")),
     ("X (Twitter)", "Reading the timeline and replying. Ignored on other platforms; "
-                    "the reads need at least X's Basic plan.",
+                    "every X call spends pay-per-use API credits.",
      ("x_recent_posts", "x_mentions", "x_reply_to_post", "x_post_metrics",
       "x_profile", "x_delete_post")),
 ]

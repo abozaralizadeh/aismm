@@ -14,6 +14,7 @@ import time
 
 from . import cooldown, logging_setup, publish_ledger
 from .agent import run_for_account
+from .assets import exists as asset_exists
 from .assets import kind_from_path
 from .models import (
     Account, Instruction, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
@@ -114,6 +115,82 @@ def run_instruction(instruction_id: str) -> list[dict]:
 def run_single(instruction: Instruction, account: Account) -> dict:
     """Run one (instruction, account) pair directly (used by the CLI 'post' command)."""
     return _run_one(instruction, account, get_store())
+
+
+def republish_run(run_id: str, caption: str = "") -> dict:
+    """Publish a failed run's media AGAIN, without re-running the agent.
+
+    The common retry is not "think about this afresh" — it is "the post was
+    fine, the publish failed". A rate limit, an expired token, X running out of
+    API credits. Re-running the agent for that regenerates a Sora clip or a
+    gpt-image-2 render, costs minutes and money, and produces *different* content
+    than the one that was reviewed.
+
+    So this takes the exact caption, media and placement the failed run recorded
+    and sends them straight to ``perform_publish`` — the same gate, the same
+    disclosure, the same duplicate guard, no model call anywhere. ``caption``
+    overrides the recorded one if the wording was the problem.
+    """
+    store = get_store()
+    original = store.get_run(run_id)
+    if not original:
+        return {"error": "not_found"}
+    instruction = store.get_instruction(original.instruction_id)
+    account = store.get_account(original.account_id)
+    if not instruction:
+        return {"error": "instruction_missing",
+                "message": "The instruction this run belonged to has been deleted."}
+    if not account:
+        return {"error": "account_missing",
+                "message": "The account this run targeted has been disconnected."}
+
+    paths = [p for p in original.asset_paths if p]
+    text = (caption or original.caption or "").strip()
+    if not paths and not text:
+        return {"error": "nothing_to_publish",
+                "message": ("This run recorded no caption or media — there is nothing to "
+                            "send again. Use the agent retry instead.")}
+
+    missing = [p for p in paths if not asset_exists(p)]
+    if missing:
+        return {"error": "media_gone",
+                "message": (f"{len(missing)} of {len(paths)} asset(s) from that run no longer "
+                            f"exist, so it cannot be published as-is. Use the agent retry, "
+                            f"which produces the media again.")}
+
+    if instruction.publish_mode is PublishMode.live and cooldown.is_active(account):
+        return {"error": "rate_limited",
+                "message": (f"{account.handle or account.external_id} is still in a publishing "
+                            f"cooldown for {cooldown.describe(account)}. Clear it or wait.")}
+
+    run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                            status=RunStatus.running,
+                            prompt=f"(republish of run {run_id[:8]} — no agent involved)"))
+    log_token = logging_setup.current_run_id.set(run.id[:8])
+    try:
+        logger.info("REPUBLISH %s | from run %s | %d asset(s), placement=%s, caption %d chars",
+                    run.id[:8], run_id[:8], len(paths), original.placement, len(text))
+        state = {"account": account, "instruction": instruction, "store": store,
+                 "run": run, "assets": []}
+        # The media is already normalized (perform_publish converted it before the
+        # failed attempt), so this re-runs the gate, not the generation.
+        from .tools.publish_tool import perform_publish
+
+        result = _run_async(perform_publish(
+            state, text, asset_path=paths[0] if paths else "",
+            media_kind=kind_from_path(paths[0]) if paths else "text",
+            asset_paths=paths if len(paths) > 1 else None,
+            placement=original.placement or "feed"))
+        logger.info("REPUBLISH DONE %s | %s", run.id[:8], result)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Republish of %s failed", run_id[:8])
+        run.status = RunStatus.failed
+        run.error = str(exc)
+        store.update_run(run)
+        return {"error": "publish_failed", "message": str(exc)}
+    finally:
+        logging_setup.current_run_id.reset(log_token)
 
 
 def retry_run(run_id: str, prompt: str = "") -> dict:

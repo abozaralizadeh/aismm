@@ -258,11 +258,23 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # AI-content disclosure, applied HERE so it reaches every path — the dry-run
     # preview and the approval queue show exactly what would be posted, and the
     # model cannot skip it. See aismm/disclosure.py for the legal/platform basis.
-    caption = disclosure.apply_to_caption(caption, caption_limit=caps.caption_limit,
+    #
+    # On a platform that threads, `caption_limit` bounds ONE post, not the post;
+    # trimming to it here would cut the caption to 280 before X ever got the
+    # chance to split it. The real budget is the whole thread.
+    caption_budget = caps.caption_limit
+    if caps.supports_threads and caps.max_thread_posts > 1:
+        caption_budget = caps.caption_limit * caps.max_thread_posts
+    caption = disclosure.apply_to_caption(caption, caption_limit=caption_budget,
                                           instruction=instruction)
 
     run.caption = caption
     run.asset_path = asset_path
+    # The whole set, so a failed publish can be sent again exactly as it was —
+    # without re-running the agent and paying for fresh media to fix, say, a
+    # billing error. See orchestrator.republish_run.
+    run.set_asset_paths(paths)
+    run.placement = placement
     staged = StagedPost(
         instruction_id=instruction.id, account_id=account.id, run_id=run.id,
         caption=caption, asset_path=asset_path, media_kind=kind, placement=placement,

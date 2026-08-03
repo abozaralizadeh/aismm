@@ -34,6 +34,12 @@ class Capabilities:
     # --- placements beyond a single feed post -------------------------------- #
     supports_carousel: bool = False          # multi-item post
     supports_stories: bool = False
+    # Can a long caption be published as a chain of linked posts? On X this is
+    # the difference between a 280-character truncation and the whole thought.
+    # `caption_limit` still bounds ONE post; the usable total is
+    # caption_limit * max_thread_posts.
+    supports_threads: bool = False
+    max_thread_posts: int = 1
     max_carousel_items: int = 10
     supports_comments: bool = False          # read/reply/moderate
     supports_insights: bool = False

@@ -137,24 +137,29 @@ def test_retrying_an_unknown_run_is_404(dash, store, setup):
 def test_the_detail_page_offers_a_retry_prefilled_with_the_prompt(dash, store, setup):
     _instruction, _account, failed, _seen = setup
     page = dash.test_client().get(f"/runs/{failed.id}").get_data(as_text=True)
-    assert "Retry this run" in page
+    assert "Re-run the agent" in page
     assert 'name="prompt"' in page
     assert "CURRENT POSITION: Panel 6." in page       # the original, editable
 
 
-def test_the_retry_form_is_open_for_a_failed_run(dash, store, setup):
+def test_the_republish_form_is_open_for_a_failed_run(dash, store, setup):
     """It is the thing you came to the page for; don't make them hunt for it."""
-    _instruction, _account, failed, _seen = setup
+    instruction, account, _failed, _seen = setup
+    failed = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                               status=RunStatus.failed, caption="ready to go",
+                               asset_path="/a.jpg", prompt=ORIGINAL))
     page = dash.test_client().get(f"/runs/{failed.id}").get_data(as_text=True)
     assert 'class="prompt-block retry-block" open' in page
+    assert "Publish this again" in page
 
 
-def test_the_retry_form_is_collapsed_for_a_published_run(dash, store, setup):
+def test_the_republish_form_is_collapsed_for_a_published_run(dash, store, setup):
     instruction, account, _failed, _seen = setup
     ok = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
-                           status=RunStatus.published, prompt=ORIGINAL))
+                           status=RunStatus.published, caption="c", asset_path="/a.jpg",
+                           prompt=ORIGINAL))
     page = dash.test_client().get(f"/runs/{ok.id}").get_data(as_text=True)
-    assert "Retry this run" in page
+    assert "Publish this again" in page
     assert 'class="prompt-block retry-block" open' not in page
 
 

@@ -853,8 +853,30 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 The same shape as the Instagram surface, and likewise only present on runs that target an X account.
 
 **Publishing** goes through the one gated `publish` tool. X takes **up to 4 images** in a post
-(`asset_paths=[…]`) or **one video** — mixed sets are refused, and the 280-character limit is
-enforced.
+(`asset_paths=[…]`) or **one video** — mixed sets are refused.
+
+**A caption over 280 characters becomes a thread**, rather than being cut off. It splits on the
+largest natural boundary that fits — paragraph, then sentence, then word — so nothing breaks
+mid-word, and each post is numbered `n/m` (the counter is inside the 280, not added on top):
+
+```
+[154] Hearing loss is the third most common chronic condition in older adults, yet the
+      average person waits seven years before seeking help.
+
+      🤖 AI-generated 1/4
+[142] That delay matters. Untreated hearing loss is linked to faster cognitive decline… 2/4
+[185] The encouraging part: modern hearing aids are nothing like the beige devices…      3/4
+[115] If conversations in restaurants have become work, that is worth a test…            4/4
+```
+
+Two details that took some care. **Media rides only on the first post** — otherwise X repeats the
+image down the whole thread. And **the AI-disclosure label is moved to the first post**: it's
+appended to the end of a caption, so on a thread it would land on `4/4`, invisible to anyone who
+only meets `1/4` in their timeline — which is exactly the "first exposure" the label exists to
+cover. If a later post in the chain fails, the ones already public are reported rather than lost.
+
+The agent is told to write the whole thought in short paragraphs and let it split, rather than
+pre-truncating or numbering by hand.
 
 | Tool | What it's for |
 |---|---|
@@ -865,11 +887,20 @@ enforced.
 | `x_profile` | bio, follower and post counts |
 | `x_delete_post` | remove one of the account's own posts — a factual error, a duplicate |
 
-> **X's Free plan is write-only.** It can post, reply and delete, but every *read* above needs at
-> least the **Basic** plan and returns 403 otherwise. The error says so explicitly rather than
-> returning an empty list, because "this account has no posts" and "your plan can't read posts"
-> deserve very different responses — and the agent is told that a plan limit is not a reason to fail
-> a run it can still write.
+> **X is pay-per-use — there is no free tier.** Since February 2026 you buy API credits up front and
+> every call, read or write, spends them. An account with no credits gets **`402 Payment Required` on
+> everything, posting included**:
+>
+> ```
+> X API 402: Your enrolled account does not have any credits — this is BILLING, not a problem
+> with the post. The X API is pay-per-use and your developer account has no credits left.
+> Buy credits at https://console.x.com and retry; nothing in the post or the account
+> connection needs changing.
+> ```
+>
+> Every X call path spells that out, because httpx's own message — `Client error '402 Payment
+> Required'` — leaves the agent guessing whether it did something wrong. It didn't, and no rewording
+> of the post will help. Buy credits at [console.x.com](https://console.x.com).
 
 ### Stories, and the music question
 
@@ -1137,9 +1168,22 @@ just the two terminal tools.
 
 ### Retrying a failed run
 
-Every run records the exact kickoff it was given. When one fails for a reason the prompt itself
-caused — a stale memory position, a brief pointing at the wrong page — open the run and use **Retry
-this run** (expanded by default on a failed run). The prompt comes pre-filled and is editable.
+A failed run offers two different repairs, and picking the right one matters.
+
+**Publish this again** — the run's media and caption were fine and only the *publish* was refused:
+a rate limit, an expired token, X out of API credits. It sends the exact assets that run already
+produced, with the caption editable, straight to the publish gate. **No agent, no model call,
+nothing regenerated** — so nothing to pay for or wait for twice, and the content is the one you
+already reviewed rather than a fresh render of the same brief. It is expanded by default on a failed
+run that has media or a caption. The gate, the AI label, the cooldown and the duplicate guard all
+still apply, so a post that actually went out won't be duplicated. If an asset has since been
+deleted the form refuses rather than publishing whatever is at that path now, and points you at the
+agent retry.
+
+**Re-run the agent** — the *content* was the problem. Every run records the exact kickoff it was
+given, so when one fails for a reason the prompt itself caused — a stale memory position, a brief
+pointing at the wrong page — the prompt comes pre-filled and is editable. This regenerates the
+media (a new Sora clip or image), costing time and API spend.
 
 It starts a **new** run against the same instruction and account; the failed one is left exactly as
 it is, since that is the evidence. The edited text is sent **verbatim** — memory and the operator

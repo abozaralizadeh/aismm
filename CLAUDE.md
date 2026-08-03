@@ -93,12 +93,22 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   generation. `tests/test_store_interface.py` and `scripts/preflight.py` now both bind the real call
   against every registered platform, so adding a platform (or widening the base signature) fails
   before deploy rather than on someone's first post.
+- **X auto-threads past 280** (`twitter.split_thread`, `Capabilities.supports_threads` /
+  `max_thread_posts`). `caption_limit` bounds ONE post, so `perform_publish` gives a threading
+  platform `caption_limit * max_thread_posts` as the disclosure budget — trimming to 280 there would
+  cut the caption before X could split it. Media goes on the FIRST post only (X repeats it otherwise)
+  and the **AI label is pinned to the first post** via `pin_suffix`: appended at the end it would
+  land on `n/n`, unseen by anyone who only meets `1/n` in a timeline, which is the "first exposure"
+  the label is for. A failure mid-thread reports what already went out instead of losing those ids.
 - **Platform-specific tool modules mirror each other** (`instagram_tools.py`, `twitter_tools.py`):
   every factory returns `None` unless the run targets that platform, so an IG run isn't handed the
   six X tools. Write tools (reply, delete) act immediately and are deliberately NOT behind
-  `publish_mode` — that gate is about posts. **X's Free plan is write-only**: reads 403, so the
-  error text names the plan and the prompt tells the agent that's a plan limit, not a reason to fail
-  the run.
+  `publish_mode` — that gate is about posts. **X is pay-per-use with no free tier** (since Feb 2026):
+  an account out of credits gets 402 on *everything*, posting included, and httpx's bare "Client
+  error '402 Payment Required'" told the agent nothing. `Twitter._api_error` explains 402 (billing,
+  buy credits at console.x.com), 401/403 (token) and 429 (rate limit) distinctly, and EVERY X call
+  path routes through it — `_upload_media` and `fetch_identity` used `raise_for_status()` and so
+  leaked the raw message.
 - **Platforms subclass `SocialPlatform`** ([platforms/base.py](aismm/platforms/base.py)): declare
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is
@@ -213,6 +223,15 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   and the override is used **verbatim** (`prompt_override.strip() or build_kickoff(...)`), so memory
   and the note are deliberately NOT re-inlined: what the operator reads in the box is what the agent
   gets. Everything else still applies (publish gate, lock, cooldown, duplicate guard).
+- **Republish is the OTHER repair, and usually the right one** (`orchestrator.republish_run` →
+  `perform_publish` directly, no agent). Most failures are a refused *publish*, not bad content —
+  rate limit, expired token, X out of credits — and re-running the agent for that regenerates the
+  media, spends money and produces something *different* from what was reviewed. So `Run` records
+  `asset_paths_json` + `placement` (written by `perform_publish`, not by the agent) and republish
+  replays them verbatim with an editable caption. It creates a NEW run like retry, checks
+  `asset_exists` for every path first (`media_gone` beats publishing whatever is at that path now),
+  and skips the cooldown check for non-`live` modes since they call no API. The run-detail page
+  shows republish `btn-primary` and open, re-run secondary — the cheap fix must be the obvious one.
 
 - **Widening a table is now safe**: `LocalStore._add_missing_columns` runs `ALTER TABLE ADD COLUMN`
   for any column the models declare and the DB lacks (Azure Table is schemaless, so it needs

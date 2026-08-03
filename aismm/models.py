@@ -158,6 +158,12 @@ class Run(SQLModel, table=True):
     status: RunStatus = RunStatus.running
     caption: str = ""
     asset_path: str = ""
+    # The FULL media set and placement this run tried to publish, so a failed
+    # publish can be sent again exactly as it was — without re-running the agent
+    # and paying for a fresh Sora clip or image to fix, say, a billing error.
+    # asset_path keeps the first for previews and backwards compatibility.
+    asset_paths_json: str = "[]"
+    placement: str = "feed"
     external_url: str = ""                    # published permalink, when live
     error: str = ""
     log: str = ""                            # short human-readable trace of the run
@@ -166,6 +172,17 @@ class Run(SQLModel, table=True):
     # debugged from what the agent was told, not from what the instruction says now.
     prompt: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def asset_paths(self) -> list[str]:
+        try:
+            paths = list(json.loads(self.asset_paths_json or "[]"))
+        except json.JSONDecodeError:
+            paths = []
+        return paths or ([self.asset_path] if self.asset_path else [])
+
+    def set_asset_paths(self, paths: list[str]) -> None:
+        self.asset_paths_json = json.dumps(list(paths or []))
 
 
 class StagedPost(SQLModel, table=True):

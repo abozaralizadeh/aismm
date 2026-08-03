@@ -12,12 +12,12 @@ one gated ``publish`` tool — everything *else* X offers lives here:
   brief that says "lean into what works" has something to work from.
 * ``x_delete_post`` — remove one of the account's own posts.
 
-**X's access tiers matter here.** The Free tier is effectively write-only: it can
-post, reply and delete, but every READ (timeline, mentions, metrics, profile)
-returns 403 until at least the Basic plan. The platform layer says so in the
-error rather than returning an empty list, because "this account has no posts"
-and "your plan cannot read posts" call for completely different behaviour from
-the agent.
+**X billing matters here.** Since February 2026 the X API is pay-per-use with no
+free tier: you buy credits up front and every call — read or write — spends them.
+An account with no credits gets **402 Payment Required on everything, including
+posting**. The platform layer spells that out in the error rather than returning
+an empty list, because "this account has no posts" and "your account is out of
+credits" call for completely different behaviour from the agent.
 
 Every factory returns ``None`` unless the run targets an X account, so an
 Instagram run is not handed six irrelevant tools. As with Instagram, the write

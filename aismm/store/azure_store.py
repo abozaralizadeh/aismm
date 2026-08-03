@@ -212,6 +212,7 @@ class AzureStore(Store):
         return {
             "instruction_id": r.instruction_id, "account_id": r.account_id,
             "status": r.status.value, "caption": r.caption, "asset_path": r.asset_path,
+            "asset_paths_json": r.asset_paths_json, "placement": r.placement,
             "external_url": r.external_url, "error": r.error, "log": r.log,
             "prompt": r.prompt, "created_at": r.created_at,
         }
@@ -222,6 +223,8 @@ class AzureStore(Store):
             id=e["RowKey"], instruction_id=e.get("instruction_id", ""),
             account_id=e.get("account_id", ""), status=RunStatus(e.get("status", "running")),
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
+            asset_paths_json=e.get("asset_paths_json", "[]"),
+            placement=e.get("placement", "feed"),
             external_url=e.get("external_url", ""), error=e.get("error", ""),
             log=e.get("log", ""), prompt=e.get("prompt", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),

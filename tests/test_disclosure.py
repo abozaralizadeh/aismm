@@ -142,9 +142,30 @@ def test_approval_queue_carries_the_disclosure(store):
 
 
 def test_disclosure_respects_the_platform_caption_limit(store):
-    """X caps at 280; the label must fit inside it, not be truncated away."""
+    """The label always survives; the CAPTION is what gets trimmed.
+
+    On X the budget is the whole thread (280 x 25), not one post — trimming to
+    280 here would cut the caption before X could split it. Either way the label
+    is never the thing that gets dropped.
+    """
+    from aismm.platforms.registry import get_platform
+
+    caps = get_platform(PlatformName.twitter).capabilities
+    budget = caps.caption_limit * caps.max_thread_posts
+
     staged = _publish(store, PublishMode.dry_run, "y" * 400)
-    assert len(staged.caption) <= 280
+    assert len(staged.caption) <= budget
+    assert staged.caption.endswith("🤖 AI-generated")
+
+
+def test_a_caption_past_even_the_thread_budget_still_keeps_the_label(store):
+    from aismm.platforms.registry import get_platform
+
+    caps = get_platform(PlatformName.twitter).capabilities
+    budget = caps.caption_limit * caps.max_thread_posts
+
+    staged = _publish(store, PublishMode.dry_run, "y" * (budget + 500))
+    assert len(staged.caption) <= budget
     assert staged.caption.endswith("🤖 AI-generated")
 
 

@@ -137,11 +137,11 @@ def test_a_text_only_post_uploads_nothing(api):
     assert "media" not in api["tweets"][0]
 
 
-def test_the_caption_is_held_to_280(api):
+def test_no_single_post_exceeds_280(api):
     account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
     asyncio.run(_x().publish(access_token="t", account=account, caption="x" * 400,
                              asset_path="", media_kind="text"))
-    assert len(api["tweets"][0]["text"]) == 280
+    assert all(len(t["text"]) <= 280 for t in api["tweets"])
 
 
 # --- the engagement tools ------------------------------------------------------------ #
@@ -208,7 +208,10 @@ def test_profile_returns_counts(api):
     assert data["public_metrics"]["followers_count"] == 42
 
 
-# --- the Free tier is write-only, and must say so ------------------------------------ #
+# --- billing errors must be spelled out, not left as a bare status ------------------- #
+# X moved to pay-per-use credits in Feb 2026 — there is no free tier. An account
+# out of credits gets 402 on EVERYTHING, posting included, and httpx's own
+# message ("Client error '402 Payment Required'") tells you nothing actionable.
 
 def _failing_get(monkeypatch, status, payload):
     from aismm.platforms import twitter as tw
@@ -233,14 +236,35 @@ def _failing_get(monkeypatch, status, payload):
     monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
 
 
-def test_a_403_explains_the_access_tier(monkeypatch):
-    """"No posts" and "your plan cannot read posts" need different responses."""
+def test_402_is_named_as_billing_and_points_at_the_console(monkeypatch):
+    """The reported failure: the agent only saw "Client error '402 Payment Required'"
+    and suggested "restore X publishing access/billing" — right by luck, not by
+    being told. It must be unambiguous that no rewording of the post will help."""
+    _failing_get(monkeypatch, 402, {"detail": "no credits"})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    message = str(exc.value)
+    assert "BILLING" in message
+    assert "console.x.com" in message
+    assert "no credits left" in message
+
+
+def test_403_points_at_the_token_not_at_billing(monkeypatch):
     _failing_get(monkeypatch, 403, {"detail": "Unsupported Authentication"})
     account = Account(platform=PlatformName.twitter, external_id="9")
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(_x().list_posts("t", account))
-    assert "Free tier is write-only" in str(exc.value)
-    assert "Basic plan" in str(exc.value)
+    assert "token is rejected" in str(exc.value)
+    assert "BILLING" not in str(exc.value)
+
+
+def test_429_says_rate_limited(monkeypatch):
+    _failing_get(monkeypatch, 429, {"detail": "Too Many Requests"})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    assert "rate limited" in str(exc.value)
 
 
 def test_the_api_error_carries_the_reason_not_just_a_status(monkeypatch):
@@ -262,7 +286,7 @@ def test_a_tool_reports_the_error_rather_than_killing_the_run(monkeypatch):
 
     result = asyncio.run(twitter_tools._with_context(_state(), call))
     assert result["error"] == "x_api_error"
-    assert "Free tier" in result["message"]
+    assert "token is rejected" in result["message"]
 
 
 def test_a_tool_on_the_wrong_platform_says_so():
@@ -291,7 +315,198 @@ def test_a_live_post_is_reported_as_live(monkeypatch):
 
 
 def test_a_403_is_unknown_not_deleted(monkeypatch):
-    """On the Free tier the guard must not read 'cannot check' as 'was deleted'."""
+    """The guard must not read "cannot check" as "was deleted"."""
     _failing_get(monkeypatch, 403, {"detail": "Unsupported Authentication"})
     account = Account(platform=PlatformName.twitter, external_id="9")
     assert asyncio.run(_x().post_exists("t", account, "1")) is None
+
+
+# --- long captions become a thread, not a truncation --------------------------------- #
+# `publish` used to do `caption[:280]`, so anything longer was silently cut
+# mid-sentence. X's whole idiom for a long thought is a chain of linked posts.
+
+from aismm.platforms.twitter import split_thread   # noqa: E402
+
+LIMIT = 280
+
+
+def test_a_short_caption_is_one_post_with_no_counter():
+    assert split_thread("Just a thought.", LIMIT, 25) == ["Just a thought."]
+
+
+def test_an_empty_caption_produces_nothing():
+    assert split_thread("   ", LIMIT, 25) == []
+
+
+def test_a_long_caption_splits_and_every_part_fits():
+    text = ("Audiology matters. " * 60).strip()
+    parts = split_thread(text, LIMIT, 25)
+    assert len(parts) > 1
+    assert all(len(p) <= LIMIT for p in parts), [len(p) for p in parts]
+
+
+def test_parts_are_numbered_once_there_is_more_than_one():
+    parts = split_thread("Audiology matters. " * 60, LIMIT, 25)
+    assert parts[0].endswith(f" 1/{len(parts)}")
+    assert parts[-1].endswith(f" {len(parts)}/{len(parts)}")
+
+
+def test_no_word_is_split_in_half():
+    text = "Supercalifragilistic expialidocious " * 40
+    for part in split_thread(text, LIMIT, 25):
+        body = part.rsplit(" ", 1)[0]           # drop the n/m counter
+        for word in body.split():
+            assert word in text
+
+
+def test_it_prefers_to_break_at_a_paragraph():
+    first = "A" * 200
+    second = "B" * 200
+    parts = split_thread(f"{first}\n\n{second}", LIMIT, 25)
+    assert parts[0].startswith("A") and "B" not in parts[0]
+
+
+def test_it_falls_back_to_a_sentence_boundary():
+    text = ("First sentence here. " * 10) + ("Second part follows. " * 10)
+    parts = split_thread(text, LIMIT, 25)
+    # Every part should end on a sentence (before the counter), not mid-clause.
+    assert parts[0].rsplit(" ", 1)[0].rstrip().endswith(".")
+
+
+def test_the_whole_caption_survives_the_split():
+    text = "Audiology matters and hearing health is underrated. " * 20
+    joined = " ".join(p.rsplit(" ", 1)[0] for p in split_thread(text, LIMIT, 25))
+    assert "underrated" in joined
+    assert joined.count("Audiology") == text.count("Audiology")
+
+
+def test_a_runaway_caption_is_bounded_by_max_posts():
+    parts = split_thread("word " * 5000, LIMIT, 5)
+    assert len(parts) == 5
+
+
+# --- posting the thread -------------------------------------------------------------- #
+
+def _long_publish(api, caption, **kwargs):
+    account = Account(platform=PlatformName.twitter, handle="abo0zar", external_id="9")
+    return asyncio.run(_x().publish(access_token="t", account=account, caption=caption,
+                                    asset_path=kwargs.pop("asset_path", ""),
+                                    media_kind=kwargs.pop("media_kind", "text"), **kwargs))
+
+
+def test_each_part_replies_to_the_one_before(api):
+    _long_publish(api, "Audiology matters. " * 60)
+    assert len(api["tweets"]) > 1
+    assert "reply" not in api["tweets"][0]
+    for tweet in api["tweets"][1:]:
+        assert tweet["reply"]["in_reply_to_tweet_id"] == "1799"
+
+
+def test_the_result_points_at_the_FIRST_post(api):
+    """That is the thread's permalink, and what the duplicate ledger records."""
+    result = _long_publish(api, "Audiology matters. " * 60)
+    assert result.external_id == "1799"
+    assert result.url == "https://x.com/abo0zar/status/1799"
+    assert result.raw["thread_posts"] == len(api["tweets"])
+
+
+def test_media_rides_only_on_the_first_post(api):
+    """Otherwise X repeats the image all the way down the thread."""
+    _long_publish(api, "Audiology matters. " * 60,
+                  asset_path="/a.jpg", media_kind="image")
+    assert "media" in api["tweets"][0]
+    assert all("media" not in t for t in api["tweets"][1:])
+
+
+def test_a_short_caption_still_posts_exactly_once(api):
+    _long_publish(api, "Short and sweet.")
+    assert len(api["tweets"]) == 1
+    assert "reply" not in api["tweets"][0]
+
+
+def test_the_publish_gate_gives_x_the_whole_thread_budget():
+    """caption_limit bounds ONE post; trimming to it would pre-truncate the thread."""
+    caps = _x().capabilities
+    assert caps.supports_threads is True
+    assert caps.max_thread_posts > 1
+    assert caps.caption_limit * caps.max_thread_posts > 1000
+
+
+def test_platforms_that_cannot_thread_say_so():
+    for name in (PlatformName.instagram, PlatformName.youtube, PlatformName.tiktok):
+        assert registry.get_platform(name).capabilities.supports_threads is False
+
+
+# --- the AI label must be on the post people actually see ---------------------------- #
+# The disclosure is appended to the caption, so on a thread it lands on the LAST
+# post — unseen by anyone who only meets post 1 in their timeline, which is the
+# "first exposure" the label exists to cover.
+
+LABEL = "🤖 AI-generated"
+
+
+def test_the_label_moves_to_the_first_post_of_a_thread():
+    text = ("Audiology matters. " * 60) + f"\n\n{LABEL}"
+    parts = split_thread(text, LIMIT, 25, pin_suffix=LABEL)
+    assert len(parts) > 1
+    assert LABEL in parts[0]
+    assert all(LABEL not in p for p in parts[1:])
+
+
+def test_pinning_the_label_does_not_push_a_post_over_the_limit():
+    text = ("Audiology matters. " * 60) + f"\n\n{LABEL}"
+    assert all(len(p) <= LIMIT for p in split_thread(text, LIMIT, 25, pin_suffix=LABEL))
+
+
+def test_a_single_post_keeps_the_label_at_the_end():
+    parts = split_thread(f"Short one.\n\n{LABEL}", LIMIT, 25, pin_suffix=LABEL)
+    assert parts == [f"Short one.\n\n{LABEL}"]
+
+
+def test_no_label_is_invented_when_the_caption_has_none():
+    parts = split_thread("Audiology matters. " * 60, LIMIT, 25, pin_suffix=LABEL)
+    assert all(LABEL not in p for p in parts)
+
+
+def test_a_caption_that_is_only_the_label_survives():
+    assert split_thread(LABEL, LIMIT, 25, pin_suffix=LABEL) == [LABEL]
+
+
+def test_the_first_posted_tweet_carries_the_label(api):
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    asyncio.run(_x().publish(
+        access_token="t", account=account,
+        caption=("Audiology matters. " * 60) + f"\n\n{LABEL}",
+        asset_path="", media_kind="text"))
+    assert LABEL in api["tweets"][0]["text"]
+    assert all(LABEL not in t["text"] for t in api["tweets"][1:])
+
+
+def test_a_402_while_POSTING_is_explained_too(monkeypatch):
+    """The reported case was a publish, not a read — every X call path must explain it."""
+    from aismm.platforms import twitter as tw
+
+    class _Resp:
+        status_code = 402
+        text = "Payment Required"
+
+        def json(self):
+            return {"detail": "Your enrolled account does not have any credits"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **kw):
+            return _Resp()
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().publish(access_token="t", account=account, caption="hello",
+                                 asset_path="", media_kind="text"))
+    assert "BILLING" in str(exc.value)
+    assert "console.x.com" in str(exc.value)
