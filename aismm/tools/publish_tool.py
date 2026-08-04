@@ -17,7 +17,7 @@ import re
 
 from agents import function_tool
 
-from .. import cooldown, disclosure, media, publish_ledger
+from .. import cooldown, disclosure, media, publish_ledger, tokens
 from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
@@ -141,7 +141,7 @@ async def _confirm_duplicate(account, store, platform, digests: list[str]):
         alive = None
         if external_id:
             try:
-                access_token, _refresh = store.get_tokens(account.id)
+                access_token = await tokens.valid_access_token(account, store)
                 alive = (await platform.post_exists(access_token, account, external_id)
                          if access_token else None)
             except Exception as exc:  # noqa: BLE001 - verification must never raise
@@ -358,7 +358,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
                 "published_at": already.get("at", ""), "url": already.get("url", "")}
 
     try:
-        access_token, _refresh = store.get_tokens(account.id)
+        access_token = await tokens.valid_access_token(account, store)
         if not access_token:
             raise RuntimeError("account has no stored access token — reconnect it in the dashboard.")
         result = await platform.publish(

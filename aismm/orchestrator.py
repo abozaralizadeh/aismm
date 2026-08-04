@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 
-from . import cooldown, logging_setup, publish_ledger
+from . import cooldown, logging_setup, publish_ledger, tokens
 from .agent import run_for_account
 from .assets import exists as asset_exists
 from .assets import kind_from_path
@@ -291,7 +291,7 @@ def approve_staged(staged_id: str) -> dict:
     if not account:
         return {"error": "account_missing"}
     platform = get_platform(account.platform)
-    access_token, _ = store.get_tokens(account.id)
+    access_token = tokens.valid_access_token_sync(account, store)
     if not access_token:
         return {"error": "no_token", "message": "Reconnect the account in the dashboard."}
 

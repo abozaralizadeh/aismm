@@ -119,6 +119,18 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   Only the STATUS poll still goes through `GET /2/media/upload?command=STATUS`. `media_type` is
   **sniffed from the bytes** (`_media_type`), since `initialize` validates it and a PNG announced as
   `image/jpeg` is a 400.
+- **Access tokens EXPIRE, and `tokens.valid_access_token` is the only supported way to get one**
+  ([tokens.py](aismm/tokens.py)). X dies in ~2h, YouTube in 1h; Instagram's 60-day page tokens hid
+  this until X was connected, and an account that published fine yesterday answered 401 on
+  *everything* the next morning. The refresh token was captured at connect and stored from the first
+  version — nothing ever spent it, because every call site read
+  `access_token, _refresh = store.get_tokens(...)` and threw the second half away. Never write that
+  line again. Refreshing is **best effort**: on failure the stored token is returned so the
+  platform's own 401 surfaces (a crash here would be worse), and no `expires_at` means "unknown",
+  which is left alone rather than guessed. Refreshes are **locked per account and re-checked under
+  the lock** — X rotates the refresh token on use, so a second refresh from a stale in-memory
+  `Account` spends the replacement and kills the grant; the lock alone doesn't stop that, the
+  re-read does. A platform returning no new refresh token keeps the old one (Google omits it).
 - **Platforms subclass `SocialPlatform`** ([platforms/base.py](aismm/platforms/base.py)): declare
   OAuth endpoints/scopes + `Capabilities` as class attrs, implement `fetch_identity` + `publish`,
   then `register(PlatformName.x, Cls)`. Generic OAuth (authorize URL / code exchange / refresh) is

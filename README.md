@@ -1166,6 +1166,22 @@ Leaving everything ticked stores "all" rather than a list of today's names, so a
 later version is picked up automatically. Unticking everything is *not* the same thing — it stores
 just the two terminal tools.
 
+### Token expiry and automatic refresh
+
+Most platforms issue a short-lived access token — X's lasts about **two hours**, YouTube's one —
+alongside a long-lived refresh token. AISMM refreshes automatically: before any call to a platform it
+checks the recorded expiry and, if the token is within ten minutes of dying, spends the refresh token
+and stores the new pair. Nothing on a schedule breaks overnight because of it.
+
+The **Accounts** page shows each token's state — "in 43 minutes", "expired 2 hours ago" — and whether
+it *renews automatically*. An account marked **reconnect** has no usable refresh token, which is the
+one case that needs you: reconnect it from that page. Instagram page tokens carry no expiry at all
+and are left alone.
+
+If a refresh is refused (a revoked grant, a password change, an app whose credentials were replaced)
+the stored token is used anyway, so the platform's own error is what you see — a clear "401
+Unauthorized, reconnect the account" rather than an unexplained crash earlier in the run.
+
 ### Retrying a failed run
 
 A failed run offers two different repairs, and picking the right one matters.

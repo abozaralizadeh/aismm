@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 
 from ..config import settings
 from ..assets import public_url
-from .. import attachments, cooldown
+from .. import attachments, cooldown, tokens
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
@@ -115,8 +115,19 @@ def create_app() -> Flask:
     # ---- accounts -------------------------------------------------------- #
     @app.route("/accounts")
     def accounts():
-        return render_template("accounts.html", accounts=get_store().list_accounts(),
-                               platforms=_platforms_view())
+        store = get_store()
+        rows = store.list_accounts()
+        # An expired token is the difference between "publishes fine" and "401 on
+        # everything tomorrow morning", so say it in words and say whether it can
+        # renew itself. The refresh token is only tested for presence, never shown.
+        token_state = {
+            a.id: {"expiry": tokens.describe_expiry(a),
+                   "stale": tokens.needs_refresh(a),
+                   "refreshable": bool(store.get_tokens(a.id)[1])}
+            for a in rows
+        }
+        return render_template("accounts.html", accounts=rows,
+                               token_state=token_state, platforms=_platforms_view())
 
     @app.route("/accounts/<account_id>/check", methods=["POST"])
     def check_account(account_id):
@@ -135,7 +146,9 @@ def create_app() -> Flask:
         platform = get_platform(account.platform,
                                 platform_apps.resolve_creds(account.platform, store,
                                                             (account.meta or {}).get("app_id", "")))
-        access_token, _ = store.get_tokens(account.id)
+        # Refresh first: the diagnostic must report the token publishing would
+        # actually use, not a stale one that nothing would ever send.
+        access_token = tokens.valid_access_token_sync(account, store)
         if not access_token:
             flash("No stored token — reconnect this account.", "error")
             return redirect(url_for("accounts"))

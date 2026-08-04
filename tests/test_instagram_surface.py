@@ -379,7 +379,7 @@ def test_a_tool_without_a_token_reports_rather_than_crashing(store):
     account = store.upsert_account(
         Account(platform=PlatformName.instagram, external_id="x"), access_token="")
     state = _tool_state(store, account)
-    assert instagram_tools._instagram_context(state) is None
+    assert asyncio.run(instagram_tools._instagram_context(state)) is None
 
 
 # --- media must exist, and must come from THIS run ---------------------------------- #

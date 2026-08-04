@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from . import publish_ledger
+from . import publish_ledger, tokens
 from .assets import exists as asset_exists
 from .models import PlatformName, RunStatus
 from .platforms.instagram import _caption_key
@@ -39,7 +39,7 @@ def _published_posts(account, store) -> list[dict]:
     """Recent posts actually on the account. Instagram only, for now."""
     if account.platform is not PlatformName.instagram:
         return []
-    access_token, _ = store.get_tokens(account.id)
+    access_token = tokens.valid_access_token_sync(account, store)
     if not access_token:
         logger.warning("No token for %s — reconnect it to reconcile this account",
                        account.handle or account.external_id)

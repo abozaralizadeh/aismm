@@ -31,6 +31,7 @@ import logging
 
 from agents import function_tool
 
+from .. import tokens
 from ..models import PlatformName
 from .registry import register_tool
 
@@ -43,20 +44,20 @@ def _guard(state: dict) -> bool:
     return account is not None and account.platform is PlatformName.twitter
 
 
-def _context(state: dict):
+async def _context(state: dict):
     account = state.get("account")
     if account is None or account.platform is not PlatformName.twitter:
         return None
     from ..platforms.registry import get_platform  # lazy
 
-    token, _refresh = state["store"].get_tokens(account.id)
+    token = await tokens.valid_access_token(account, state["store"])
     if not token:
         return None
     return get_platform(PlatformName.twitter), account, token
 
 
 async def _with_context(state: dict, call):
-    context = _context(state)
+    context = await _context(state)
     if context is None:
         return {"error": "not_available",
                 "message": "This run does not target a connected X account."}

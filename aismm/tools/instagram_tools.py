@@ -30,20 +30,21 @@ import logging
 
 from agents import function_tool
 
+from .. import tokens
 from ..models import PlatformName
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.instagram")
 
 
-def _instagram_context(state: dict):
+async def _instagram_context(state: dict):
     """Return ``(platform, account, token)`` for an Instagram run, else ``None``."""
     account = state.get("account")
     if account is None or account.platform is not PlatformName.instagram:
         return None
     from ..platforms.registry import get_platform  # lazy
 
-    token, _refresh = state["store"].get_tokens(account.id)
+    token = await tokens.valid_access_token(account, state["store"])
     if not token:
         return None
     return get_platform(PlatformName.instagram), account, token
@@ -56,7 +57,7 @@ def _guard(state: dict):
 
 
 async def _with_context(state: dict, call):
-    context = _instagram_context(state)
+    context = await _instagram_context(state)
     if context is None:
         return {"error": "not_available",
                 "message": "This run does not target a connected Instagram account."}

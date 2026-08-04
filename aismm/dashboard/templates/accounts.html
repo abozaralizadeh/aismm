@@ -38,7 +38,21 @@
       <td>{{ a.platform.value }}</td>
       <td>{{ a.handle or "—" }}</td>
       <td class="mono small">{{ a.external_id or a.id }}</td>
-      <td class="small">{{ a.expires_at.strftime('%Y-%m-%d %H:%M') if a.expires_at else "—" }}</td>
+      {% set state = token_state.get(a.id, {}) %}
+      <td class="small">
+        {% if a.expires_at %}
+          <span title="{{ a.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC">{{ state.expiry }}</span>
+          {% if state.refreshable %}
+            <br><span class="muted">renews automatically</span>
+          {% elif state.stale %}
+            <br><span class="badge badge-failed">reconnect</span>
+          {% else %}
+            <br><span class="muted">no refresh token</span>
+          {% endif %}
+        {% else %}
+          <span class="muted">—</span>
+        {% endif %}
+      </td>
       <td class="actions-cell">
         <div class="actions">
           <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
