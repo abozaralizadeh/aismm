@@ -492,6 +492,34 @@ The saved file goes into your own storage — local assets dir, and the blob con
 configured — and is then [converted to the target platform's format](#images-are-converted-locally-to-what-the-platform-accepts)
 at publish time. A 1536×1024 PNG panel becomes a 1440×960 JPEG for Instagram automatically.
 
+### Seeing an image
+
+Everything else the agent receives is text. `browse_page` hands it a URL, alt text and the
+surrounding caption — never the picture — so a page whose meaning lives in the image left it guessing
+from filenames.
+
+`describe_image` closes that gap. Give it an `asset_path` (from `save_media` or `generate_image`) or a
+public image URL, plus an optional question:
+
+```
+describe_image("/…/assets/8d8cfa00.png", "which character is holding the letter?")
+```
+
+A small vision agent — separate from the manager, with no tools and no ability to publish — looks at
+the image and answers. It is told to transcribe any text it sees exactly, which is usually the useful
+part: speech bubbles, chart labels, signage, UI text.
+
+Reach for it when the answer is *in* the picture: reading a comic panel, telling several similar
+images apart, putting frames in order, or checking that a generated image came out as asked. It costs
+a model call, so the prompt tells the agent to use it when the surrounding text is not enough rather
+than on every image it meets. Images only — a video cannot be described this way.
+
+The same SSRF guard as browsing applies (the agent picks the URL, so private and loopback addresses
+are refused), the bytes are sniffed rather than trusted, so an HTML error page served at a `.png` URL
+never becomes a hallucinated description, and anything oversized is downscaled before it is sent. If
+the call fails — a deployment without vision support, for instance — the tool says so and tells the
+agent it may carry on without having seen the image, rather than ending the run.
+
 **Pages that render from JavaScript** are the common failure. `browse_page` waits for the network to
 go idle, forces `loading="lazy"` images to load, and scrolls — without that you get the loading
 skeleton ("Generating…") and no images at all. If a page is still not ready, pass `wait_for` with a

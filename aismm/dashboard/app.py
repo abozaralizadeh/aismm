@@ -702,7 +702,7 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("Continuity", "Carrying work across scheduled runs.",
      ("read_memory", "update_memory", "read_attachment")),
     ("Research", "Finding real, current material to post about.",
-     ("web_search", "browse_page", "save_media")),
+     ("web_search", "browse_page", "save_media", "describe_image")),
     ("Media", "Generating images and video.",
      ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
     ("Instagram", "Reading the feed and handling comments. Ignored on other platforms.",

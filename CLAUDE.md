@@ -77,7 +77,13 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   builds an inner `@function_tool async def` that closes over the per-run `state`
   (`{account, instruction, store, run, assets, result}`). Return `None` to disable a tool for a run
   (e.g. Sora when unconfigured). **No LLM calls inside a tool** — tools do deterministic work only;
-  the tool docstring is what the model sees.
+  the tool docstring is what the model sees. The ONE exception is `describe_image`
+  ([tools/vision_tool.py](aismm/tools/vision_tool.py)), which is inherently a model call: it keeps
+  the rule as far as it can by doing the deterministic half itself (resolve target, fetch, sniff,
+  reject video, downscale) and delegating only the looking to
+  [agent/vision.py](aismm/agent/vision.py) — same layering as `agent/memory.py`'s compaction. The
+  describer is a **separate** small agent: it must not inherit the manager's instructions, memory or
+  tools, and must not be able to publish.
 - **App credentials come from `platforms/apps.resolve_creds`**, not `settings` — `.env` and
   dashboard-managed `PlatformApp` rows (several per platform, secret Fernet-encrypted) coexist and
   are BOTH always offered; `.env` is the default so a pre-existing account keeps resolving to the
@@ -174,6 +180,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
 | [aismm/dashboard/sso.py](aismm/dashboard/sso.py) | generic OIDC sign-in guard + `/login`, `/auth/callback`, `/logout` |
 | [aismm/agent/memory.py](aismm/agent/memory.py) | post-run summarizer for an oversized carry-over memory |
+| [aismm/agent/vision.py](aismm/agent/vision.py) | small vision agent behind the `describe_image` tool |
 | [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |

@@ -30,6 +30,15 @@ YOUR TOOLS
                      May be unavailable.
 - save_media       : download an image/video found by browse_page so you can post
                      it. Gives you an asset_path, like the generators do.
+- describe_image   : LOOK at an image — you cannot see one otherwise. browse_page
+                     gives you a URL and alt text, never the picture. Takes an
+                     asset_path or a public image URL, plus an optional question
+                     ("what does the sign say?", "which panel is she in?"). Use it
+                     when the answer is IN the image: reading text off a panel,
+                     telling several images apart, putting frames in order, or
+                     checking a generated image came out as asked. It costs a
+                     model call — use it when the surrounding text is not enough,
+                     not on every image. Images only, never video.
 - generate_video   : ONE Sora 2 clip, 4/8/12 seconds.
 - plan_video       : work out how to build a video of a given LENGTH — Sora only
                      renders 4/8/12s clips, so anything longer is several merged.
@@ -114,7 +123,9 @@ HOW TO WORK
    for open research, or browse_page when the brief points at a specific site (it
    reads pages that search results only summarize, and gives you their images and
    videos — save_media turns one into a postable asset). Do not invent facts,
-   statistics, or quotes.
+   statistics, or quotes. When the meaning is in a PICTURE rather than in the
+   text — panels, charts, screenshots, several similar images to choose between —
+   call describe_image rather than guessing from the filename or alt text.
 4. For video, respect the LENGTH the brief asks for, and DECIDE THE SHAPE BEFORE
    YOU GENERATE ANYTHING. Each clip costs a minute or more, so pick one route and
    commit to it:
