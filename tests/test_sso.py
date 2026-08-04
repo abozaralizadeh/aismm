@@ -258,6 +258,18 @@ def test_logout_clears_the_session(auth_app, monkeypatch):
     assert client.get("/").status_code == 302
 
 
+def test_switching_account_clears_the_existing_dashboard_session(auth_app, monkeypatch):
+    client = auth_app().test_client()
+    _login(client, monkeypatch, "me@example.com")
+    with client.session_transaction() as sess:
+        sess["workspace_id"] = "old-workspace"
+    page = client.get("/login?switch=1")
+    assert page.status_code == 200
+    with client.session_transaction() as sess:
+        assert sso._SESSION_USER not in sess
+        assert "workspace_id" not in sess
+
+
 def test_login_redirect_target_cannot_leave_the_app(auth_app, monkeypatch):
     """The post-login redirect must not be usable as an open redirect."""
     client = auth_app().test_client()

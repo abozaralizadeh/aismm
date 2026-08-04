@@ -124,6 +124,19 @@ def cmd_workspaces(args) -> int:
     store = get_store()
     legacy = workspaces.legacy_workspace(store)
 
+    if args.assign_app:
+        app = store.get_platform_app(args.assign_app)
+        target = workspaces.find(store, args.workspace)
+        if app is None:
+            print(f"No OAuth app matches {args.assign_app!r}.")
+            return 1
+        if target is None:
+            print("Pass --workspace <workspace id or name> with --assign-app.")
+            return 1
+        app.workspace_id = target.id
+        store.upsert_platform_app(app)
+        print(f"Assigned OAuth app '{app.label}' ({app.id}) to '{target.name}'.")
+
     if args.owner:
         target = workspaces.find(store, args.workspace) if args.workspace else legacy
         if target is None:
@@ -150,6 +163,11 @@ def cmd_workspaces(args) -> int:
               f"{counts['runs']} run(s)")
         for member in store.list_members(workspace.id):
             print(f"    {member.role.value:6}  {member.email}")
+    unassigned_apps = [a for a in store.list_platform_apps() if not a.workspace_id]
+    if unassigned_apps:
+        print("\nOAuth apps not yet assigned to a workspace:")
+        for app in unassigned_apps:
+            print(f"  {app.id}  {app.platform.value:10}  {app.label}")
     if args.adopt:
         if legacy is None:
             print("\nNo workspace owns pre-existing content, so there is nothing to assign.")
@@ -258,6 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="rename the workspace --owner acted on")
     pw.add_argument("--adopt", action="store_true",
                     help="write a workspace onto rows that predate workspaces (tidy-up only)")
+    pw.add_argument("--assign-app", metavar="APP_ID",
+                    help="assign an existing OAuth app to --workspace")
     pw.set_defaults(func=cmd_workspaces)
 
     pr = sub.add_parser("reconcile",

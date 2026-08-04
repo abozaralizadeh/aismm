@@ -92,11 +92,12 @@ def create_app() -> Flask:
     # ---- helpers --------------------------------------------------------- #
     def _platforms_view():
         store = get_store()
+        workspace_id = _platform_app_scope()
         view = []
         for p in PlatformName:
             view.append({"name": p.value,
-                         "configured": platform_apps.is_configured(p, store),
-                         "options": platform_apps.connection_options(p, store),
+                         "configured": platform_apps.is_configured(p, store, workspace_id),
+                         "options": platform_apps.connection_options(p, store, workspace_id),
                          "capabilities": get_platform(p).capabilities})
         return view
 
@@ -160,6 +161,10 @@ def create_app() -> Flask:
         """Where a row created right now belongs — always one concrete id."""
         current = _workspace()
         return current.id if current else ""
+
+    def _platform_app_scope() -> str | list[str]:
+        """The current workspace's OAuth apps (plus its legacy unassigned apps)."""
+        return workspaces.scope_for(_workspace())
 
     def _my_role():
         current = _workspace()
@@ -429,7 +434,7 @@ def create_app() -> Flask:
         # so it is an owner action, not a member one.
         _require_owner()
         app_id = request.args.get("app", "")
-        creds = platform_apps.resolve_creds(name, get_store(), app_id)
+        creds = platform_apps.resolve_creds(name, get_store(), app_id, _platform_app_scope())
         integ = get_platform(name, creds)
         if not (integ.creds and integ.creds.configured):
             flash(f"No credentials for {platform} yet — add an app first.", "error")
@@ -466,7 +471,8 @@ def create_app() -> Flask:
         code = request.args.get("code", "")
         app_id = session.pop(f"oauth_app_{platform}", "")
         connect_workspace = session.pop(f"oauth_ws_{platform}", "") or _new_workspace_id()
-        integ = get_platform(name, platform_apps.resolve_creds(name, get_store(), app_id))
+        integ = get_platform(name, platform_apps.resolve_creds(
+            name, get_store(), app_id, _platform_app_scope()))
         verifier = session.get(f"oauth_verifier_{platform}")
         try:
             token = asyncio.run(integ.exchange_code(
@@ -536,7 +542,8 @@ def create_app() -> Flask:
             "apps.html",
             platforms=list(PlatformName),
             selected=selected,
-            apps={p: store.list_platform_apps(p) for p in PlatformName},
+            apps={p: [a for a in store.list_platform_apps(p)
+                      if a.workspace_id in _platform_app_scope()] for p in PlatformName},
             guides={p.value: setup_guides.guide_for(p) for p in PlatformName},
             env_creds={p.value: platform_apps.env_creds(p) for p in PlatformName},
             env_app_id=platform_apps.ENV_APP_ID,
@@ -545,6 +552,7 @@ def create_app() -> Flask:
 
     @app.route("/apps", methods=["POST"])
     def save_platform_app():
+        _require_owner()
         store = get_store()
         f = request.form
         try:
@@ -553,8 +561,10 @@ def create_app() -> Flask:
             abort(400)
         app_id = f.get("id") or None
         record = store.get_platform_app(app_id) if app_id else None
+        if record is not None and record.workspace_id not in _platform_app_scope():
+            abort(404)
         if record is None:
-            record = PlatformApp(platform=name)
+            record = PlatformApp(platform=name, workspace_id=_new_workspace_id())
         record.platform = name
         record.name = f.get("name", "").strip()
         record.client_id = f.get("client_id", "").strip()
@@ -571,8 +581,11 @@ def create_app() -> Flask:
 
     @app.route("/apps/<app_id>/delete", methods=["POST"])
     def delete_platform_app(app_id):
+        _require_owner()
         store = get_store()
         record = store.get_platform_app(app_id)
+        if record is None or record.workspace_id not in _platform_app_scope():
+            abort(404)
         store.delete_platform_app(app_id)
         flash("App credentials deleted. Accounts connected with it keep working "
               "until their token expires.", "success")

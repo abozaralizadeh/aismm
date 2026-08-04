@@ -274,6 +274,10 @@ class PlatformApp(SQLModel, table=True):
     """
 
     id: str = Field(default_factory=_uuid, primary_key=True)
+    # OAuth client credentials are as sensitive to tenant boundaries as the
+    # accounts they connect. They must never appear as a connection choice in
+    # another workspace.
+    workspace_id: str = Field(default="", index=True)
     platform: PlatformName = Field(index=True)
     name: str = ""                           # label, e.g. "Brand A — Meta app"
     client_id: str = ""

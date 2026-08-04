@@ -35,6 +35,7 @@
     {% if sso_user %}
       <div class="user-box">
         <span class="user-email" title="{{ sso_user.email }}">{{ sso_user.email }}</span>
+        <a class="user-logout" href="{{ url_for('login', switch=1) }}">Switch account</a>
         <a class="user-logout" href="{{ url_for('logout') }}">Sign out</a>
       </div>
     {% endif %}

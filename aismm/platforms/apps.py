@@ -24,6 +24,11 @@ from ..models import PlatformApp, PlatformName
 ENV_APP_ID = "env"
 
 
+def _in_workspace(app: PlatformApp, workspace_id) -> bool:
+    ids = [workspace_id] if isinstance(workspace_id, str) else list(workspace_id or [])
+    return app.workspace_id in ids
+
+
 def env_creds(platform: PlatformName) -> PlatformCreds:
     """Credentials from ``.env`` for this platform (may be unconfigured)."""
     return settings.platform_creds.get(platform.value) or PlatformCreds()
@@ -38,12 +43,14 @@ def app_creds(app: PlatformApp, store) -> PlatformCreds:
     )
 
 
-def available_apps(platform: PlatformName, store) -> list[PlatformApp]:
+def available_apps(platform: PlatformName, store, workspace_id: str = "") -> list[PlatformApp]:
     """Enabled dashboard apps for a platform, oldest first."""
-    return [a for a in store.list_platform_apps(platform) if a.enabled]
+    return [a for a in store.list_platform_apps(platform)
+            if a.enabled and _in_workspace(a, workspace_id)]
 
 
-def resolve_creds(platform: PlatformName, store, app_id: str | None = None) -> PlatformCreds:
+def resolve_creds(platform: PlatformName, store, app_id: str | None = None,
+                  workspace_id: str = "") -> PlatformCreds:
     """Pick the credentials for a connect.
 
     ``app_id`` may be:
@@ -60,17 +67,17 @@ def resolve_creds(platform: PlatformName, store, app_id: str | None = None) -> P
         return env_creds(platform)
     if app_id:
         app = store.get_platform_app(app_id)
-        if app and app.platform == platform:
+        if app and app.platform == platform and _in_workspace(app, workspace_id):
             return app_creds(app, store)
 
     env = env_creds(platform)
     if env.configured:
         return env
-    apps = available_apps(platform, store)
+    apps = available_apps(platform, store, workspace_id)
     return app_creds(apps[0], store) if apps else PlatformCreds()
 
 
-def connection_options(platform: PlatformName, store) -> list[dict]:
+def connection_options(platform: PlatformName, store, workspace_id: str = "") -> list[dict]:
     """Every "connect with…" choice the dashboard can offer, ``.env`` included.
 
     Each entry is ``{app_id, label, configured, is_env}``. Both sources are
@@ -86,7 +93,7 @@ def connection_options(platform: PlatformName, store) -> list[dict]:
     options.extend(
         {"app_id": app.id, "label": app.label, "configured": bool(app.client_id),
          "is_env": False}
-        for app in available_apps(platform, store)
+        for app in available_apps(platform, store, workspace_id)
     )
     if not options:                       # nothing configured anywhere
         options.append({"app_id": ENV_APP_ID, "label": "from .env", "configured": False,
@@ -94,5 +101,5 @@ def connection_options(platform: PlatformName, store) -> list[dict]:
     return options
 
 
-def is_configured(platform: PlatformName, store) -> bool:
-    return any(option["configured"] for option in connection_options(platform, store))
+def is_configured(platform: PlatformName, store, workspace_id: str = "") -> bool:
+    return any(option["configured"] for option in connection_options(platform, store, workspace_id))

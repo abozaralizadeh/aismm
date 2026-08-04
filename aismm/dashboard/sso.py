@@ -217,7 +217,14 @@ def init_app(app: Flask, cfg=None) -> None:
     @app.route("/login")
     def login():
         if current_user():
-            return redirect(url_for("index"))
+            # Changing the account at the identity provider alone does not
+            # change AISMM's own signed session. Make that transition explicit
+            # so a person cannot mistake the first user's workspace for the
+            # second user's after switching accounts in the same browser.
+            if request.args.get("switch") == "1":
+                session.clear()
+            else:
+                return redirect(url_for("index"))
         if request.args.get("go") != "1":
             # Landing page with the sign-in button, so a bare visit doesn't
             # bounce straight out to the provider.

@@ -318,7 +318,8 @@ class AzureStore(Store):
         elif existing is not None:
             app.client_secret_enc = app.client_secret_enc or existing.get("client_secret_enc", "")
         self._upsert(PK_APP, app.id, {
-            "platform": app.platform.value, "name": app.name, "client_id": app.client_id,
+            "workspace_id": app.workspace_id, "platform": app.platform.value,
+            "name": app.name, "client_id": app.client_id,
             "client_secret_enc": app.client_secret_enc, "extra_json": app.extra_json,
             "enabled": app.enabled, "created_at": app.created_at,
         })
@@ -327,7 +328,8 @@ class AzureStore(Store):
     @staticmethod
     def _app_from_entity(e) -> PlatformApp:
         return PlatformApp(
-            id=e["RowKey"], platform=PlatformName(e["platform"]), name=e.get("name", ""),
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            platform=PlatformName(e["platform"]), name=e.get("name", ""),
             client_id=e.get("client_id", ""),
             client_secret_enc=e.get("client_secret_enc", ""),
             extra_json=e.get("extra_json", "{}"), enabled=bool(e.get("enabled", True)),

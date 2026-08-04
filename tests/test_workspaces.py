@@ -24,7 +24,7 @@ from aismm.config import AuthSettings
 from aismm.dashboard import app as app_module
 from aismm.dashboard import sso
 from aismm.models import (
-    Account, Instruction, PlatformName, Run, RunStatus, StagedPost, Workspace,
+    Account, Instruction, PlatformApp, PlatformName, Run, RunStatus, StagedPost, Workspace,
     WorkspaceMember,
 )
 from aismm.store.local_store import LocalStore
@@ -361,6 +361,36 @@ def test_your_workspaces_content_is_invisible_to_a_colleague(multiuser):
     assert "Secret campaign" not in page
     # ...and it cannot be reached by guessing the id either.
     assert two.get(f"/instructions/{secret.id}/edit").status_code == 404
+
+
+def test_your_connected_account_is_invisible_to_a_colleague(multiuser):
+    application, store = multiuser
+    one = _as(application, "one@example.com", "One")
+    one.get("/")
+    mine = workspaces.accessible(store, "one@example.com")[0]
+    account = store.upsert_account(Account(platform=PlatformName.instagram, handle="private",
+                                           external_id="1", workspace_id=mine.id))
+
+    two = _as(application, "two@example.com", "Two")
+    page = two.get("/accounts").get_data(as_text=True)
+    assert "private" not in page
+    assert two.post(f"/accounts/{account.id}/delete").status_code == 404
+
+
+def test_oauth_app_credentials_are_invisible_to_a_colleague(multiuser):
+    application, store = multiuser
+    one = _as(application, "one@example.com", "One")
+    one.get("/")
+    mine = workspaces.accessible(store, "one@example.com")[0]
+    app = store.upsert_platform_app(PlatformApp(platform=PlatformName.twitter,
+                                                name="One's X", client_id="secret-id",
+                                                workspace_id=mine.id), client_secret="secret")
+
+    two = _as(application, "two@example.com", "Two")
+    page = two.get("/apps").get_data(as_text=True)
+    assert "One&#39;s X" not in page
+    assert "secret-id" not in page
+    assert two.post(f"/apps/{app.id}/delete").status_code == 404
 
 
 def test_another_workspaces_run_is_not_readable(multiuser):
