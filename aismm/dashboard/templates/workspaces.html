@@ -27,7 +27,8 @@
     </h2>
     <p class="small muted">
       {{ row.counts.accounts }} account(s) · {{ row.counts.instructions }} instruction(s) ·
-      {{ row.counts.runs }} run(s)
+      {{ row.counts.runs }} run(s) · {{ row.counts.staged }} staged post(s)
+      <br>Workspace ID: <code>{{ w.id }}</code>
       {% if w.claims_unassigned %}
         <br>This workspace also holds everything created before workspaces existed.
       {% endif %}
@@ -69,6 +70,12 @@
     </div>
 
     {% if row.role and row.role.value == 'owner' %}
+      {% if not row.counts.accounts and not row.counts.instructions and not row.counts.runs and not row.counts.staged %}
+        <form method="post" action="{{ url_for('delete_workspace', workspace_id=w.id) }}"
+              onsubmit="return confirm('Delete {{ w.name }} ({{ w.id }})? This cannot be undone.');">
+          <button class="btn btn-danger" type="submit">Delete empty workspace</button>
+        </form>
+      {% endif %}
       <details class="prompt-block">
         <summary>Manage this workspace <span class="muted small">— owners only</span></summary>
         <form class="form" method="post" action="{{ url_for('add_workspace_member', workspace_id=w.id) }}">
@@ -95,15 +102,11 @@
           <div class="row"><button class="btn" type="submit">Rename</button></div>
         </form>
 
-        <form method="post" action="{{ url_for('delete_workspace', workspace_id=w.id) }}"
-              onsubmit="return confirm('Delete {{ w.name }}? This cannot be undone.');">
-          <p class="hint">
-            A workspace can only be deleted once it is empty — its content is never deleted for you,
-            because instructions and runs cannot be recovered and its accounts still hold live
-            access tokens.
-          </p>
-          <button class="btn btn-danger" type="submit">Delete workspace</button>
-        </form>
+        <p class="hint">
+          A workspace can only be deleted once it is empty. The delete button appears above when
+          there are no accounts, instructions, runs or staged posts; its content is never deleted
+          for you.
+        </p>
       </details>
     {% endif %}
   </section>

@@ -232,6 +232,14 @@ def test_signing_in_twice_does_not_duplicate_anything(store):
     assert len(store.list_memberships("me@example.com")) == before
 
 
+def test_workspace_names_are_disambiguated_for_the_same_owner(store):
+    first = workspaces.create(store, "Campaign", "me@example.com")
+    second = workspaces.create(store, "campaign", "me@example.com")
+    workspaces.rename(store, second, "Campaign")
+    assert first.name == "Campaign"
+    assert second.name == "Campaign (2)"
+
+
 def test_you_land_in_your_own_workspace_not_one_you_were_invited_to(store):
     """A guest in a busy shared workspace should not open onto someone else's
     schedule."""
@@ -468,6 +476,27 @@ def test_the_last_owner_cannot_be_removed(multiuser):
     assert workspaces.can_admin(store, mine.id, "one@example.com")
 
 
+def test_removing_the_only_owner_of_an_empty_workspace_explains_how_to_delete_it(multiuser):
+    application, store = multiuser
+    one = _as(application, "one@example.com", "One")
+    one.get("/")
+    mine = workspaces.create(store, "Mine", "one@example.com")
+    page = one.post(f"/workspaces/{mine.id}/members/remove",
+                    data={"email": "one@example.com"},
+                    follow_redirects=True).get_data(as_text=True)
+    assert "Delete the workspace instead" in page
+
+
+def test_workspace_page_exposes_delete_for_an_empty_workspace(multiuser):
+    application, store = multiuser
+    one = _as(application, "one@example.com", "One")
+    one.get("/")
+    mine = workspaces.create(store, "Mine", "one@example.com")
+    page = one.get("/workspaces").get_data(as_text=True)
+    assert "Delete empty workspace" in page
+    assert mine.id in page
+
+
 def test_a_workspace_with_content_is_not_deleted(multiuser):
     application, store = multiuser
     one = _as(application, "one@example.com", "One")
@@ -477,6 +506,18 @@ def test_a_workspace_with_content_is_not_deleted(multiuser):
     page = one.post(f"/workspaces/{mine.id}/delete",
                     follow_redirects=True).get_data(as_text=True)
     assert "still holds" in page
+    assert store.get_workspace(mine.id) is not None
+
+
+def test_a_workspace_with_staged_posts_is_not_deleted(multiuser):
+    application, store = multiuser
+    one = _as(application, "one@example.com", "One")
+    one.get("/")
+    mine = workspaces.create(store, "Mine", "one@example.com")
+    store.add_staged(StagedPost(instruction_id="i", account_id="a", workspace_id=mine.id))
+    page = one.post(f"/workspaces/{mine.id}/delete",
+                    follow_redirects=True).get_data(as_text=True)
+    assert "1 staged post(s)" in page
     assert store.get_workspace(mine.id) is not None
 
 
@@ -571,4 +612,3 @@ def test_without_sso_everything_stays_visible(store, monkeypatch, tmp_path):
     assert "Legacy instruction" in page
     # ...and the implicit operator may do owner things.
     assert client.get("/workspaces").status_code == 200
-

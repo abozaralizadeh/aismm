@@ -222,8 +222,28 @@ def make_owner(store, workspace, email: str, display_name: str = "") -> Workspac
     return member
 
 
+def unique_name(store, name: str, email: str, *, exclude_id: str = "") -> str:
+    """A name that does not collide with this operator's other workspaces.
+
+    Two workspaces called "Abozar's workspace" are indistinguishable on the page,
+    and the wrong one gets acted on. Names are not identities, so rather than
+    refusing, disambiguate: "… (2)".
+    """
+    name = (name or "").strip() or "Untitled workspace"
+    taken = {w.name.lower() for w in accessible(store, email)
+             if w.id != exclude_id}
+    if name.lower() not in taken:
+        return name
+    for suffix in range(2, 100):
+        candidate = f"{name} ({suffix})"
+        if candidate.lower() not in taken:
+            return candidate
+    return name
+
+
 def rename(store, workspace, name: str) -> Workspace:
-    workspace.name = (name or "").strip() or workspace.name
+    workspace.name = unique_name(store, name, workspace.created_by,
+                                 exclude_id=workspace.id)
     return store.upsert_workspace(workspace)
 
 
@@ -301,7 +321,7 @@ def create(store, name: str, email: str, *, display_name: str = "") -> Workspace
     """
     email = normalize(email) or LOCAL_USER
     workspace = store.upsert_workspace(Workspace(
-        name=(name or "").strip() or "Untitled workspace", created_by=email))
+        name=unique_name(store, name, email), created_by=email))
     store.add_member(WorkspaceMember(workspace_id=workspace.id, email=email,
                                      role=WorkspaceRole.owner, display_name=display_name))
     return workspace
@@ -347,4 +367,5 @@ def content_counts(store, workspace) -> dict:
         "accounts": len(store.list_accounts(workspace_id=scope)),
         "instructions": len(store.list_instructions(workspace_id=scope)),
         "runs": store.count_runs(workspace_id=scope),
+        "staged": len(store.list_staged(workspace_id=scope)),
     }

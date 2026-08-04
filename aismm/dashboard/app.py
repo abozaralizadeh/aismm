@@ -256,8 +256,7 @@ def create_app() -> Flask:
         workspace = store.get_workspace(workspace_id)
         if not workspace:
             abort(404)
-        workspace.name = (request.form.get("name", "") or "").strip() or workspace.name
-        store.upsert_workspace(workspace)
+        workspaces.rename(store, workspace, request.form.get("name", ""))
         flash("Workspace renamed.", "success")
         return redirect(url_for("workspaces_page"))
 
@@ -288,8 +287,21 @@ def create_app() -> Flask:
         remaining = [m for m in workspaces.owners(store, workspace_id) if m.email != email]
         if not remaining:
             # A workspace with no owner cannot have its membership changed ever
-            # again — nobody would be able to add one back.
-            flash("That is the last owner. Make someone else an owner first.", "error")
+            # again — nobody would be able to add one back. Say what to do
+            # instead, which is not the same advice in both cases: removing
+            # yourself from a workspace you are alone in means deleting it.
+            workspace = store.get_workspace(workspace_id)
+            counts = workspaces.content_counts(store, workspace) if workspace else {}
+            if len(store.list_members(workspace_id)) <= 1:
+                what = ("Delete the workspace instead — that is what removing yourself from "
+                        "it means." if not any(counts.values()) else
+                        f"Empty it first ({counts['accounts']} account(s), "
+                        f"{counts['instructions']} instruction(s), {counts['runs']} run(s), "
+                        f"{counts['staged']} staged post(s)), "
+                        f"then delete it.")
+            else:
+                what = "Make one of the other members an owner first."
+            flash(f"You are the last owner of that workspace. {what}", "error")
             return redirect(url_for("workspaces_page"))
         store.remove_member(workspace_id, email)
         flash(f"Removed {email}.", "success")
@@ -307,7 +319,8 @@ def create_app() -> Flask:
             # Content is never cascaded: deleting instructions and runs by
             # accident is unrecoverable, and the accounts still hold live tokens.
             flash(f"That workspace still holds {counts['accounts']} account(s), "
-                  f"{counts['instructions']} instruction(s) and {counts['runs']} run(s). "
+                  f"{counts['instructions']} instruction(s), {counts['runs']} run(s) and "
+                  f"{counts['staged']} staged post(s). "
                   f"Remove them first.", "error")
             return redirect(url_for("workspaces_page"))
         store.delete_workspace(workspace_id)
