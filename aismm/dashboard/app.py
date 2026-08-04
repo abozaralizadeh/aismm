@@ -93,11 +93,14 @@ def create_app() -> Flask:
     def _platforms_view():
         store = get_store()
         workspace_id = _platform_app_scope()
+        allow_env = workspaces.can_use_deployment_config(store, _workspace())
         view = []
         for p in PlatformName:
             view.append({"name": p.value,
-                         "configured": platform_apps.is_configured(p, store, workspace_id),
-                         "options": platform_apps.connection_options(p, store, workspace_id),
+                         "configured": platform_apps.is_configured(
+                             p, store, workspace_id, allow_env=allow_env),
+                         "options": platform_apps.connection_options(
+                             p, store, workspace_id, allow_env=allow_env),
                          "capabilities": get_platform(p).capabilities})
         return view
 
@@ -434,7 +437,9 @@ def create_app() -> Flask:
         # so it is an owner action, not a member one.
         _require_owner()
         app_id = request.args.get("app", "")
-        creds = platform_apps.resolve_creds(name, get_store(), app_id, _platform_app_scope())
+        creds = platform_apps.resolve_creds(
+            name, get_store(), app_id, _platform_app_scope(),
+            allow_env=workspaces.can_use_deployment_config(get_store(), _workspace()))
         integ = get_platform(name, creds)
         if not (integ.creds and integ.creds.configured):
             flash(f"No credentials for {platform} yet — add an app first.", "error")
@@ -472,7 +477,8 @@ def create_app() -> Flask:
         app_id = session.pop(f"oauth_app_{platform}", "")
         connect_workspace = session.pop(f"oauth_ws_{platform}", "") or _new_workspace_id()
         integ = get_platform(name, platform_apps.resolve_creds(
-            name, get_store(), app_id, _platform_app_scope()))
+            name, get_store(), app_id, _platform_app_scope(),
+            allow_env=workspaces.can_use_deployment_config(get_store(), _workspace())))
         verifier = session.get(f"oauth_verifier_{platform}")
         try:
             token = asyncio.run(integ.exchange_code(
@@ -545,7 +551,8 @@ def create_app() -> Flask:
             apps={p: [a for a in store.list_platform_apps(p)
                       if a.workspace_id in _platform_app_scope()] for p in PlatformName},
             guides={p.value: setup_guides.guide_for(p) for p in PlatformName},
-            env_creds={p.value: platform_apps.env_creds(p) for p in PlatformName},
+            env_creds=({p.value: platform_apps.env_creds(p) for p in PlatformName}
+                       if workspaces.can_use_deployment_config(store, _workspace()) else {}),
             env_app_id=platform_apps.ENV_APP_ID,
             redirect_uris={p.value: settings.redirect_uri(p.value) for p in PlatformName},
         )

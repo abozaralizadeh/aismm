@@ -50,7 +50,7 @@ def available_apps(platform: PlatformName, store, workspace_id: str = "") -> lis
 
 
 def resolve_creds(platform: PlatformName, store, app_id: str | None = None,
-                  workspace_id: str = "") -> PlatformCreds:
+                  workspace_id: str = "", *, allow_env: bool = True) -> PlatformCreds:
     """Pick the credentials for a connect.
 
     ``app_id`` may be:
@@ -64,20 +64,21 @@ def resolve_creds(platform: PlatformName, store, app_id: str | None = None,
     reconnecting one must not silently switch it to a different app.
     """
     if app_id == ENV_APP_ID:
-        return env_creds(platform)
+        return env_creds(platform) if allow_env else PlatformCreds()
     if app_id:
         app = store.get_platform_app(app_id)
         if app and app.platform == platform and _in_workspace(app, workspace_id):
             return app_creds(app, store)
 
-    env = env_creds(platform)
+    env = env_creds(platform) if allow_env else PlatformCreds()
     if env.configured:
         return env
     apps = available_apps(platform, store, workspace_id)
     return app_creds(apps[0], store) if apps else PlatformCreds()
 
 
-def connection_options(platform: PlatformName, store, workspace_id: str = "") -> list[dict]:
+def connection_options(platform: PlatformName, store, workspace_id: str = "",
+                       *, allow_env: bool = True) -> list[dict]:
     """Every "connect with…" choice the dashboard can offer, ``.env`` included.
 
     Each entry is ``{app_id, label, configured, is_env}``. Both sources are
@@ -86,7 +87,7 @@ def connection_options(platform: PlatformName, store, workspace_id: str = "") ->
     app appeared left no way back to it.
     """
     options = []
-    env = env_creds(platform)
+    env = env_creds(platform) if allow_env else PlatformCreds()
     if env.configured:
         options.append({"app_id": ENV_APP_ID, "label": "from .env (default)",
                         "configured": True, "is_env": True})
@@ -101,5 +102,7 @@ def connection_options(platform: PlatformName, store, workspace_id: str = "") ->
     return options
 
 
-def is_configured(platform: PlatformName, store, workspace_id: str = "") -> bool:
-    return any(option["configured"] for option in connection_options(platform, store, workspace_id))
+def is_configured(platform: PlatformName, store, workspace_id: str = "",
+                  *, allow_env: bool = True) -> bool:
+    return any(option["configured"] for option in connection_options(
+        platform, store, workspace_id, allow_env=allow_env))

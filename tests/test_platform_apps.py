@@ -100,6 +100,17 @@ def test_env_can_be_requested_explicitly(store, monkeypatch):
     assert creds.client_id == "env-id"
 
 
+def test_env_cannot_be_requested_by_a_non_admin_workspace(store, monkeypatch):
+    monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
+        config_module.settings,
+        platform_creds={"instagram": PlatformCreds(client_id="env-id", client_secret="env-s")}))
+    assert not platform_apps.connection_options(PlatformName.instagram, store, "other",
+                                                allow_env=False)[0]["configured"]
+    assert platform_apps.resolve_creds(PlatformName.instagram, store,
+                                       platform_apps.ENV_APP_ID, "other",
+                                       allow_env=False).configured is False
+
+
 def test_a_dashboard_app_is_used_when_env_is_empty(store):
     _add(store, client_id="db-id")
     assert platform_apps.resolve_creds(PlatformName.instagram, store).client_id == "db-id"

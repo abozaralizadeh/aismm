@@ -393,6 +393,13 @@ def test_oauth_app_credentials_are_invisible_to_a_colleague(multiuser):
     assert two.post(f"/apps/{app.id}/delete").status_code == 404
 
 
+def test_the_first_workspace_is_the_only_one_allowed_to_use_env_config(store):
+    first = workspaces.create(store, "First", "one@example.com")
+    second = workspaces.create(store, "Second", "two@example.com")
+    assert workspaces.can_use_deployment_config(store, first)
+    assert not workspaces.can_use_deployment_config(store, second)
+
+
 def test_another_workspaces_run_is_not_readable(multiuser):
     application, store = multiuser
     _as(application, "one@example.com", "One").get("/")

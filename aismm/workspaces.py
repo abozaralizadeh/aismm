@@ -78,6 +78,21 @@ def legacy_workspace(store):
     return None
 
 
+def site_admin_workspace(store):
+    """The one workspace allowed to use deployment-wide ``.env`` credentials.
+
+    The first operator owns pre-existing data and is therefore the deployment
+    administrator on upgrades. A fresh deployment has no legacy workspace, so
+    its first-created workspace has that role instead.
+    """
+    return legacy_workspace(store) or next(iter(store.list_workspaces()), None)
+
+
+def can_use_deployment_config(store, workspace) -> bool:
+    admin = site_admin_workspace(store)
+    return bool(workspace and admin and workspace.id == admin.id)
+
+
 def _claim(store, workspace, email: str, display_name: str = ""):
     """Make ``workspace`` this operator's own: theirs, named for them, owned.
 

@@ -15,8 +15,9 @@
     </div>
     {% if p.configured %}
       {% for opt in p.options if opt.configured %}
-        <a class="btn" href="{{ url_for('oauth_start', platform=p.name, app=opt.app_id) }}">
-          Connect{% if p.options|selectattr('configured')|list|length > 1 %} · {{ opt.label }}{% endif %} →
+        <a class="btn connect-option" href="{{ url_for('oauth_start', platform=p.name, app=opt.app_id) }}"
+           title="Connect using {{ opt.label }}">
+          <span>Connect</span><span class="connect-option-label">· {{ opt.label }}</span><span>→</span>
         </a>
       {% endfor %}
     {% else %}

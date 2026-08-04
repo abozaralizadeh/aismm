@@ -163,6 +163,8 @@ def test_first_page_shows_only_one_page_of_runs(dash, seeded):
     page = dash.test_client().get("/runs?per_page=25").get_data(as_text=True)
     assert page.count("details →") == 25
     assert "Page 1 of 2" in page
+    assert "Refreshes every 30 seconds" in page
+    assert "window.location.reload(); }, 30000)" in page
 
 
 def test_second_page_shows_the_rest(dash, seeded):

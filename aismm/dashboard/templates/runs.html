@@ -13,7 +13,10 @@
 {%- endmacro %}
 
 {% block content %}
-<h1>Runs &amp; approvals</h1>
+<div class="row-between runs-heading">
+  <h1>Runs &amp; approvals</h1>
+  <span class="muted small" aria-live="polite">Refreshes every 30 seconds</span>
+</div>
 
 <h2>Awaiting approval</h2>
 {% if pending %}
@@ -149,4 +152,11 @@
   {% else %}No runs yet.{% endif %}
 </p>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Keep the current query string, so filters, sorting and pagination survive.
+  window.setTimeout(function () { window.location.reload(); }, 30000);
+</script>
 {% endblock %}
