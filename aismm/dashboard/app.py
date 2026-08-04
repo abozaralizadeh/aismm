@@ -425,9 +425,14 @@ def create_app() -> Flask:
         """
         store = get_store()
         account = _owned(store.get_account(account_id))
+        account_workspace = (store.get_workspace(account.workspace_id) if account.workspace_id
+                             else workspaces.legacy_workspace(store))
         platform = get_platform(account.platform,
                                 platform_apps.resolve_creds(account.platform, store,
-                                                            (account.meta or {}).get("app_id", "")))
+                                                            (account.meta or {}).get("app_id", ""),
+                                                            workspaces.scope_for(account_workspace),
+                                                            allow_env=workspaces.can_use_deployment_config(
+                                                                store, account_workspace)))
         # Refresh first: the diagnostic must report the token publishing would
         # actually use, not a stale one that nothing would ever send.
         access_token = tokens.valid_access_token_sync(account, store)
@@ -523,9 +528,11 @@ def create_app() -> Flask:
         code = request.args.get("code", "")
         app_id = session.pop(f"oauth_app_{platform}", "")
         connect_workspace = session.pop(f"oauth_ws_{platform}", "") or _new_workspace_id()
+        store = get_store()
+        callback_workspace = store.get_workspace(connect_workspace)
         integ = get_platform(name, platform_apps.resolve_creds(
-            name, get_store(), app_id, _platform_app_scope(),
-            allow_env=workspaces.can_use_deployment_config(get_store(), _workspace())))
+            name, store, app_id, workspaces.scope_for(callback_workspace),
+            allow_env=workspaces.can_use_deployment_config(store, callback_workspace)))
         verifier = session.get(f"oauth_verifier_{platform}")
         try:
             token = asyncio.run(integ.exchange_code(
@@ -543,7 +550,6 @@ def create_app() -> Flask:
         if token.expires_in:
             expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=int(token.expires_in))
 
-        store = get_store()
         connected = []
         for identity in identities:
             meta = dict(identity.meta)

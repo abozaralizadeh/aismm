@@ -17,6 +17,7 @@ import pytest
 from aismm import tokens
 from aismm.auth.oauth import TokenBundle
 from aismm.models import Account, PlatformName
+from aismm import workspaces
 
 UTC = dt.timezone.utc
 
@@ -64,6 +65,26 @@ def test_an_expired_token_is_refreshed(store, refreshed):
     account = _account(store, expires_in_seconds=-3600)
     assert asyncio.run(tokens.valid_access_token(account, store)) == "new-access"
     assert refreshed == ["r0"]
+
+
+def test_refresh_uses_the_account_workspace_app_credentials(store, monkeypatch):
+    workspace = workspaces.create(store, "Mine", "me@example.com")
+    account = _account(store, expires_in_seconds=-60)
+    account.workspace_id = workspace.id
+    store.upsert_account(account)
+    seen = {}
+
+    class _Creds:
+        configured = False
+
+    def resolve(*args, **kwargs):
+        seen["scope"] = args[3]
+        seen["allow_env"] = kwargs["allow_env"]
+        return _Creds()
+
+    monkeypatch.setattr(tokens.platform_apps, "resolve_creds", resolve)
+    asyncio.run(tokens.valid_access_token(account, store))
+    assert seen == {"scope": workspace.id, "allow_env": True}
 
 
 def test_a_token_about_to_expire_is_refreshed_early(store, refreshed):
@@ -127,7 +148,7 @@ def test_the_app_that_minted_the_token_is_the_one_asked_to_refresh(store, monkey
     class _Creds:
         configured = True
 
-    def _resolve(platform, _store, app_id=""):
+    def _resolve(platform, _store, app_id="", *args, **kwargs):
         seen["app_id"] = app_id
         return _Creds()
 

@@ -31,6 +31,7 @@ import logging
 from .models import Account
 from .platforms import apps as platform_apps
 from .platforms.registry import get_platform
+from . import workspaces
 
 logger = logging.getLogger("aismm.tokens")
 
@@ -105,8 +106,15 @@ def _store_bundle(account: Account, store, bundle) -> str:
 
 
 async def _refresh(account: Account, store, refresh_token: str) -> str | None:
+    # OAuth apps are workspace-private. Accounts created before workspaces have
+    # no concrete id, but belong to the legacy/administrator workspace.
+    workspace = (store.get_workspace(account.workspace_id) if account.workspace_id
+                 else workspaces.legacy_workspace(store))
+    scope = workspaces.scope_for(workspace)
     creds = platform_apps.resolve_creds(account.platform, store,
-                                        (account.meta or {}).get("app_id", ""))
+                                        (account.meta or {}).get("app_id", ""), scope,
+                                        allow_env=workspaces.can_use_deployment_config(
+                                            store, workspace))
     if not creds.configured:
         logger.warning("Cannot refresh %s (%s): no app credentials are configured for it",
                        account.handle or account.external_id, account.platform.value)
