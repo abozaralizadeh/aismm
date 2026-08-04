@@ -69,6 +69,22 @@
         </div>
       </td>
     </tr>
+    {% if a.platform.value == 'twitter' %}
+    {% set communities = a.meta.get('communities', []) %}
+    <tr class="community-row"><td colspan="5">
+      <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}" class="community-form">
+        <label>X destination
+          <select name="community_id">
+            <option value="">Home timeline</option>
+            {% for c in communities %}<option value="{{ c.id }}" {% if a.meta.get('community_id') == c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <button class="btn small">Save destination</button>
+      </form>
+      <form method="post" action="{{ url_for('sync_twitter_communities', account_id=a.id) }}"><button class="btn small">Refresh communities</button></form>
+      <span class="muted small">One community per post. Reconnect X once to grant <code>community.read</code> if refresh is refused.</span>
+    </td></tr>
+    {% endif %}
   {% endfor %}
   </tbody>
 </table>

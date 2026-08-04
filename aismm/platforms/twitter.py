@@ -147,7 +147,8 @@ class Twitter(SocialPlatform):
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
-    scopes = ["tweet.read", "tweet.write", "users.read", "media.write", "offline.access"]
+    scopes = ["tweet.read", "tweet.write", "users.read", "community.read", "media.write",
+              "offline.access"]
     use_pkce = True
     token_auth_style = "basic"
 
@@ -257,6 +258,9 @@ class Twitter(SocialPlatform):
             reply_to = ""
             for index, text in enumerate(posts):
                 payload: dict = {"text": text}
+                community_id = str((account.meta or {}).get("community_id", "")).strip()
+                if community_id:
+                    payload["community_id"] = community_id
                 # Media rides on the FIRST post: that is the one shown in a
                 # timeline, and X would otherwise repeat the image down the thread.
                 if media_ids and index == 0:
@@ -352,6 +356,14 @@ class Twitter(SocialPlatform):
         payload = await self._get(access_token, f"users/{account.external_id}/tweets", {
             "max_results": max(5, min(limit, 100)), "tweet.fields": self.TWEET_FIELDS})
         return payload.get("data", []) or []
+
+    async def list_communities(self, access_token: str, account: Account) -> list[dict]:
+        """Communities this X user has joined, suitable as post targets."""
+        payload = await self._get(access_token, f"users/{account.external_id}/communities", {
+            "max_results": 100, "community.fields": "id,name,description,member_count"})
+        return [{"id": str(c.get("id", "")), "name": c.get("name", ""),
+                 "description": c.get("description", "")}
+                for c in payload.get("data", []) or [] if c.get("id")]
 
     async def list_mentions(self, access_token: str, account: Account, *,
                             limit: int = 10) -> list[dict]:

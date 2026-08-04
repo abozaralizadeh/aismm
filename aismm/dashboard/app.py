@@ -366,6 +366,53 @@ def create_app() -> Flask:
         return render_template("accounts.html", accounts=rows,
                                token_state=token_state, platforms=_platforms_view())
 
+    @app.route("/accounts/<account_id>/communities/sync", methods=["POST"])
+    def sync_twitter_communities(account_id):
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.twitter:
+            abort(404)
+        token = tokens.valid_access_token_sync(account, store)
+        if not token:
+            flash("No stored token — reconnect this X account.", "error")
+            return redirect(url_for("accounts"))
+        try:
+            communities = asyncio.run(get_platform(PlatformName.twitter).list_communities(token, account))
+        except Exception as exc:  # noqa: BLE001
+            flash(f"Could not load X communities: {exc}", "error")
+            return redirect(url_for("accounts"))
+        meta = dict(account.meta)
+        meta["communities"] = communities
+        if meta.get("community_id") not in {c["id"] for c in communities}:
+            meta.pop("community_id", None)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        flash(f"Loaded {len(communities)} X community target(s).", "success")
+        return redirect(url_for("accounts"))
+
+    @app.route("/accounts/<account_id>/community", methods=["POST"])
+    def choose_twitter_community(account_id):
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.twitter:
+            abort(404)
+        meta = dict(account.meta)
+        community_id = request.form.get("community_id", "").strip()
+        available = {str(c.get("id", "")) for c in meta.get("communities", [])}
+        if community_id and community_id not in available:
+            flash("Choose a community from the refreshed list.", "error")
+            return redirect(url_for("accounts"))
+        if community_id:
+            meta["community_id"] = community_id
+        else:
+            meta.pop("community_id", None)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        flash("X posts will go to the selected destination.", "success")
+        return redirect(url_for("accounts"))
+
     @app.route("/accounts/<account_id>/check", methods=["POST"])
     def check_account(account_id):
         """What does this account's stored token ACTUALLY allow?

@@ -118,6 +118,14 @@ def test_a_single_image_post_still_works(api):
     assert api["tweets"][0]["media"]["media_ids"] == ["media1"]
 
 
+def test_a_community_target_is_sent_with_the_post(api):
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    account.set_meta({"community_id": "123"})
+    asyncio.run(_x().publish(access_token="t", account=account, caption="hi", asset_path="",
+                             asset_paths=None, media_kind="text"))
+    assert api["tweets"][0]["community_id"] == "123"
+
+
 def test_four_images_are_all_attached(api):
     _publish(asset_path="/a.jpg", asset_paths=[f"/{n}.jpg" for n in range(4)])
     assert len(api["uploads"]) == 4
