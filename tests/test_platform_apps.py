@@ -229,6 +229,13 @@ def test_connect_offers_one_link_per_app(dash, store):
     assert "Brand A" in page and "Brand B" in page
 
 
+def test_connect_button_exposes_the_full_app_name_on_hover(dash, store):
+    _add(store, name="A very long app name", client_id="a")
+    page = dash.test_client().get("/accounts").get_data(as_text=True)
+    assert 'title="Connect using A very long app name"' in page
+    assert 'class="connect-option-label"' in page
+
+
 def test_connect_without_credentials_points_at_the_apps_page(dash, store, monkeypatch):
     monkeypatch.setattr(platform_apps, "settings", dataclasses.replace(
         config_module.settings, platform_creds={}))

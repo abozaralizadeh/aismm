@@ -17,7 +17,7 @@
       {% for opt in p.options if opt.configured %}
         <a class="btn connect-option" href="{{ url_for('oauth_start', platform=p.name, app=opt.app_id) }}"
            title="Connect using {{ opt.label }}">
-          <span>Connect</span><span class="connect-option-label">· {{ opt.label }}</span><span>→</span>
+          <span class="connect-option-prefix">Connect ·</span><span class="connect-option-label">{{ opt.label }}</span><span class="connect-option-arrow">→</span>
         </a>
       {% endfor %}
     {% else %}
@@ -70,19 +70,15 @@
       </td>
     </tr>
     {% if a.platform.value == 'twitter' %}
-    {% set communities = a.meta.get('communities', []) %}
     <tr class="community-row"><td colspan="5">
       <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}" class="community-form">
         <label>X destination
-          <select name="community_id">
-            <option value="">Home timeline</option>
-            {% for c in communities %}<option value="{{ c.id }}" {% if a.meta.get('community_id') == c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
-          </select>
+          <input type="text" name="community_id" inputmode="numeric" pattern="[0-9]*"
+                 value="{{ a.meta.get('community_id', '') }}" placeholder="Blank = home timeline">
         </label>
         <button class="btn small">Save destination</button>
       </form>
-      <form method="post" action="{{ url_for('sync_twitter_communities', account_id=a.id) }}"><button class="btn small">Refresh communities</button></form>
-      <span class="muted small">One community per post. If X refuses the refresh, it will show the API reason here.</span>
+      <span class="muted small">One community per post. X does not provide this app access to list joined communities. Copy the numeric ID from the community URL: <code>x.com/i/communities/ID</code>.</span>
     </td></tr>
     {% endif %}
   {% endfor %}

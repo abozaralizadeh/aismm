@@ -66,15 +66,16 @@ main { max-width: 960px; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
 .platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
 .platform-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 1rem; display: flex; flex-direction: column; gap: .5rem; text-transform: capitalize;
+  min-width: 0; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; text-transform: capitalize;
 }
 .platform-name { font-weight: 600; font-size: 1.05rem; }
-.connect-option { width: 100%; min-width: 0; display: flex; align-items: center; gap: .35rem; }
-.connect-option-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-option { width: 100%; min-width: 0; max-width: 100%; display: flex; align-items: center; gap: .35rem; overflow: hidden; }
+.connect-option-prefix, .connect-option-arrow { flex: 0 0 auto; }
+.connect-option-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .community-row td { background: rgba(110,168,254,.04); }
 .community-form { display: inline-flex; align-items: end; gap: .5rem; margin-right: .5rem; }
 .community-form label { display: flex; flex-direction: column; gap: .2rem; font-size: .82rem; color: var(--muted); }
-.community-form select { max-width: 20rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); padding: .35rem .5rem; }
+.community-form input { max-width: 20rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); padding: .35rem .5rem; }
 
 /* Wide tables scroll INSIDE their own box; the page itself never does. */
 .table-scroll {
