@@ -82,7 +82,7 @@
         <button class="btn small">Save destination</button>
       </form>
       <form method="post" action="{{ url_for('sync_twitter_communities', account_id=a.id) }}"><button class="btn small">Refresh communities</button></form>
-      <span class="muted small">One community per post. Reconnect X once to grant <code>community.read</code> if refresh is refused.</span>
+      <span class="muted small">One community per post. If X refuses the refresh, it will show the API reason here.</span>
     </td></tr>
     {% endif %}
   {% endfor %}

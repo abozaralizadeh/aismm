@@ -147,8 +147,7 @@ class Twitter(SocialPlatform):
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
-    scopes = ["tweet.read", "tweet.write", "users.read", "community.read", "media.write",
-              "offline.access"]
+    scopes = ["tweet.read", "tweet.write", "users.read", "media.write", "offline.access"]
     use_pkce = True
     token_auth_style = "basic"
 
