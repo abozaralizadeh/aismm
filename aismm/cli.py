@@ -106,6 +106,39 @@ def cmd_list(_args) -> int:
     return 0
 
 
+def cmd_workspaces(args) -> int:
+    """Show who can see what, and optionally tidy up unassigned rows.
+
+    Unassigned rows are already visible in the default workspace (its scope
+    matches them at read time), so --adopt is housekeeping, not a repair.
+    """
+    from . import workspaces
+    from .store import get_store
+
+    configure_logging()
+    store = get_store()
+    default = workspaces.ensure_default(store)
+    for workspace in store.list_workspaces():
+        counts = workspaces.content_counts(store, workspace.id)
+        flags = []
+        if workspace.id == default.id:
+            flags.append("default")
+        if workspace.auto_join:
+            flags.append("everyone joins")
+        print(f"\n{workspace.name}  [{workspace.kind.value}"
+              f"{', ' + ', '.join(flags) if flags else ''}]")
+        print(f"  id={workspace.id}")
+        print(f"  {counts['accounts']} account(s), {counts['instructions']} instruction(s), "
+              f"{counts['runs']} run(s)")
+        for member in store.list_members(workspace.id):
+            print(f"    {member.role.value:6}  {member.email}")
+    if args.adopt:
+        moved = workspaces.adopt_orphans(store, default.id)
+        print(f"\nAssigned {moved} previously unassigned row(s) to '{default.name}'.")
+    print()
+    return 0
+
+
 def cmd_post(args) -> int:
     from .store import get_store
     from .llm import configure_tracing
@@ -191,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--instruction", required=True, help="instruction id (prefix) or name")
     pp.add_argument("--account", help="limit to one account id")
     pp.set_defaults(func=cmd_post)
+
+    pw = sub.add_parser("workspaces", help="list workspaces, members and their content")
+    pw.add_argument("--adopt", action="store_true",
+                    help="write a workspace onto rows that predate workspaces (tidy-up only)")
+    pw.set_defaults(func=cmd_workspaces)
 
     pr = sub.add_parser("reconcile",
                         help="fix runs marked failed whose post is actually live")

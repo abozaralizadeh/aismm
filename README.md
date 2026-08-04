@@ -18,6 +18,7 @@ new platform or a new tool with a single file.
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
 - [Configuration](#configuration) · [Azure vs APIM](#azure-openai-or-apim) · [Sora / images](#media-generation-sora-2--images) · [env reference](#environment-variable-reference)
+- [Workspaces (several people, one deployment)](#workspaces)
 - [Platform apps (credentials in the UI)](#platform-apps-credentials-in-the-dashboard)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
 - [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing)
@@ -301,6 +302,58 @@ Every account's OAuth **redirect/callback URL** is:
 `<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/oauth/<platform>/callback` (for example,
 `https://your-host/aismm/oauth/twitter/callback` when the prefix is `/aismm`). Omit the prefix when
 `REVERSE_PROXY_PREFIX` is empty. Register exactly this in each developer portal.
+
+---
+
+## Workspaces
+
+Several people can share one deployment without sharing everything. A **workspace** is a silo: its
+own connected social accounts, instructions, runs and approval queue. Nothing crosses between them —
+an account connected in one workspace cannot be posted to from another, which is what makes a
+personal workspace actually personal. Partitioning only the instructions would have left every
+member able to publish to every connected account.
+
+Switch workspace from the selector in the header; everything else on the page follows it.
+
+**Who gets what.** Identity comes from [SSO](#dashboard-sign-in-sso) — the email your provider
+returns is the key, and there is no separate user list to maintain. On someone's first sign-in they
+get two things:
+
+| | |
+|---|---|
+| **Default** (shared) | Everyone who can sign in joins it automatically. This is where the content of an existing deployment lives, so upgrading changes nothing anyone can see. |
+| **Their personal workspace** | Theirs alone, and they own it. Empty to start. |
+
+Create more from **Workspaces** — a client, a brand, a side project. You own what you create.
+
+**Two roles.** An **owner** manages membership, connects and disconnects accounts, and renames or
+deletes the workspace. A **member** does the everyday work: authoring instructions, running them,
+approving posts. Everyone auto-joining the shared workspace joins as a member, so no one inherits
+the ability to disconnect a shared account by accident.
+
+**Membership is not sign-in.** They are separate gates and stay that way: adding someone to a
+workspace does not let them log in. They also need to pass the SSO allowlist
+(`AUTH_ALLOWED_EMAILS` / `AUTH_ALLOWED_DOMAINS`), and the dashboard tells you when the person you
+just added does not.
+
+**Deleting.** A workspace can only be deleted once it is empty. Its content is never cascaded away
+for you: instructions and runs cannot be recovered, and its accounts still hold live access tokens.
+The last owner cannot be removed either — a workspace with no owner could never have its membership
+changed again.
+
+**Without SSO** the dashboard is unauthenticated anyway, so inventing a user there would guard
+nothing: one implicit local operator owns every workspace and sees everything. Local development is
+unchanged, and you can still create and switch workspaces to try the feature.
+
+**Upgrading an existing deployment.** Content written before workspaces existed carries no
+workspace, and the Default workspace claims those rows when it reads them — no migration step to
+run, and nothing that can be lost by a migration that was interrupted. `python -m aismm.cli
+workspaces` prints every workspace, its members and what it holds; `--adopt` writes the default
+workspace onto those older rows as a tidy-up, which is optional.
+
+**What is NOT scoped:** platform *app* credentials (Apps). Those are deployment infrastructure — one
+Meta app, one X app — and the sensitive part, the access token, lives on the account, which is
+scoped. `.env` credentials have always been global.
 
 ---
 

@@ -277,6 +277,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     run.placement = placement
     staged = StagedPost(
         instruction_id=instruction.id, account_id=account.id, run_id=run.id,
+        workspace_id=instruction.workspace_id,
         caption=caption, asset_path=asset_path, media_kind=kind, placement=placement,
     )
     staged.set_asset_paths(paths)

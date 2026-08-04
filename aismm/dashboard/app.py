@@ -14,19 +14,20 @@ import threading
 from collections.abc import Callable
 
 from flask import (
-    Flask, abort, flash, redirect, render_template, request, send_from_directory, session, url_for,
+    Flask, abort, flash, g, redirect, render_template, request, send_from_directory,
+    session, url_for,
 )
 from markupsafe import Markup, escape
 from werkzeug.utils import secure_filename
 
 from ..config import settings
 from ..assets import public_url
-from .. import attachments, cooldown, tokens
+from .. import attachments, cooldown, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
     Account, AttachmentPurpose, Instruction, InstructionFile, MediaPref, PlatformApp,
-    PlatformName, PublishMode, RunStatus,
+    PlatformName, PublishMode, RunStatus, WorkspaceMember, WorkspaceRole,
 )
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
@@ -99,15 +100,225 @@ def create_app() -> Flask:
                          "capabilities": get_platform(p).capabilities})
         return view
 
+    # ---- workspaces ------------------------------------------------------- #
+    # Every scoped query goes through _workspace(); a route that forgets it
+    # shows another workspace's data, so these are deliberately short and used
+    # everywhere rather than each route filtering by hand.
+    _WORKSPACE_KEY = "workspace_id"
+
+    def _identity() -> tuple[str, str, bool]:
+        """``(email, display_name, unauthenticated)``.
+
+        With SSO off the dashboard has no identity at all and is already
+        unauthenticated — so rather than invent a user, one implicit local
+        operator owns everything. See aismm/workspaces.py.
+        """
+        if not settings.auth.enabled:
+            return workspaces.LOCAL_USER, workspaces.LOCAL_USER_NAME, True
+        user = sso.current_user() or {}
+        return (user.get("email", ""), user.get("name", "") or user.get("email", ""), False)
+
+    def _my_workspaces():
+        if "workspace_list" not in g.__dict__:
+            email, _name, anon = _identity()
+            g.workspace_list = workspaces.accessible(get_store(), email, unauthenticated=anon)
+        return g.workspace_list
+
+    def _workspace():
+        """The workspace this request acts in, or None when the user has none."""
+        if "workspace" in g.__dict__:
+            return g.workspace
+        mine = _my_workspaces()
+        chosen = session.get(_WORKSPACE_KEY)
+        current = next((w for w in mine if w.id == chosen), None) or (mine[0] if mine else None)
+        if current is not None and session.get(_WORKSPACE_KEY) != current.id:
+            session[_WORKSPACE_KEY] = current.id
+        g.workspace = current
+        return current
+
+    def _workspace_id():
+        """The scope for store queries.
+
+        The DEFAULT workspace also claims rows that carry no workspace at all —
+        anything written before workspaces existed, or by a path that forgot to
+        set one. Resolving that at read time rather than rewriting every row on
+        boot means the migration cannot silently lose anything, and costs no
+        table scan.
+        """
+        current = _workspace()
+        if current is None:
+            return "\x00none"                             # matches nothing
+        return [current.id, ""] if current.auto_join else current.id
+
+    def _in_scope(obj) -> bool:
+        scope = _workspace_id()
+        owner = getattr(obj, "workspace_id", None)
+        if owner is None:
+            return False
+        return owner in scope if isinstance(scope, list) else owner == scope
+
+    def _new_workspace_id() -> str:
+        """Where a row created right now belongs — always one concrete id."""
+        current = _workspace()
+        return current.id if current else ""
+
+    def _my_role():
+        current = _workspace()
+        if current is None:
+            return None
+        email, _name, anon = _identity()
+        return workspaces.role_in(get_store(), current.id, email, unauthenticated=anon)
+
+    def _require_owner(workspace_id=None):
+        """403 unless the caller owns the workspace. Membership is not enough."""
+        email, _name, anon = _identity()
+        target = workspace_id or _new_workspace_id()
+        if not workspaces.can_admin(get_store(), target, email, unauthenticated=anon):
+            abort(403)
+
+    def _owned(obj):
+        """Return ``obj`` if it belongs to the current workspace, else 404.
+
+        404 rather than 403 on purpose: whether an id exists in someone else's
+        workspace is not this user's business.
+        """
+        if obj is None or not _in_scope(obj):
+            abort(404)
+        return obj
+
+    @app.before_request
+    def _bootstrap_workspaces():
+        """Give a newly signed-in identity its workspaces, once per session."""
+        if request.endpoint in sso.PUBLIC_ENDPOINTS:
+            return None
+        email, name, anon = _identity()
+        if anon:
+            return None
+        if not email or session.get("workspace_bootstrapped") == email:
+            return None
+        workspaces.ensure_user(get_store(), email, name)
+        session["workspace_bootstrapped"] = email
+        return None
+
+    @app.context_processor
+    def _inject_workspaces():
+        try:
+            current = _workspace()
+        except Exception:  # noqa: BLE001 - never break a page over the switcher
+            return {}
+        return {"current_workspace": current, "my_workspaces": _my_workspaces(),
+                "my_workspace_role": _my_role()}
+
+    @app.route("/workspaces")
+    def workspaces_page():
+        store = get_store()
+        email, _name, anon = _identity()
+        rows = []
+        for workspace in _my_workspaces():
+            rows.append({
+                "workspace": workspace,
+                "role": workspaces.role_in(store, workspace.id, email, unauthenticated=anon),
+                "members": store.list_members(workspace.id),
+                "counts": workspaces.content_counts(store, workspace.id),
+            })
+        return render_template("workspaces.html", rows=rows, current=_workspace())
+
+    @app.route("/workspaces", methods=["POST"])
+    def create_workspace():
+        email, name, _anon = _identity()
+        workspace = workspaces.create(get_store(), request.form.get("name", ""), email,
+                                      display_name=name)
+        session[_WORKSPACE_KEY] = workspace.id
+        flash(f"Created workspace {workspace.name} — you are its owner.", "success")
+        return redirect(url_for("workspaces_page"))
+
+    @app.route("/workspaces/switch", methods=["POST"])
+    def switch_workspace_form():
+        """The header selector. A plain form post, so it works without JS."""
+        return switch_workspace(request.form.get("workspace_id", ""))
+
+    @app.route("/workspaces/<workspace_id>/switch", methods=["POST"])
+    def switch_workspace(workspace_id):
+        if not any(w.id == workspace_id for w in _my_workspaces()):
+            abort(404)
+        session[_WORKSPACE_KEY] = workspace_id
+        # Through _safe_next: the destination comes from a form field, so it must
+        # not be able to bounce anyone off-site — and it needs the reverse-proxy
+        # prefix added, for the same reason the post-login redirect does.
+        return redirect(sso._safe_next(request.form.get("next")))
+
+    @app.route("/workspaces/<workspace_id>/rename", methods=["POST"])
+    def rename_workspace(workspace_id):
+        _require_owner(workspace_id)
+        store = get_store()
+        workspace = store.get_workspace(workspace_id)
+        if not workspace:
+            abort(404)
+        workspace.name = (request.form.get("name", "") or "").strip() or workspace.name
+        store.upsert_workspace(workspace)
+        flash("Workspace renamed.", "success")
+        return redirect(url_for("workspaces_page"))
+
+    @app.route("/workspaces/<workspace_id>/members", methods=["POST"])
+    def add_workspace_member(workspace_id):
+        _require_owner(workspace_id)
+        store = get_store()
+        email = workspaces.normalize(request.form.get("email", ""))
+        if "@" not in email:
+            flash("That does not look like an email address.", "error")
+            return redirect(url_for("workspaces_page"))
+        role = (WorkspaceRole.owner if request.form.get("role") == "owner"
+                else WorkspaceRole.member)
+        store.add_member(WorkspaceMember(workspace_id=workspace_id, email=email, role=role))
+        # Being a member is not the same as being allowed to sign in: the SSO
+        # allowlist is a separate gate, and adding someone here does not open it.
+        note = ("" if settings.auth.allows(email)
+                else " They are NOT on the sign-in allowlist yet, so they cannot log in — "
+                     "add them to AUTH_ALLOWED_EMAILS/AUTH_ALLOWED_DOMAINS.")
+        flash(f"Added {email} as {role.value}.{note}", "success" if not note else "error")
+        return redirect(url_for("workspaces_page"))
+
+    @app.route("/workspaces/<workspace_id>/members/remove", methods=["POST"])
+    def remove_workspace_member(workspace_id):
+        _require_owner(workspace_id)
+        store = get_store()
+        email = workspaces.normalize(request.form.get("email", ""))
+        remaining = [m for m in workspaces.owners(store, workspace_id) if m.email != email]
+        if not remaining:
+            # A workspace with no owner cannot have its membership changed ever
+            # again — nobody would be able to add one back.
+            flash("That is the last owner. Make someone else an owner first.", "error")
+            return redirect(url_for("workspaces_page"))
+        store.remove_member(workspace_id, email)
+        flash(f"Removed {email}.", "success")
+        return redirect(url_for("workspaces_page"))
+
+    @app.route("/workspaces/<workspace_id>/delete", methods=["POST"])
+    def delete_workspace(workspace_id):
+        _require_owner(workspace_id)
+        store = get_store()
+        counts = workspaces.content_counts(store, workspace_id)
+        if any(counts.values()):
+            # Content is never cascaded: deleting instructions and runs by
+            # accident is unrecoverable, and the accounts still hold live tokens.
+            flash(f"That workspace still holds {counts['accounts']} account(s), "
+                  f"{counts['instructions']} instruction(s) and {counts['runs']} run(s). "
+                  f"Remove them first.", "error")
+            return redirect(url_for("workspaces_page"))
+        store.delete_workspace(workspace_id)
+        session.pop(_WORKSPACE_KEY, None)
+        flash("Workspace deleted.", "success")
+        return redirect(url_for("workspaces_page"))
+
     # ---- overview -------------------------------------------------------- #
     @app.route("/")
     def index():
         store = get_store()
         return render_template(
             "index.html",
-            accounts=store.list_accounts(),
-            instructions=store.list_instructions(),
-            pending=store.list_staged(pending_only=True),
+            accounts=store.list_accounts(workspace_id=_workspace_id()),
+            instructions=store.list_instructions(workspace_id=_workspace_id()),
+            pending=store.list_staged(pending_only=True, workspace_id=_workspace_id()),
             settings=settings,
             scheduler_running=scheduler.get_scheduler().running,
         )
@@ -116,7 +327,7 @@ def create_app() -> Flask:
     @app.route("/accounts")
     def accounts():
         store = get_store()
-        rows = store.list_accounts()
+        rows = store.list_accounts(workspace_id=_workspace_id())
         # An expired token is the difference between "publishes fine" and "401 on
         # everything tomorrow morning", so say it in words and say whether it can
         # renew itself. The refresh token is only tested for presence, never shown.
@@ -140,9 +351,7 @@ def create_app() -> Flask:
         This asks Graph directly.
         """
         store = get_store()
-        account = store.get_account(account_id)
-        if not account:
-            abort(404)
+        account = _owned(store.get_account(account_id))
         platform = get_platform(account.platform,
                                 platform_apps.resolve_creds(account.platform, store,
                                                             (account.meta or {}).get("app_id", "")))
@@ -198,6 +407,9 @@ def create_app() -> Flask:
             name = PlatformName(platform)
         except ValueError:
             abort(404)
+        # Connecting spends a real OAuth grant and adds a publishable account,
+        # so it is an owner action, not a member one.
+        _require_owner()
         app_id = request.args.get("app", "")
         creds = platform_apps.resolve_creds(name, get_store(), app_id)
         integ = get_platform(name, creds)
@@ -205,6 +417,10 @@ def create_app() -> Flask:
             flash(f"No credentials for {platform} yet — add an app first.", "error")
             return redirect(url_for("platform_apps_page", platform=platform))
         state = oauth.random_state()
+        # Remember which workspace the connect was started from: the callback
+        # arrives later, and an account must never land somewhere the operator
+        # was not looking when they clicked Connect.
+        session[f"oauth_ws_{platform}"] = _new_workspace_id()
         session[f"oauth_state_{platform}"] = state
         # Remember which app authorised this, so the callback exchanges the code
         # with the SAME credentials and the account records its origin.
@@ -231,6 +447,7 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
         code = request.args.get("code", "")
         app_id = session.pop(f"oauth_app_{platform}", "")
+        connect_workspace = session.pop(f"oauth_ws_{platform}", "") or _new_workspace_id()
         integ = get_platform(name, platform_apps.resolve_creds(name, get_store(), app_id))
         verifier = session.get(f"oauth_verifier_{platform}")
         try:
@@ -259,7 +476,8 @@ def create_app() -> Flask:
             access = meta.pop("access_token", token.access_token)
             refresh = meta.pop("refresh_token", token.refresh_token)
             acct = Account(platform=name, handle=identity.handle,
-                           external_id=identity.external_id, expires_at=expires_at)
+                           external_id=identity.external_id, expires_at=expires_at,
+                           workspace_id=connect_workspace)
             acct.set_meta(meta)
             store.upsert_account(acct, access_token=access, refresh_token=refresh)
             connected.append((acct, identity.handle or identity.external_id))
@@ -272,12 +490,16 @@ def create_app() -> Flask:
         flash(f"Connected {platform}: {names}"
               + (f" ({len(connected)} accounts from one login)" if len(connected) > 1 else ""),
               "success")
-        _warn_about_collateral_damage(store, [a for a, _ in connected], integ)
+        _warn_about_collateral_damage(store, [a for a, _ in connected], integ,
+                                      workspace_id=connect_workspace)
         return redirect(url_for("accounts"))
 
     @app.route("/accounts/<account_id>/delete", methods=["POST"])
     def delete_account(account_id):
-        get_store().delete_account(account_id)
+        store = get_store()
+        _owned(store.get_account(account_id))
+        _require_owner()
+        store.delete_account(account_id)
         flash("Account disconnected.", "success")
         return redirect(url_for("accounts"))
 
@@ -343,7 +565,7 @@ def create_app() -> Flask:
     @app.route("/instructions")
     def instructions():
         store = get_store()
-        instrs = store.list_instructions()
+        instrs = store.list_instructions(workspace_id=_workspace_id())
         next_runs = {i.id: _next_run_info(i, store) for i in instrs}
         return render_template("instructions.html", instructions=instrs, next_runs=next_runs)
 
@@ -351,21 +573,21 @@ def create_app() -> Flask:
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
                                files=[], purposes=list(AttachmentPurpose),
-                               accounts=get_store().list_accounts(), settings=settings,
+                               accounts=get_store().list_accounts(workspace_id=_workspace_id()),
+                               settings=settings,
                                tool_groups=_tool_catalog([]),
                                modes=list(PublishMode), media_prefs=list(MediaPref))
 
     @app.route("/instructions/<instruction_id>/edit")
     def edit_instruction(instruction_id):
         store = get_store()
-        instr = store.get_instruction(instruction_id)
-        if not instr:
-            abort(404)
+        instr = _owned(store.get_instruction(instruction_id))
         return render_template("instruction_form.html", instruction=instr,
                                state=store.get_state(instruction_id),
                                files=store.list_instruction_files(instruction_id),
                                purposes=list(AttachmentPurpose),
-                               accounts=store.list_accounts(), settings=settings,
+                               accounts=store.list_accounts(workspace_id=_workspace_id()),
+                               settings=settings,
                                schedule_readback=describe_schedule(
                                    instr.schedule, starts_at=instr.schedule_start_at),
                                next_run=_next_run_info(instr, store),
@@ -377,9 +599,10 @@ def create_app() -> Flask:
         store = get_store()
         f = request.form
         instr_id = f.get("id") or None
-        instr = store.get_instruction(instr_id) if instr_id else None
+        instr = _owned(store.get_instruction(instr_id)) if instr_id else None
         if instr is None:
-            instr = Instruction(name=f.get("name", "Untitled"))
+            instr = Instruction(name=f.get("name", "Untitled"),
+                                workspace_id=_new_workspace_id())
         instr.name = f.get("name", "Untitled").strip() or "Untitled"
         instr.brief = f.get("brief", "").strip()
         instr.schedule = f.get("schedule", "").strip()
@@ -388,7 +611,8 @@ def create_app() -> Flask:
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
-        instr.set_account_ids(request.form.getlist("account_ids"))
+        mine = {a.id for a in store.list_accounts(workspace_id=_workspace_id())}
+        instr.set_account_ids([a for a in request.form.getlist("account_ids") if a in mine])
         # Only touch the selection when the picker was actually on the form, so a
         # POST that predates it (or omits it) leaves the stored choice alone
         # rather than resetting the instruction to every tool.
@@ -406,13 +630,16 @@ def create_app() -> Flask:
 
     @app.route("/instructions/<instruction_id>/delete", methods=["POST"])
     def delete_instruction(instruction_id):
-        get_store().delete_instruction(instruction_id)
+        store = get_store()
+        _owned(store.get_instruction(instruction_id))
+        store.delete_instruction(instruction_id)
         _refresh_scheduler()
         flash("Instruction deleted.", "success")
         return redirect(url_for("instructions"))
 
     @app.route("/instructions/<instruction_id>/run", methods=["POST"])
     def run_instruction_now(instruction_id):
+        _owned(get_store().get_instruction(instruction_id))
         # Named and logged: this thread is not the scheduler's, so when the worker
         # restarts mid-run it dies silently. The lock it holds is heartbeated, so a
         # death now frees the instruction within one lock TTL instead of blocking
@@ -442,9 +669,7 @@ def create_app() -> Flask:
         instead of restarting at the base duration.
         """
         store = get_store()
-        instruction = store.get_instruction(instruction_id)
-        if not instruction:
-            abort(404)
+        instruction = _owned(store.get_instruction(instruction_id))
 
         lifted = []
         for account_id in instruction.account_ids:
@@ -467,8 +692,7 @@ def create_app() -> Flask:
     @app.route("/instructions/<instruction_id>/files", methods=["POST"])
     def upload_instruction_file(instruction_id):
         store = get_store()
-        if not store.get_instruction(instruction_id):
-            abort(404)
+        _owned(store.get_instruction(instruction_id))
         upload = request.files.get("file")
         if not upload or not upload.filename:
             flash("Choose a file to upload.", "error")
@@ -502,6 +726,8 @@ def create_app() -> Flask:
     def delete_instruction_file(file_id):
         store = get_store()
         record = store.get_instruction_file(file_id)
+        if record:
+            _owned(store.get_instruction(record.instruction_id))
         store.delete_instruction_file(file_id)
         flash("Attachment removed.", "success")
         return redirect(url_for("edit_instruction",
@@ -543,7 +769,8 @@ def create_app() -> Flask:
                 status_filter = None
 
         filters = {"status": status_filter, "instruction_id": instruction_id or None,
-                   "account_id": account_id or None, "search": search}
+                   "account_id": account_id or None, "search": search,
+                   "workspace_id": _workspace_id()}
         total = store.count_runs(**filters)
         pages = max((total + per_page - 1) // per_page, 1)
         page = min(page, pages)
@@ -565,11 +792,11 @@ def create_app() -> Flask:
         return render_template(
             "runs.html",
             runs=rows,
-            pending=store.list_staged(pending_only=True),
-            accounts={a.id: a for a in store.list_accounts()},
-            instructions={i.id: i for i in store.list_instructions()},
-            all_instructions=store.list_instructions(),
-            all_accounts=store.list_accounts(),
+            pending=store.list_staged(pending_only=True, workspace_id=_workspace_id()),
+            accounts={a.id: a for a in store.list_accounts(workspace_id=_workspace_id())},
+            instructions={i.id: i for i in store.list_instructions(workspace_id=_workspace_id())},
+            all_instructions=store.list_instructions(workspace_id=_workspace_id()),
+            all_accounts=store.list_accounts(workspace_id=_workspace_id()),
             statuses=list(RunStatus),
             sorts=RUN_SORTS,
             per_page_choices=PER_PAGE_CHOICES,
@@ -581,10 +808,9 @@ def create_app() -> Flask:
     @app.route("/runs/<run_id>")
     def run_detail(run_id):
         store = get_store()
-        run = store.get_run(run_id)
-        if not run:
-            abort(404)
-        staged = [s for s in store.list_staged(limit=500) if s.run_id == run.id]
+        run = _owned(store.get_run(run_id))
+        staged = [s for s in store.list_staged(limit=500, workspace_id=_workspace_id())
+                  if s.run_id == run.id]
         instruction = store.get_instruction(run.instruction_id)
         return render_template(
             "run_detail.html",
@@ -609,8 +835,7 @@ def create_app() -> Flask:
         content than the one already reviewed.
         """
         store = get_store()
-        if not store.get_run(run_id):
-            abort(404)
+        _owned(store.get_run(run_id))
         caption = request.form.get("caption", "")
 
         def _republish():
@@ -630,9 +855,7 @@ def create_app() -> Flask:
     @app.route("/runs/<run_id>/retry", methods=["POST"])
     def retry_run(run_id):
         store = get_store()
-        run = store.get_run(run_id)
-        if not run:
-            abort(404)
+        run = _owned(store.get_run(run_id))
         prompt = request.form.get("prompt", "")
 
         def _retry():
@@ -650,12 +873,14 @@ def create_app() -> Flask:
 
     @app.route("/staged/<staged_id>/approve", methods=["POST"])
     def approve(staged_id):
+        _owned(get_store().get_staged(staged_id))
         res = orchestrator.approve_staged(staged_id)
         flash(f"Approve: {res}", "success" if res.get("status") == "published" else "error")
         return redirect(url_for("runs"))
 
     @app.route("/staged/<staged_id>/reject", methods=["POST"])
     def reject(staged_id):
+        _owned(get_store().get_staged(staged_id))
         orchestrator.reject_staged(staged_id)
         flash("Post rejected.", "success")
         return redirect(url_for("runs"))
@@ -762,7 +987,8 @@ def _tool_catalog(selected: list[str]) -> list[dict]:
     return grouped
 
 
-def _warn_about_collateral_damage(store, just_connected, platform) -> None:
+def _warn_about_collateral_damage(store, just_connected, platform,
+                                  workspace_id: str | None = None) -> None:
     """Did connecting THIS account break the ones already connected?
 
     One Meta app + one Facebook user = ONE grant. Authorising again replaces it
@@ -786,7 +1012,7 @@ def _warn_about_collateral_damage(store, just_connected, platform) -> None:
     platform_name = fresh[0].platform
 
     broken = []
-    for other in store.list_accounts():
+    for other in store.list_accounts(workspace_id=workspace_id):
         if other.platform is not platform_name or other.id in fresh_ids:
             continue
         try:

@@ -19,7 +19,7 @@ from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
     Account, Instruction, InstructionFile, InstructionState, Lock, PlatformApp, Run,
-    StagedPost, StagedStatus,
+    StagedPost, StagedStatus, Workspace, WorkspaceMember,
 )
 from .base import Store
 
@@ -29,6 +29,19 @@ logger = logging.getLogger("aismm.store.local")
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ws_clause(column, workspace_id):
+    """A filter for ``workspace_id``, which may be one id or several.
+
+    Several is how the default workspace also claims rows that carry no
+    workspace at all: anything written before workspaces existed, or by a code
+    path that forgot to set one. Matching them at READ time keeps the migration
+    self-healing without a table scan on every request — and, unlike scanning,
+    it cannot lose data by being skipped.
+    """
+    ids = [workspace_id] if isinstance(workspace_id, str) else list(workspace_id)
+    return column.in_(ids) if len(ids) != 1 else column == ids[0]
 
 
 class LocalStore(Store):
@@ -97,9 +110,12 @@ class LocalStore(Store):
         with Session(self._engine) as s:
             return s.get(Account, account_id)
 
-    def list_accounts(self):
+    def list_accounts(self, *, workspace_id=None):
         with Session(self._engine) as s:
-            return list(s.exec(select(Account).order_by(Account.created_at)).all())
+            stmt = select(Account)
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(Account.workspace_id, workspace_id))
+            return list(s.exec(stmt.order_by(Account.created_at)).all())
 
     def delete_account(self, account_id):
         with Session(self._engine) as s:
@@ -162,9 +178,11 @@ class LocalStore(Store):
         with Session(self._engine) as s:
             return s.get(Instruction, instruction_id)
 
-    def list_instructions(self, *, enabled_only=False):
+    def list_instructions(self, *, enabled_only=False, workspace_id=None):
         with Session(self._engine) as s:
             stmt = select(Instruction)
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(Instruction.workspace_id, workspace_id))
             if enabled_only:
                 stmt = stmt.where(Instruction.enabled == True)  # noqa: E712
             return list(s.exec(stmt.order_by(Instruction.created_at)).all())
@@ -260,8 +278,11 @@ class LocalStore(Store):
     _RUN_SORTS = {"created_at": Run.created_at, "status": Run.status,
                   "instruction_id": Run.instruction_id, "account_id": Run.account_id}
 
-    def _run_filters(self, session, *, status, instruction_id, account_id, search):
+    def _run_filters(self, session, *, status, instruction_id, account_id, search,
+                     workspace_id=None):
         clauses = []
+        if workspace_id is not None:
+            clauses.append(_ws_clause(Run.workspace_id, workspace_id))
         if status:
             clauses.append(Run.status == status)
         if instruction_id:
@@ -283,12 +304,13 @@ class LocalStore(Store):
         return clauses
 
     def list_runs(self, *, limit=100, offset=0, status=None, instruction_id=None,
-                  account_id=None, search="", sort="created_at", descending=True):
+                  account_id=None, workspace_id=None, search="", sort="created_at",
+                  descending=True):
         with Session(self._engine) as s:
             column = self._RUN_SORTS.get(sort, Run.created_at)
             stmt = select(Run).where(*self._run_filters(
                 s, status=status, instruction_id=instruction_id,
-                account_id=account_id, search=search))
+                account_id=account_id, workspace_id=workspace_id, search=search))
             stmt = stmt.order_by(column.desc() if descending else column.asc())
             # A stable tiebreaker keeps paging consistent when sorting by a
             # column with many equal values (status, instruction).
@@ -296,11 +318,12 @@ class LocalStore(Store):
                 stmt = stmt.order_by(Run.created_at.desc())
             return list(s.exec(stmt.offset(offset).limit(limit)).all())
 
-    def count_runs(self, *, status=None, instruction_id=None, account_id=None, search=""):
+    def count_runs(self, *, status=None, instruction_id=None, account_id=None,
+                   workspace_id=None, search=""):
         with Session(self._engine) as s:
             stmt = select(sa_func.count()).select_from(Run).where(*self._run_filters(
                 s, status=status, instruction_id=instruction_id,
-                account_id=account_id, search=search))
+                account_id=account_id, workspace_id=workspace_id, search=search))
             return int(s.exec(stmt).one())
 
     # --- staged posts ------------------------------------------------------ #
@@ -322,12 +345,85 @@ class LocalStore(Store):
             s.refresh(merged)
             return merged
 
-    def list_staged(self, *, pending_only=False, limit=100):
+    def list_staged(self, *, pending_only=False, limit=100, workspace_id=None):
         with Session(self._engine) as s:
             stmt = select(StagedPost)
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(StagedPost.workspace_id, workspace_id))
             if pending_only:
                 stmt = stmt.where(StagedPost.status == StagedStatus.pending_approval)
             return list(s.exec(stmt.order_by(StagedPost.created_at.desc()).limit(limit)).all())
+
+    # --- workspaces -------------------------------------------------------- #
+    def upsert_workspace(self, workspace):
+        with Session(self._engine) as s:
+            existing = s.get(Workspace, workspace.id)
+            if existing:
+                for field in ("name", "kind", "auto_join", "created_by"):
+                    setattr(existing, field, getattr(workspace, field))
+                s.add(existing)
+                s.commit()
+                s.refresh(existing)
+                return existing
+            s.add(workspace)
+            s.commit()
+            s.refresh(workspace)
+            return workspace
+
+    def get_workspace(self, workspace_id):
+        with Session(self._engine) as s:
+            return s.get(Workspace, workspace_id)
+
+    def list_workspaces(self):
+        with Session(self._engine) as s:
+            return list(s.exec(select(Workspace).order_by(Workspace.created_at)).all())
+
+    def delete_workspace(self, workspace_id):
+        with Session(self._engine) as s:
+            obj = s.get(Workspace, workspace_id)
+            if obj:
+                s.delete(obj)
+            s.exec(sa_delete(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id))
+            s.commit()
+
+    def add_member(self, member):
+        email = (member.email or "").strip().lower()
+        with Session(self._engine) as s:
+            existing = s.exec(select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == member.workspace_id,
+                WorkspaceMember.email == email)).first()
+            if existing:
+                existing.role = member.role
+                existing.display_name = member.display_name or existing.display_name
+                s.add(existing)
+                s.commit()
+                s.refresh(existing)
+                return existing
+            member.email = email
+            s.add(member)
+            s.commit()
+            s.refresh(member)
+            return member
+
+    def remove_member(self, workspace_id, email):
+        with Session(self._engine) as s:
+            s.exec(sa_delete(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id,
+                WorkspaceMember.email == (email or "").strip().lower()))
+            s.commit()
+
+    def list_members(self, workspace_id):
+        with Session(self._engine) as s:
+            return list(s.exec(select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace_id
+            ).order_by(WorkspaceMember.created_at)).all())
+
+    def list_memberships(self, email):
+        with Session(self._engine) as s:
+            return list(s.exec(select(WorkspaceMember).where(
+                WorkspaceMember.email == (email or "").strip().lower()
+            ).order_by(WorkspaceMember.created_at)).all())
 
     # --- single-flight locks ---------------------------------------------- #
     def acquire_lock(self, key, ttl_seconds=3600):

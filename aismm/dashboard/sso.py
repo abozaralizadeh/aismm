@@ -147,8 +147,20 @@ def current_user() -> dict | None:
 
 
 def _safe_next(target: str | None) -> str:
-    """Only allow same-app relative redirects (no open redirect)."""
+    """Where to land after a successful sign-in.
+
+    Only same-app relative redirects (no open redirect), and **prefixed with the
+    application root**. ``request.full_path`` is the path Flask sees *after* the
+    reverse-proxy prefix has been stripped, so storing it verbatim sent everyone
+    behind a prefix to ``/instructions`` instead of ``/aismm/instructions`` after
+    logging in. ``url_for`` adds the prefix on its own; a raw stored path does
+    not, which is exactly the difference that made the fallback work and the
+    remembered destination fail.
+    """
     if target and target.startswith("/") and not target.startswith("//"):
+        root = (request.script_root or "").rstrip("/")
+        if root and not (target == root or target.startswith(f"{root}/")):
+            return f"{root}{target}"
         return target
     return url_for("index")
 

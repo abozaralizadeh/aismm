@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 
 from ..models import (
     Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, StagedPost,
+    Workspace, WorkspaceMember,
 )
 
 
@@ -34,7 +35,8 @@ class Store(ABC):
     def get_account(self, account_id: str) -> Account | None: ...
 
     @abstractmethod
-    def list_accounts(self) -> list[Account]: ...
+    def list_accounts(self, *, workspace_id: str | None = None) -> list[Account]:
+        """Connected accounts, optionally only those in one workspace."""
 
     @abstractmethod
     def delete_account(self, account_id: str) -> None: ...
@@ -69,7 +71,8 @@ class Store(ABC):
     def get_instruction(self, instruction_id: str) -> Instruction | None: ...
 
     @abstractmethod
-    def list_instructions(self, *, enabled_only: bool = False) -> list[Instruction]: ...
+    def list_instructions(self, *, enabled_only: bool = False,
+                          workspace_id: str | None = None) -> list[Instruction]: ...
 
     @abstractmethod
     def delete_instruction(self, instruction_id: str) -> None: ...
@@ -119,6 +122,7 @@ class Store(ABC):
         status=None,
         instruction_id: str | None = None,
         account_id: str | None = None,
+        workspace_id: str | None = None,
         search: str = "",
         sort: str = "created_at",
         descending: bool = True,
@@ -132,7 +136,8 @@ class Store(ABC):
 
     @abstractmethod
     def count_runs(self, *, status=None, instruction_id: str | None = None,
-                   account_id: str | None = None, search: str = "") -> int:
+                   account_id: str | None = None, workspace_id: str | None = None,
+                   search: str = "") -> int:
         """How many runs match these filters (for pagination)."""
 
     # --- staged posts ------------------------------------------------------ #
@@ -146,7 +151,42 @@ class Store(ABC):
     def update_staged(self, staged: StagedPost) -> StagedPost: ...
 
     @abstractmethod
-    def list_staged(self, *, pending_only: bool = False, limit: int = 100) -> list[StagedPost]: ...
+    def list_staged(self, *, pending_only: bool = False, limit: int = 100,
+                    workspace_id: str | None = None) -> list[StagedPost]: ...
+
+    # --- workspaces -------------------------------------------------------- #
+    # A workspace owns accounts, instructions, runs and staged posts. Platform
+    # APP credentials are deliberately NOT scoped: they are deployment
+    # infrastructure (a Meta app, an X app), the tokens minted from them live on
+    # the Account, and .env credentials have always been global.
+    @abstractmethod
+    def upsert_workspace(self, workspace: Workspace) -> Workspace: ...
+
+    @abstractmethod
+    def get_workspace(self, workspace_id: str) -> Workspace | None: ...
+
+    @abstractmethod
+    def list_workspaces(self) -> list[Workspace]: ...
+
+    @abstractmethod
+    def delete_workspace(self, workspace_id: str) -> None:
+        """Remove a workspace and its memberships. Content is NOT cascaded —
+        the caller decides, because deleting instructions and runs by accident
+        is unrecoverable."""
+
+    @abstractmethod
+    def add_member(self, member: WorkspaceMember) -> WorkspaceMember:
+        """Add or update a membership (one row per email per workspace)."""
+
+    @abstractmethod
+    def remove_member(self, workspace_id: str, email: str) -> None: ...
+
+    @abstractmethod
+    def list_members(self, workspace_id: str) -> list[WorkspaceMember]: ...
+
+    @abstractmethod
+    def list_memberships(self, email: str) -> list[WorkspaceMember]:
+        """Every workspace this identity belongs to."""
 
     # --- single-flight locks ---------------------------------------------- #
     @abstractmethod

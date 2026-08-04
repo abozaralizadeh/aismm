@@ -42,6 +42,7 @@ from ..crypto import decrypt, encrypt
 from ..models import (
     Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, MediaPref,
     PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
+    Workspace, WorkspaceKind, WorkspaceMember, WorkspaceRole,
 )
 from .base import Store
 
@@ -55,6 +56,8 @@ PK_STATE = "state"
 PK_APP = "app"
 PK_FILE = "file"
 PK_LOCK = "lock"
+PK_WORKSPACE = "workspace"
+PK_MEMBER = "member"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
 MAX_PROPERTY_CHARS = 32_000
@@ -65,6 +68,17 @@ _DATETIME_FIELDS = {
 }
 # RowKey forbids / \ # ? and control chars — lock keys contain ':'.
 _ROWKEY_UNSAFE = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
+
+
+def _ws_match(value: str, workspace_id) -> bool:
+    """Does this row's workspace_id match the requested one (or ones)?
+
+    Several ids is how the default workspace also claims rows written before
+    workspaces existed — see LocalStore._ws_clause for the reasoning.
+    """
+    if isinstance(workspace_id, str):
+        return value == workspace_id
+    return value in set(workspace_id)
 
 
 def _now() -> datetime:
@@ -164,6 +178,7 @@ class AzureStore(Store):
     @staticmethod
     def _account_to_entity(a: Account) -> dict:
         return {
+            "workspace_id": a.workspace_id,
             "platform": a.platform.value, "handle": a.handle, "external_id": a.external_id,
             "access_token_enc": a.access_token_enc, "refresh_token_enc": a.refresh_token_enc,
             "expires_at": a.expires_at, "meta_json": a.meta_json, "created_at": a.created_at,
@@ -172,7 +187,8 @@ class AzureStore(Store):
     @staticmethod
     def _account_from_entity(e) -> Account:
         return Account(
-            id=e["RowKey"], platform=PlatformName(e["platform"]), handle=e.get("handle", ""),
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            platform=PlatformName(e["platform"]), handle=e.get("handle", ""),
             external_id=e.get("external_id", ""),
             access_token_enc=e.get("access_token_enc", ""),
             refresh_token_enc=e.get("refresh_token_enc", ""),
@@ -183,6 +199,7 @@ class AzureStore(Store):
     @staticmethod
     def _instruction_to_entity(i: Instruction) -> dict:
         return {
+            "workspace_id": i.workspace_id,
             "name": i.name, "brief": i.brief, "account_ids_json": i.account_ids_json,
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
             "tools_json": i.tools_json,
@@ -195,7 +212,8 @@ class AzureStore(Store):
     @staticmethod
     def _instruction_from_entity(e) -> Instruction:
         return Instruction(
-            id=e["RowKey"], name=e.get("name", ""), brief=e.get("brief", ""),
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            name=e.get("name", ""), brief=e.get("brief", ""),
             account_ids_json=e.get("account_ids_json", "[]"), schedule=e.get("schedule", ""),
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
             tools_json=e.get("tools_json", "[]"),
@@ -210,6 +228,7 @@ class AzureStore(Store):
     @staticmethod
     def _run_to_entity(r: Run) -> dict:
         return {
+            "workspace_id": r.workspace_id,
             "instruction_id": r.instruction_id, "account_id": r.account_id,
             "status": r.status.value, "caption": r.caption, "asset_path": r.asset_path,
             "asset_paths_json": r.asset_paths_json, "placement": r.placement,
@@ -220,7 +239,8 @@ class AzureStore(Store):
     @staticmethod
     def _run_from_entity(e) -> Run:
         return Run(
-            id=e["RowKey"], instruction_id=e.get("instruction_id", ""),
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            instruction_id=e.get("instruction_id", ""),
             account_id=e.get("account_id", ""), status=RunStatus(e.get("status", "running")),
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
             asset_paths_json=e.get("asset_paths_json", "[]"),
@@ -233,6 +253,7 @@ class AzureStore(Store):
     @staticmethod
     def _staged_to_entity(s: StagedPost) -> dict:
         return {
+            "workspace_id": s.workspace_id,
             "instruction_id": s.instruction_id, "account_id": s.account_id, "run_id": s.run_id,
             "caption": s.caption, "asset_path": s.asset_path, "media_kind": s.media_kind,
             "asset_paths_json": s.asset_paths_json, "placement": s.placement,
@@ -242,7 +263,8 @@ class AzureStore(Store):
     @staticmethod
     def _staged_from_entity(e) -> StagedPost:
         return StagedPost(
-            id=e["RowKey"], instruction_id=e.get("instruction_id", ""),
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            instruction_id=e.get("instruction_id", ""),
             account_id=e.get("account_id", ""), run_id=e.get("run_id", ""),
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
             media_kind=e.get("media_kind", "text"),
@@ -273,8 +295,10 @@ class AzureStore(Store):
         entity = self._get(PK_ACCOUNT, account_id)
         return self._account_from_entity(entity) if entity else None
 
-    def list_accounts(self):
+    def list_accounts(self, *, workspace_id=None):
         accounts = [self._account_from_entity(e) for e in self._query(PK_ACCOUNT)]
+        if workspace_id is not None:
+            accounts = [a for a in accounts if _ws_match(a.workspace_id, workspace_id)]
         return sorted(accounts, key=lambda a: a.created_at)
 
     def delete_account(self, account_id):
@@ -337,8 +361,10 @@ class AzureStore(Store):
         entity = self._get(PK_INSTRUCTION, instruction_id)
         return self._instruction_from_entity(entity) if entity else None
 
-    def list_instructions(self, *, enabled_only=False):
+    def list_instructions(self, *, enabled_only=False, workspace_id=None):
         items = [self._instruction_from_entity(e) for e in self._query(PK_INSTRUCTION)]
+        if workspace_id is not None:
+            items = [i for i in items if _ws_match(i.workspace_id, workspace_id)]
         if enabled_only:
             items = [i for i in items if i.enabled]
         return sorted(items, key=lambda i: i.created_at)
@@ -431,12 +457,15 @@ class AzureStore(Store):
         entity = self._get(PK_RUN, run_id)
         return self._run_from_entity(entity) if entity else None
 
-    def _matching_runs(self, *, status, instruction_id, account_id, search):
+    def _matching_runs(self, *, status, instruction_id, account_id, search,
+                       workspace_id=None):
         """Filter in Python — Table Storage has no LIKE and no server-side sort."""
         runs = [self._run_from_entity(e) for e in self._query(PK_RUN)]
         if status:
             wanted = status.value if hasattr(status, "value") else str(status)
             runs = [r for r in runs if r.status.value == wanted]
+        if workspace_id is not None:
+            runs = [r for r in runs if _ws_match(r.workspace_id, workspace_id)]
         if instruction_id:
             runs = [r for r in runs if r.instruction_id == instruction_id]
         if account_id:
@@ -454,9 +483,11 @@ class AzureStore(Store):
         return runs
 
     def list_runs(self, *, limit=100, offset=0, status=None, instruction_id=None,
-                  account_id=None, search="", sort="created_at", descending=True):
+                  account_id=None, workspace_id=None, search="", sort="created_at",
+                  descending=True):
         runs = self._matching_runs(status=status, instruction_id=instruction_id,
-                                   account_id=account_id, search=search)
+                                   account_id=account_id, workspace_id=workspace_id,
+                                   search=search)
         keys = {
             "created_at": lambda r: r.created_at,
             "status": lambda r: r.status.value,
@@ -466,9 +497,11 @@ class AzureStore(Store):
         runs.sort(key=keys.get(sort, keys["created_at"]), reverse=descending)
         return runs[offset:offset + limit]
 
-    def count_runs(self, *, status=None, instruction_id=None, account_id=None, search=""):
+    def count_runs(self, *, status=None, instruction_id=None, account_id=None,
+                   workspace_id=None, search=""):
         return len(self._matching_runs(status=status, instruction_id=instruction_id,
-                                       account_id=account_id, search=search))
+                                       account_id=account_id, workspace_id=workspace_id,
+                                       search=search))
 
     # --- staged posts ------------------------------------------------------ #
     def add_staged(self, staged):
@@ -483,12 +516,87 @@ class AzureStore(Store):
         self._upsert(PK_STAGED, staged.id, self._staged_to_entity(staged))
         return staged
 
-    def list_staged(self, *, pending_only=False, limit=100):
+    def list_staged(self, *, pending_only=False, limit=100, workspace_id=None):
         items = [self._staged_from_entity(e) for e in self._query(PK_STAGED)]
+        if workspace_id is not None:
+            items = [s for s in items if _ws_match(s.workspace_id, workspace_id)]
         if pending_only:
             items = [s for s in items if s.status == StagedStatus.pending_approval]
         items.sort(key=lambda s: s.created_at, reverse=True)
         return items[:limit]
+
+    # --- workspaces -------------------------------------------------------- #
+    def upsert_workspace(self, workspace):
+        self._upsert(PK_WORKSPACE, workspace.id, {
+            "name": workspace.name, "kind": workspace.kind.value,
+            "auto_join": workspace.auto_join, "created_by": workspace.created_by,
+            "created_at": workspace.created_at,
+        })
+        return workspace
+
+    @staticmethod
+    def _workspace_from_entity(e) -> Workspace:
+        return Workspace(
+            id=e["RowKey"], name=e.get("name", ""),
+            kind=WorkspaceKind(e.get("kind", "shared")),
+            auto_join=bool(e.get("auto_join", False)),
+            created_by=e.get("created_by", ""),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def get_workspace(self, workspace_id):
+        entity = self._get(PK_WORKSPACE, workspace_id)
+        return self._workspace_from_entity(entity) if entity else None
+
+    def list_workspaces(self):
+        rows = [self._workspace_from_entity(e) for e in self._query(PK_WORKSPACE)]
+        return sorted(rows, key=lambda w: w.created_at)
+
+    def delete_workspace(self, workspace_id):
+        self._delete(PK_WORKSPACE, workspace_id)
+        for member in self.list_members(workspace_id):
+            self._delete(PK_MEMBER, member.id)
+
+    @staticmethod
+    def _member_from_entity(e) -> WorkspaceMember:
+        return WorkspaceMember(
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            email=e.get("email", ""), role=WorkspaceRole(e.get("role", "member")),
+            display_name=e.get("display_name", ""),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def add_member(self, member):
+        member.email = (member.email or "").strip().lower()
+        existing = next((m for m in self.list_members(member.workspace_id)
+                         if m.email == member.email), None)
+        if existing:
+            member.id = existing.id
+            member.created_at = existing.created_at
+            member.display_name = member.display_name or existing.display_name
+        self._upsert(PK_MEMBER, member.id, {
+            "workspace_id": member.workspace_id, "email": member.email,
+            "role": member.role.value, "display_name": member.display_name,
+            "created_at": member.created_at,
+        })
+        return member
+
+    def remove_member(self, workspace_id, email):
+        email = (email or "").strip().lower()
+        for member in self.list_members(workspace_id):
+            if member.email == email:
+                self._delete(PK_MEMBER, member.id)
+
+    def list_members(self, workspace_id):
+        rows = [self._member_from_entity(e) for e in self._query(PK_MEMBER)]
+        rows = [m for m in rows if m.workspace_id == workspace_id]
+        return sorted(rows, key=lambda m: m.created_at)
+
+    def list_memberships(self, email):
+        email = (email or "").strip().lower()
+        rows = [self._member_from_entity(e) for e in self._query(PK_MEMBER)]
+        rows = [m for m in rows if m.email == email]
+        return sorted(rows, key=lambda m: m.created_at)
 
     # --- single-flight locks ---------------------------------------------- #
     def acquire_lock(self, key: str, ttl_seconds: int = 3600) -> bool:

@@ -164,6 +164,7 @@ def republish_run(run_id: str, caption: str = "") -> dict:
                             f"cooldown for {cooldown.describe(account)}. Clear it or wait.")}
 
     run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                            workspace_id=instruction.workspace_id,
                             status=RunStatus.running,
                             prompt=f"(republish of run {run_id[:8]} — no agent involved)"))
     log_token = logging_setup.current_run_id.set(run.id[:8])
@@ -237,6 +238,7 @@ def _run_one(instruction: Instruction, account: Account, store,
         return {"account_id": account.id, "status": "skipped", "reason": "locked"}
 
     run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                            workspace_id=instruction.workspace_id,
                             status=RunStatus.running))
     started = time.monotonic()
     # Tag every log line this run produces. Concurrent runs (a dashboard "Run now"

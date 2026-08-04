@@ -78,11 +78,59 @@ class StagedStatus(str, enum.Enum):
     published = "published"
 
 
+class WorkspaceKind(str, enum.Enum):
+    personal = "personal"   # one user's own; created for them on first sign-in
+    shared = "shared"       # several members
+
+
+class WorkspaceRole(str, enum.Enum):
+    owner = "owner"     # + manage membership, connect accounts, delete the workspace
+    member = "member"   # author instructions, run them, approve posts
+
+
 # --------------------------------------------------------------------------- #
 # Tables
 # --------------------------------------------------------------------------- #
+class Workspace(SQLModel, table=True):
+    """A silo: its own social accounts, instructions, runs and app credentials.
+
+    Nothing is visible across workspaces, which is what makes a *personal* one
+    actually personal — partitioning instructions alone would still let every
+    member publish to every connected account.
+
+    ``auto_join`` belongs to the migration workspace only: an allowlist can be a
+    *domain*, so the members of "everyone who may sign in" cannot be enumerated
+    up front. Instead the first sign-in adds the user. Without it, upgrading an
+    existing deployment would show every colleague an empty dashboard.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    name: str = ""
+    kind: WorkspaceKind = WorkspaceKind.shared
+    auto_join: bool = False
+    created_by: str = ""                     # the identity that created it
+    created_at: datetime = Field(default_factory=_now)
+
+
+class WorkspaceMember(SQLModel, table=True):
+    """One identity's membership of one workspace.
+
+    Keyed by the email the identity provider returns, lowercased — there is no
+    local user table, because there are no local accounts to keep: identity comes
+    from SSO, and with SSO off the dashboard is unauthenticated anyway.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(index=True)
+    email: str = Field(index=True)
+    role: WorkspaceRole = WorkspaceRole.member
+    display_name: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
 class Account(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)
     platform: PlatformName
     handle: str = ""                         # @name / channel title (display only)
     external_id: str = ""                    # platform user/page/channel id
@@ -106,6 +154,7 @@ class Account(SQLModel, table=True):
 
 class Instruction(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)
     name: str
     brief: str = ""                          # the persona / directive / theme text
     account_ids_json: str = "[]"             # selected accounts (multi-select)
@@ -153,6 +202,7 @@ class Instruction(SQLModel, table=True):
 
 class Run(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)
     instruction_id: str = Field(index=True)
     account_id: str = Field(index=True)
     status: RunStatus = RunStatus.running
@@ -187,6 +237,7 @@ class Run(SQLModel, table=True):
 
 class StagedPost(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)
     instruction_id: str = Field(index=True)
     account_id: str = Field(index=True)
     run_id: str = ""

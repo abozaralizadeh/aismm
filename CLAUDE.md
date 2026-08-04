@@ -146,6 +146,22 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   arbitrary columns), search covers caption/error/log/url plus the instruction *name*, and
   LocalStore does it in SQL while AzureStore does it in Python (Table Storage can't). Fetch one run
   with `get_run`, not by scanning a list.
+- **Workspaces scope accounts, instructions, runs and staged posts** ([workspaces.py](aismm/workspaces.py)).
+  A workspace is a SILO, not just an instruction folder — scoping instructions alone would still let
+  every member publish to every connected account, so a "personal" workspace would not be personal.
+  Identity is the SSO email (lowercased); there is no user table. **With SSO off the dashboard is
+  already unauthenticated**, so one implicit local operator (`LOCAL_USER`) owns everything rather
+  than a fictional user guarding nothing — that is the `unauthenticated=True` branch, not a bug.
+  Rows written before workspaces existed carry `workspace_id=""` and the default workspace claims
+  them **at read time**: the store's workspace filter takes a str OR a list, and the dashboard passes
+  `[default_id, ""]` for the auto-join workspace. That beats a boot-time rewrite because a migration
+  that is skipped, interrupted, or run against an unbounded runs table cannot lose anything this way
+  (`adopt_orphans` still exists as an opt-in tidy-up, via `cli workspaces --adopt`). In the dashboard
+  every scoped read goes through `_workspace_id()` and every by-id fetch through `_owned()` (404, not
+  403 — whether an id exists elsewhere is not the caller's business); a route that forgets either one
+  leaks another workspace's data. `_new_workspace_id()` is the single-id variant for rows being
+  CREATED. Platform *apps* are deliberately NOT scoped: they are deployment infrastructure, and the
+  sensitive half (the token) lives on the scoped `Account`.
 - **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Two
   implementations: `LocalStore` (SQLite) and `AzureStore` (Table storage), chosen by
   `settings.use_azure_store`. Never read/write the DB directly from routes/agent code — call the
@@ -179,6 +195,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/store/](aismm/store/) | base + local_store (SQLite) + azure_store (Table) + blob_media (Blob) |
 | [aismm/dashboard/app.py](aismm/dashboard/app.py) | Flask control center (accounts, instructions, runs, OAuth callbacks, `/assets`) |
 | [aismm/dashboard/sso.py](aismm/dashboard/sso.py) | generic OIDC sign-in guard + `/login`, `/auth/callback`, `/logout` |
+| [aismm/workspaces.py](aismm/workspaces.py) | workspace membership, roles, and the read-time migration |
 | [aismm/agent/memory.py](aismm/agent/memory.py) | post-run summarizer for an oversized carry-over memory |
 | [aismm/agent/vision.py](aismm/agent/vision.py) | small vision agent behind the `describe_image` tool |
 | [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
@@ -547,7 +564,9 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   endpoints come from the issuer's discovery doc), enabled as soon as `AUTH_OIDC_*` is set. A
   `before_request` guard blocks every endpoint except `sso.PUBLIC_ENDPOINTS`. **Keep `asset` in that
   set** — Instagram fetches media server-side with no cookie, so guarding `/assets` breaks
-  publishing. Authentication alone grants nothing: `AuthSettings.allows()` fails **closed** when the
+  publishing. The post-login redirect must go through `_safe_next`, which **prefixes
+  `request.script_root`**: Flask strips the reverse-proxy prefix before routing, so a remembered
+  `request.full_path` sends everyone behind `/aismm` to `/instructions` after signing in. Authentication alone grants nothing: `AuthSettings.allows()` fails **closed** when the
   allowlist is empty. ID token signatures are intentionally unverified (back-channel TLS fetch, OIDC
   Core §3.1.3.7) — iss/aud/exp/nonce are checked; don't move ID tokens to the front channel without
   adding JWKS verification.

@@ -199,7 +199,7 @@ def test_callback_reports_provider_error(auth_app):
     assert resp.status_code == 403
 
 
-def _login(client, monkeypatch, email, name="Test User"):
+def _login(client, monkeypatch, email, name="Test User", path="/auth/callback"):
     """Drive /login then /auth/callback with a stubbed token endpoint."""
     with client.session_transaction() as sess:
         sess[sso._STATE_KEY] = "st"
@@ -227,7 +227,7 @@ def _login(client, monkeypatch, email, name="Test User"):
             return _Resp()
 
     monkeypatch.setattr(sso.httpx, "Client", _Client)
-    return client.get("/auth/callback?code=abc&state=st")
+    return client.get(f"{path}?code=abc&state=st")
 
 
 def test_allowed_identity_gets_a_session(auth_app, monkeypatch):
@@ -265,3 +265,120 @@ def test_login_redirect_target_cannot_leave_the_app(auth_app, monkeypatch):
         sess[sso._NEXT_KEY] = "//evil.example.com/steal"
     resp = _login(client, monkeypatch, "me@example.com")
     assert "evil.example.com" not in resp.headers["Location"]
+
+
+# --- behind a reverse-proxy prefix --------------------------------------------- #
+# The dashboard is commonly mounted at /aismm. Flask strips SCRIPT_NAME before
+# routing, so `request.full_path` is the UNPREFIXED path — remembering it
+# verbatim sent every sign-in to /instructions instead of /aismm/instructions.
+
+@pytest.fixture()
+def prefixed_app(monkeypatch, tmp_path):
+    def build(prefix="/aismm"):
+        auth = AuthSettings(issuer=ISSUER, client_id=CLIENT_ID, client_secret="s3cret",
+                            allowed_emails=["me@example.com"])
+        dash = dataclasses.replace(config_module.settings.dashboard,
+                                   reverse_proxy_prefix=prefix)
+        patched = dataclasses.replace(config_module.settings, auth=auth,
+                                      dashboard=dash, data_dir=tmp_path)
+        for module in (sso, app_module, config_module):
+            monkeypatch.setattr(module, "settings", patched)
+        monkeypatch.setattr(sso, "discovery", lambda *a, **kw: DISCOVERY)
+        store = LocalStore(db_url=f"sqlite:///{tmp_path/'prefixed.sqlite'}")
+        monkeypatch.setattr(app_module, "get_store", lambda: store)
+        app = app_module.create_app()
+        app.secret_key = "test-key"
+        return app
+    return build
+
+
+def test_the_login_redirect_keeps_the_prefix(prefixed_app):
+    resp = prefixed_app().test_client().get("/aismm/instructions")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/aismm/login")
+
+
+def test_the_remembered_destination_keeps_the_prefix(prefixed_app, monkeypatch):
+    """The reported bug: signed in, then dropped outside the mounted app."""
+    client = prefixed_app().test_client()
+    client.get("/aismm/instructions")            # bounces to login, remembers where
+    resp = _login(client, monkeypatch, "me@example.com", path="/aismm/auth/callback")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/aismm/instructions")
+
+
+def test_the_default_destination_keeps_the_prefix(prefixed_app, monkeypatch):
+    client = prefixed_app().test_client()
+    resp = _login(client, monkeypatch, "me@example.com", path="/aismm/auth/callback")
+    location = resp.headers["Location"]
+    assert location.rstrip("/").endswith("/aismm")
+
+
+def test_a_prefix_is_not_applied_twice(prefixed_app, monkeypatch):
+    """nginx may pass the prefix through rather than stripping it."""
+    client = prefixed_app().test_client()
+    with client.session_transaction() as sess:
+        sess[sso._NEXT_KEY] = "/aismm/runs"
+    resp = _login(client, monkeypatch, "me@example.com", path="/aismm/auth/callback")
+    assert "/aismm/aismm" not in resp.headers["Location"]
+    assert resp.headers["Location"].endswith("/aismm/runs")
+
+
+# --- ...and with NO prefix, which is the default --------------------------------- #
+# An empty REVERSE_PROXY_PREFIX means "no reverse proxy": nothing may gain a
+# prefix it never had. The fix for the prefixed case reads request.script_root,
+# which is "" here — these pin that it stays a no-op.
+
+def test_an_empty_prefix_means_no_prefix_anywhere(auth_app):
+    """None, "", whitespace and "/" all normalize to no prefix at all."""
+    from aismm.config import _path_prefix
+
+    assert [_path_prefix(v) for v in (None, "", "   ", "/")] == ["", "", "", ""]
+
+
+def test_without_a_prefix_the_app_is_not_wrapped(auth_app):
+    app = auth_app()
+    assert app.config.get("APPLICATION_ROOT") in (None, "/")
+    assert not isinstance(app.wsgi_app, app_module.ReverseProxyPrefixMiddleware)
+
+
+def test_the_remembered_destination_is_untouched_without_a_prefix(auth_app, monkeypatch):
+    client = auth_app().test_client()
+    assert client.get("/instructions").headers["Location"].endswith("/login")
+    resp = _login(client, monkeypatch, "me@example.com")
+    assert resp.headers["Location"].endswith("/instructions")
+    assert "//" not in resp.headers["Location"].split("://", 1)[-1]
+
+
+def test_the_default_destination_is_the_bare_root_without_a_prefix(auth_app, monkeypatch):
+    client = auth_app().test_client()
+    resp = _login(client, monkeypatch, "me@example.com")
+    location = resp.headers["Location"]
+    assert location.endswith("/")
+    assert location.rstrip("/").rsplit("://", 1)[-1].count("/") == 0   # no path segment
+
+
+def test_safe_next_is_a_no_op_without_a_prefix(auth_app):
+    app = auth_app()
+    with app.test_request_context("/instructions"):
+        assert sso._safe_next("/instructions") == "/instructions"
+        assert sso._safe_next("/runs?status=failed") == "/runs?status=failed"
+
+
+def test_safe_next_still_refuses_an_offsite_target_without_a_prefix(auth_app):
+    app = auth_app()
+    with app.test_request_context("/"):
+        assert sso._safe_next("//evil.example/") == "/"
+        assert sso._safe_next("https://evil.example/") == "/"
+
+
+def test_a_proxy_that_mounts_the_app_itself_is_still_honoured(auth_app):
+    """SCRIPT_NAME set by the proxy, REVERSE_PROXY_PREFIX unset: follow the
+    request, not the config — this is what url_for does too."""
+    app = auth_app()
+    with app.test_request_context("/instructions",
+                                  environ_overrides={"SCRIPT_NAME": "/mounted"}):
+        from flask import url_for
+
+        assert sso._safe_next("/instructions") == "/mounted/instructions"
+        assert sso._safe_next("/instructions").startswith(url_for("index"))

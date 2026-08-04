@@ -15,7 +15,23 @@
       <a href="{{ url_for('instructions') }}">Instructions</a>
       <a href="{{ url_for('runs') }}">Runs</a>
       <a href="{{ url_for('settings_view') }}">Settings</a>
+      <a href="{{ url_for('workspaces_page') }}">Workspaces</a>
     </nav>
+    {% if current_workspace %}
+      <form class="workspace-switch" method="post" action="{{ url_for('switch_workspace_form') }}">
+        <input type="hidden" name="next" value="{{ request.full_path|trim('?') }}">
+        <label class="check" title="Everything on this page belongs to this workspace">
+          <select name="workspace_id" onchange="this.form.submit();">
+            {% for w in my_workspaces %}
+              <option value="{{ w.id }}" {% if w.id == current_workspace.id %}selected{% endif %}>
+                {{ w.name }}{% if w.kind.value == 'personal' %} (personal){% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <noscript><button class="btn small" type="submit">Switch</button></noscript>
+      </form>
+    {% endif %}
     {% if sso_user %}
       <div class="user-box">
         <span class="user-email" title="{{ sso_user.email }}">{{ sso_user.email }}</span>

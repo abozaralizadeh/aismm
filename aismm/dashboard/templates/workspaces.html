@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Workspaces · AISMM{% endblock %}
+{% block content %}
+
+<h1>Workspaces</h1>
+<p class="hint">
+  A workspace is a self-contained space: its own connected social accounts, instructions, runs and
+  approvals. Nothing is shared between workspaces, so an account connected in one cannot be posted
+  to from another. Your <strong>personal</strong> workspace is yours alone until you invite someone.
+  <br>Everything you see elsewhere in the dashboard belongs to
+  <strong>{{ current.name if current else "no workspace" }}</strong> — switch with the selector in
+  the header.
+</p>
+
+{% for row in rows %}
+  {% set w = row.workspace %}
+  <section class="prompt-block workspace-card">
+    <h2>
+      {{ w.name }}
+      <span class="badge badge-{{ 'published' if w.id == (current.id if current else '') else 'staged' }}">
+        {{ w.kind.value }}</span>
+      {% if row.role %}<span class="muted small">you are {{ row.role.value }}</span>{% endif %}
+    </h2>
+    <p class="small muted">
+      {{ row.counts.accounts }} account(s) · {{ row.counts.instructions }} instruction(s) ·
+      {{ row.counts.runs }} run(s)
+      {% if w.auto_join %}
+        <br>Everyone who can sign in joins this workspace automatically.
+      {% endif %}
+    </p>
+
+    {% if w.id != (current.id if current else '') %}
+      <form method="post" action="{{ url_for('switch_workspace', workspace_id=w.id) }}">
+        <button class="btn" type="submit">Switch to this workspace</button>
+      </form>
+    {% endif %}
+
+    <h3>Members</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Since</th><th></th></tr></thead>
+        <tbody>
+        {% for m in row.members %}
+          <tr>
+            <td class="small">{{ m.email }}{% if m.display_name %} <span class="muted">({{ m.display_name }})</span>{% endif %}</td>
+            <td class="small">{{ m.role.value }}</td>
+            <td class="small">{{ m.created_at.strftime('%Y-%m-%d') }}</td>
+            <td class="actions-cell">
+              <div class="actions">
+                {% if row.role and row.role.value == 'owner' %}
+                  <form method="post" action="{{ url_for('remove_workspace_member', workspace_id=w.id) }}"
+                        onsubmit="return confirm('Remove {{ m.email }} from {{ w.name }}?');">
+                    <input type="hidden" name="email" value="{{ m.email }}">
+                    <button class="btn btn-danger small" type="submit">Remove</button>
+                  </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="muted small">No members recorded.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if row.role and row.role.value == 'owner' %}
+      <details class="prompt-block">
+        <summary>Manage this workspace <span class="muted small">— owners only</span></summary>
+        <form class="form" method="post" action="{{ url_for('add_workspace_member', workspace_id=w.id) }}">
+          <label>Add a member
+            <input type="email" name="email" placeholder="colleague@example.com" required>
+            <span class="hint">
+              Membership and sign-in are separate gates: adding someone here does not let them log
+              in. They also need to be on the SSO allowlist
+              (<code>AUTH_ALLOWED_EMAILS</code> / <code>AUTH_ALLOWED_DOMAINS</code>), and you will be
+              told here if they are not.
+            </span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="role" value="owner"> Make them an owner
+            (can manage members and connect accounts)
+          </label>
+          <div class="row"><button class="btn" type="submit">Add member</button></div>
+        </form>
+
+        <form class="form" method="post" action="{{ url_for('rename_workspace', workspace_id=w.id) }}">
+          <label>Rename
+            <input type="text" name="name" value="{{ w.name }}" required>
+          </label>
+          <div class="row"><button class="btn" type="submit">Rename</button></div>
+        </form>
+
+        <form method="post" action="{{ url_for('delete_workspace', workspace_id=w.id) }}"
+              onsubmit="return confirm('Delete {{ w.name }}? This cannot be undone.');">
+          <p class="hint">
+            A workspace can only be deleted once it is empty — its content is never deleted for you,
+            because instructions and runs cannot be recovered and its accounts still hold live
+            access tokens.
+          </p>
+          <button class="btn btn-danger" type="submit">Delete workspace</button>
+        </form>
+      </details>
+    {% endif %}
+  </section>
+{% else %}
+  <p class="muted">You are not a member of any workspace yet.</p>
+{% endfor %}
+
+<h2>New workspace</h2>
+<form class="form" method="post" action="{{ url_for('create_workspace') }}">
+  <label>Name
+    <input type="text" name="name" placeholder="Client campaigns" required>
+    <span class="hint">You become its owner. It starts empty — connect its own accounts from the
+      Accounts page once you have switched to it.</span>
+  </label>
+  <div class="row"><button class="btn btn-primary" type="submit">Create workspace</button></div>
+</form>
+{% endblock %}

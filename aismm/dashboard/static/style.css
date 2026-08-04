@@ -116,6 +116,7 @@ form { margin: 0; }
 .form { display: flex; flex-direction: column; gap: 1.1rem; max-width: 680px; }
 .form label { display: flex; flex-direction: column; gap: .35rem; font-weight: 600; }
 .form input[type=text], .form input[type=password], .form input[type=datetime-local],
+.form input[type=email],
 .form textarea, .form select {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); padding: .55rem .7rem; font: inherit; font-weight: 400;
@@ -285,6 +286,7 @@ th .sort-active { color: var(--accent); }
      selectors must list every input type the form uses — a bare `input` here
      loses on specificity to the `.form input[type=…]` base rule above. */
   .form input[type=text], .form input[type=password], .form input[type=datetime-local],
+  .form input[type=email],
   .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea {
     font-size: 16px;
@@ -333,6 +335,7 @@ th .sort-active { color: var(--accent); }
  * max-width:720px block above would have missed. */
 @media (pointer: coarse) {
   .form input[type=text], .form input[type=password], .form input[type=datetime-local],
+  .form input[type=email],
   .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
   .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
@@ -351,3 +354,13 @@ th .sort-active { color: var(--accent); }
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); padding: .5rem; font: inherit; font-weight: 400;
 }
+
+/* Workspace switcher in the header. The select must stay 16px on touch like
+   every other control (see the pointer:coarse block) or iOS zooms on focus. */
+.workspace-switch { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.workspace-switch select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 6px 8px; max-width: 220px;
+}
+.workspace-card { padding: 14px 16px; }
+.workspace-card h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
