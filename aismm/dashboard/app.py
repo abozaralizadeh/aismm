@@ -130,7 +130,9 @@ def create_app() -> Flask:
             return g.workspace
         mine = _my_workspaces()
         chosen = session.get(_WORKSPACE_KEY)
-        current = next((w for w in mine if w.id == chosen), None) or (mine[0] if mine else None)
+        email, _name, anon = _identity()
+        current = (next((w for w in mine if w.id == chosen), None)
+                   or workspaces.landing(get_store(), email, unauthenticated=anon))
         if current is not None and session.get(_WORKSPACE_KEY) != current.id:
             session[_WORKSPACE_KEY] = current.id
         g.workspace = current
@@ -145,10 +147,7 @@ def create_app() -> Flask:
         boot means the migration cannot silently lose anything, and costs no
         table scan.
         """
-        current = _workspace()
-        if current is None:
-            return "\x00none"                             # matches nothing
-        return [current.id, ""] if current.auto_join else current.id
+        return workspaces.scope_for(_workspace())
 
     def _in_scope(obj) -> bool:
         scope = _workspace_id()
@@ -215,11 +214,13 @@ def create_app() -> Flask:
         email, _name, anon = _identity()
         rows = []
         for workspace in _my_workspaces():
+            members = store.list_members(workspace.id)
             rows.append({
                 "workspace": workspace,
                 "role": workspaces.role_in(store, workspace.id, email, unauthenticated=anon),
-                "members": store.list_members(workspace.id),
-                "counts": workspaces.content_counts(store, workspace.id),
+                "members": members,
+                "shared": len(members) > 1,
+                "counts": workspaces.content_counts(store, workspace),
             })
         return render_template("workspaces.html", rows=rows, current=_workspace())
 
@@ -229,7 +230,8 @@ def create_app() -> Flask:
         workspace = workspaces.create(get_store(), request.form.get("name", ""), email,
                                       display_name=name)
         session[_WORKSPACE_KEY] = workspace.id
-        flash(f"Created workspace {workspace.name} — you are its owner.", "success")
+        flash(f"Created {workspace.name}. It is private to you until you add a member.",
+              "success")
         return redirect(url_for("workspaces_page"))
 
     @app.route("/workspaces/switch", methods=["POST"])
@@ -297,7 +299,10 @@ def create_app() -> Flask:
     def delete_workspace(workspace_id):
         _require_owner(workspace_id)
         store = get_store()
-        counts = workspaces.content_counts(store, workspace_id)
+        workspace = store.get_workspace(workspace_id)
+        if not workspace:
+            abort(404)
+        counts = workspaces.content_counts(store, workspace)
         if any(counts.values()):
             # Content is never cascaded: deleting instructions and runs by
             # accident is unrecoverable, and the accounts still hold live tokens.

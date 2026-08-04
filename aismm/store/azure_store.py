@@ -42,7 +42,7 @@ from ..crypto import decrypt, encrypt
 from ..models import (
     Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, MediaPref,
     PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
-    Workspace, WorkspaceKind, WorkspaceMember, WorkspaceRole,
+    Workspace, WorkspaceMember, WorkspaceRole,
 )
 from .base import Store
 
@@ -528,8 +528,9 @@ class AzureStore(Store):
     # --- workspaces -------------------------------------------------------- #
     def upsert_workspace(self, workspace):
         self._upsert(PK_WORKSPACE, workspace.id, {
-            "name": workspace.name, "kind": workspace.kind.value,
-            "auto_join": workspace.auto_join, "created_by": workspace.created_by,
+            "name": workspace.name,
+            "claims_unassigned": workspace.claims_unassigned,
+            "created_by": workspace.created_by,
             "created_at": workspace.created_at,
         })
         return workspace
@@ -538,8 +539,8 @@ class AzureStore(Store):
     def _workspace_from_entity(e) -> Workspace:
         return Workspace(
             id=e["RowKey"], name=e.get("name", ""),
-            kind=WorkspaceKind(e.get("kind", "shared")),
-            auto_join=bool(e.get("auto_join", False)),
+            # auto_join is the pre-rename name of the same flag.
+            claims_unassigned=bool(e.get("claims_unassigned", e.get("auto_join", False))),
             created_by=e.get("created_by", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),
         )

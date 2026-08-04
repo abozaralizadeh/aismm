@@ -6,7 +6,8 @@
 <p class="hint">
   A workspace is a self-contained space: its own connected social accounts, instructions, runs and
   approvals. Nothing is shared between workspaces, so an account connected in one cannot be posted
-  to from another. Your <strong>personal</strong> workspace is yours alone until you invite someone.
+  to from another. Every workspace is <strong>private to you until you add a member</strong> — and
+  any of them can be shared, including the one you started with.
   <br>Everything you see elsewhere in the dashboard belongs to
   <strong>{{ current.name if current else "no workspace" }}</strong> — switch with the selector in
   the header.
@@ -17,15 +18,18 @@
   <section class="prompt-block workspace-card">
     <h2>
       {{ w.name }}
-      <span class="badge badge-{{ 'published' if w.id == (current.id if current else '') else 'staged' }}">
-        {{ w.kind.value }}</span>
+      {% if w.id == (current.id if current else '') %}
+        <span class="badge badge-published">current</span>
+      {% endif %}
+      <span class="badge badge-{{ 'staged' if row.shared else 'preview' }}">
+        {{ 'shared with %d people'|format(row.members|length) if row.shared else 'private' }}</span>
       {% if row.role %}<span class="muted small">you are {{ row.role.value }}</span>{% endif %}
     </h2>
     <p class="small muted">
       {{ row.counts.accounts }} account(s) · {{ row.counts.instructions }} instruction(s) ·
       {{ row.counts.runs }} run(s)
-      {% if w.auto_join %}
-        <br>Everyone who can sign in joins this workspace automatically.
+      {% if w.claims_unassigned %}
+        <br>This workspace also holds everything created before workspaces existed.
       {% endif %}
     </p>
 
@@ -111,8 +115,8 @@
 <form class="form" method="post" action="{{ url_for('create_workspace') }}">
   <label>Name
     <input type="text" name="name" placeholder="Client campaigns" required>
-    <span class="hint">You become its owner. It starts empty — connect its own accounts from the
-      Accounts page once you have switched to it.</span>
+    <span class="hint">You become its owner, and it is private until you add someone. It starts
+      empty — connect its own accounts from the Accounts page once you have switched to it.</span>
   </label>
   <div class="row"><button class="btn btn-primary" type="submit">Create workspace</button></div>
 </form>

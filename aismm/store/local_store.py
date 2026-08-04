@@ -359,7 +359,7 @@ class LocalStore(Store):
         with Session(self._engine) as s:
             existing = s.get(Workspace, workspace.id)
             if existing:
-                for field in ("name", "kind", "auto_join", "created_by"):
+                for field in ("name", "claims_unassigned", "created_by"):
                     setattr(existing, field, getattr(workspace, field))
                 s.add(existing)
                 s.commit()

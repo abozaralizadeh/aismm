@@ -117,24 +117,24 @@ def cmd_workspaces(args) -> int:
 
     configure_logging()
     store = get_store()
-    default = workspaces.ensure_default(store)
+    legacy = workspaces.legacy_workspace(store)
     for workspace in store.list_workspaces():
-        counts = workspaces.content_counts(store, workspace.id)
-        flags = []
-        if workspace.id == default.id:
-            flags.append("default")
-        if workspace.auto_join:
-            flags.append("everyone joins")
-        print(f"\n{workspace.name}  [{workspace.kind.value}"
-              f"{', ' + ', '.join(flags) if flags else ''}]")
+        counts = workspaces.content_counts(store, workspace)
+        flags = ["shared" if workspaces.is_shared(store, workspace.id) else "private"]
+        if legacy is not None and workspace.id == legacy.id:
+            flags.append("owns pre-existing content")
+        print(f"\n{workspace.name}  [{', '.join(flags)}]")
         print(f"  id={workspace.id}")
         print(f"  {counts['accounts']} account(s), {counts['instructions']} instruction(s), "
               f"{counts['runs']} run(s)")
         for member in store.list_members(workspace.id):
             print(f"    {member.role.value:6}  {member.email}")
     if args.adopt:
-        moved = workspaces.adopt_orphans(store, default.id)
-        print(f"\nAssigned {moved} previously unassigned row(s) to '{default.name}'.")
+        if legacy is None:
+            print("\nNo workspace owns pre-existing content, so there is nothing to assign.")
+        else:
+            moved = workspaces.adopt_orphans(store, legacy.id)
+            print(f"\nAssigned {moved} previously unassigned row(s) to '{legacy.name}'.")
     print()
     return 0
 

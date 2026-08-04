@@ -148,20 +148,29 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   with `get_run`, not by scanning a list.
 - **Workspaces scope accounts, instructions, runs and staged posts** ([workspaces.py](aismm/workspaces.py)).
   A workspace is a SILO, not just an instruction folder — scoping instructions alone would still let
-  every member publish to every connected account, so a "personal" workspace would not be personal.
-  Identity is the SSO email (lowercased); there is no user table. **With SSO off the dashboard is
-  already unauthenticated**, so one implicit local operator (`LOCAL_USER`) owns everything rather
-  than a fictional user guarding nothing — that is the `unauthenticated=True` branch, not a bug.
-  Rows written before workspaces existed carry `workspace_id=""` and the default workspace claims
-  them **at read time**: the store's workspace filter takes a str OR a list, and the dashboard passes
-  `[default_id, ""]` for the auto-join workspace. That beats a boot-time rewrite because a migration
-  that is skipped, interrupted, or run against an unbounded runs table cannot lose anything this way
-  (`adopt_orphans` still exists as an opt-in tidy-up, via `cli workspaces --adopt`). In the dashboard
-  every scoped read goes through `_workspace_id()` and every by-id fetch through `_owned()` (404, not
-  403 — whether an id exists elsewhere is not the caller's business); a route that forgets either one
-  leaks another workspace's data. `_new_workspace_id()` is the single-id variant for rows being
-  CREATED. Platform *apps* are deliberately NOT scoped: they are deployment infrastructure, and the
-  sensitive half (the token) lives on the scoped `Account`.
+  every member publish to every connected account, so a private workspace would not be private.
+  There is **one kind**: private to its creator until they add a member, shareable in every case. A
+  separate "personal" kind that could also be shared was a distinction without a difference.
+  **A first sign-in gets you your OWN workspace and nothing else** — a new colleague must not land in
+  someone else's live accounts — and `landing()` prefers a workspace you `created_by` over one you
+  were invited to. Identity is the SSO email (lowercased); there is no user table. **With SSO off the
+  dashboard is already unauthenticated**, so one implicit local operator (`LOCAL_USER`) owns
+  everything rather than a fictional user guarding nothing — the `unauthenticated=True` branch is
+  not a bug. Rows predating workspaces carry `workspace_id=""` and exactly ONE workspace
+  (`claims_unassigned`) owns them **at read time**: `scope_for()` returns `[id, ""]` for it, and
+  every read about a workspace must go through `scope_for`/`content_counts` — listing through the
+  scope while counting through the bare id is what showed a full page of instructions above "0
+  instruction(s)". Read-time claiming beats a boot-time rewrite because a migration that is skipped,
+  interrupted, or run against an unbounded runs table cannot lose anything this way (`adopt_orphans`
+  remains an opt-in tidy-up via `cli workspaces --adopt`). The first operator to sign in **claims**
+  that workspace and it is RENAMED to theirs (`_claim`): an earlier build left them a second, empty
+  workspace to land in while their real instructions sat elsewhere, which reads as data loss. `_claim`
+  also repairs the ownerless workspace that build created — with no owner, its membership could never
+  be changed by anyone. In the dashboard every scoped read goes through `_workspace_id()` and every
+  by-id fetch through `_owned()` (404, not 403 — whether an id exists elsewhere is not the caller's
+  business); a route that forgets either one leaks another workspace's data. `_new_workspace_id()` is
+  the single-id variant for rows being CREATED. Platform *apps* are deliberately NOT scoped: they are
+  deployment infrastructure, and the sensitive half (the token) lives on the scoped `Account`.
 - **Storage goes through the `Store` interface** ([store/base.py](aismm/store/base.py)). Two
   implementations: `LocalStore` (SQLite) and `AzureStore` (Table storage), chosen by
   `settings.use_azure_store`. Never read/write the DB directly from routes/agent code — call the

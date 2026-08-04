@@ -310,26 +310,26 @@ Every account's OAuth **redirect/callback URL** is:
 Several people can share one deployment without sharing everything. A **workspace** is a silo: its
 own connected social accounts, instructions, runs and approval queue. Nothing crosses between them —
 an account connected in one workspace cannot be posted to from another, which is what makes a
-personal workspace actually personal. Partitioning only the instructions would have left every
-member able to publish to every connected account.
+private workspace actually private. Partitioning only the instructions would have left every member
+able to publish to every connected account.
 
 Switch workspace from the selector in the header; everything else on the page follows it.
 
-**Who gets what.** Identity comes from [SSO](#dashboard-sign-in-sso) — the email your provider
-returns is the key, and there is no separate user list to maintain. On someone's first sign-in they
-get two things:
+**There is one kind of workspace.** Every one is **private to whoever created it until they add a
+member**, and every one can be shared — including the workspace you started with. Nothing is
+permanently locked to one person, and nothing is permanently open to everyone.
+
+**Signing in for the first time gets you your own workspace and nothing else** — `Sam's workspace`,
+empty, owned by Sam. A new colleague writes their own instructions rather than opening the dashboard
+onto someone else's live accounts. They see another workspace only when its owner invites them, and
+even then they still *land* in their own.
+
+**Sharing.** On **Workspaces**, an owner adds someone by email and picks their role:
 
 | | |
 |---|---|
-| **Default** (shared) | Everyone who can sign in joins it automatically. This is where the content of an existing deployment lives, so upgrading changes nothing anyone can see. |
-| **Their personal workspace** | Theirs alone, and they own it. Empty to start. |
-
-Create more from **Workspaces** — a client, a brand, a side project. You own what you create.
-
-**Two roles.** An **owner** manages membership, connects and disconnects accounts, and renames or
-deletes the workspace. A **member** does the everyday work: authoring instructions, running them,
-approving posts. Everyone auto-joining the shared workspace joins as a member, so no one inherits
-the ability to disconnect a shared account by accident.
+| **Owner** | Manage membership, connect and disconnect accounts, rename or delete the workspace. |
+| **Member** | The everyday work: author instructions, run them, approve posts. |
 
 **Membership is not sign-in.** They are separate gates and stay that way: adding someone to a
 workspace does not let them log in. They also need to pass the SSO allowlist
@@ -346,14 +346,18 @@ nothing: one implicit local operator owns every workspace and sees everything. L
 unchanged, and you can still create and switch workspaces to try the feature.
 
 **Upgrading an existing deployment.** Content written before workspaces existed carries no
-workspace, and the Default workspace claims those rows when it reads them — no migration step to
-run, and nothing that can be lost by a migration that was interrupted. `python -m aismm.cli
-workspaces` prints every workspace, its members and what it holds; `--adopt` writes the default
-workspace onto those older rows as a tidy-up, which is optional.
+workspace, and exactly one workspace owns those rows when it reads them — no migration step to run,
+and nothing that can be lost by a migration that was interrupted. The first person to sign in after
+the upgrade inherits that workspace, which is renamed to theirs: you land on everything you already
+had, in `Your name's workspace`, private to you. Colleagues who sign in later start empty.
+
+`python -m aismm.cli workspaces` prints every workspace, whether it is private or shared, its members
+and what it holds; `--adopt` writes the owning workspace onto those older rows as an optional
+tidy-up.
 
 **What is NOT scoped:** platform *app* credentials (Apps). Those are deployment infrastructure — one
 Meta app, one X app — and the sensitive part, the access token, lives on the account, which is
-scoped. `.env` credentials have always been global.
+scoped.
 
 ---
 

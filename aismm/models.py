@@ -78,11 +78,6 @@ class StagedStatus(str, enum.Enum):
     published = "published"
 
 
-class WorkspaceKind(str, enum.Enum):
-    personal = "personal"   # one user's own; created for them on first sign-in
-    shared = "shared"       # several members
-
-
 class WorkspaceRole(str, enum.Enum):
     owner = "owner"     # + manage membership, connect accounts, delete the workspace
     member = "member"   # author instructions, run them, approve posts
@@ -92,22 +87,22 @@ class WorkspaceRole(str, enum.Enum):
 # Tables
 # --------------------------------------------------------------------------- #
 class Workspace(SQLModel, table=True):
-    """A silo: its own social accounts, instructions, runs and app credentials.
+    """A silo: its own social accounts, instructions, runs and staged posts.
 
-    Nothing is visible across workspaces, which is what makes a *personal* one
-    actually personal — partitioning instructions alone would still let every
-    member publish to every connected account.
+    Nothing is visible across workspaces. There is only ONE kind of workspace —
+    every one starts private to whoever created it and becomes shared the moment
+    they add a member. A separate "personal" kind that could also be shared was
+    a distinction without a difference, and it made "can I share this?" look
+    like it depended on how the workspace was created.
 
-    ``auto_join`` belongs to the migration workspace only: an allowlist can be a
-    *domain*, so the members of "everyone who may sign in" cannot be enumerated
-    up front. Instead the first sign-in adds the user. Without it, upgrading an
-    existing deployment would show every colleague an empty dashboard.
+    ``claims_unassigned`` marks the ONE workspace that also owns rows carrying no
+    ``workspace_id`` — content written before workspaces existed. It is set on
+    the workspace the first signed-in operator inherits, and on nothing else.
     """
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     name: str = ""
-    kind: WorkspaceKind = WorkspaceKind.shared
-    auto_join: bool = False
+    claims_unassigned: bool = False
     created_by: str = ""                     # the identity that created it
     created_at: datetime = Field(default_factory=_now)
 

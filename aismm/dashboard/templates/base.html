@@ -24,7 +24,7 @@
           <select name="workspace_id" onchange="this.form.submit();">
             {% for w in my_workspaces %}
               <option value="{{ w.id }}" {% if w.id == current_workspace.id %}selected{% endif %}>
-                {{ w.name }}{% if w.kind.value == 'personal' %} (personal){% endif %}
+                {{ w.name }}
               </option>
             {% endfor %}
           </select>
