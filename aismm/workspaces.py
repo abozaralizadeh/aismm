@@ -205,6 +205,38 @@ def _all_members(store) -> list[WorkspaceMember]:
     return members
 
 
+def make_owner(store, workspace, email: str, display_name: str = "") -> WorkspaceMember:
+    """Promote (or add) ``email`` as an owner of ``workspace``.
+
+    Idempotent, and never removes anyone: an existing owner stays one. This is
+    the repair for a workspace left ownerless — with no owner its membership can
+    never be changed, so nobody can invite anyone or hand it over.
+    """
+    member = store.add_member(WorkspaceMember(
+        workspace_id=workspace.id, email=normalize(email), role=WorkspaceRole.owner,
+        display_name=display_name))
+    if workspace.created_by in ("", _SYSTEM_CREATOR):
+        workspace.created_by = normalize(email)
+        store.upsert_workspace(workspace)
+    logger.info("%s is now an owner of %s", normalize(email), workspace.name)
+    return member
+
+
+def rename(store, workspace, name: str) -> Workspace:
+    workspace.name = (name or "").strip() or workspace.name
+    return store.upsert_workspace(workspace)
+
+
+def find(store, needle: str):
+    """A workspace by id or by (case-insensitive) name — for the CLI."""
+    needle = (needle or "").strip()
+    if not needle:
+        return None
+    rows = store.list_workspaces()
+    return (next((w for w in rows if w.id == needle), None)
+            or next((w for w in rows if w.name.lower() == needle.lower()), None))
+
+
 # --- access ---------------------------------------------------------------- #
 
 def accessible(store, email: str | None, *, unauthenticated: bool = False) -> list[Workspace]:

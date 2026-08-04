@@ -127,6 +127,41 @@ def test_someone_invited_before_their_first_signin_still_gets_their_own(store):
     assert workspaces.landing(store, "guest@example.com").name == "Guest's workspace"
 
 
+def test_ownership_can_be_taken_by_hand(store):
+    """`cli workspaces --owner you@example.com` — the direct repair for a
+    workspace left ownerless, without waiting for a sign-in to fix it."""
+    stranded = store.upsert_workspace(Workspace(name="Default", created_by="system",
+                                                claims_unassigned=True))
+    store.add_member(WorkspaceMember(workspace_id=stranded.id, email="me@example.com"))
+    workspaces.make_owner(store, stranded, "Me@Example.com", "Me")
+    assert workspaces.can_admin(store, stranded.id, "me@example.com")
+    assert store.get_workspace(stranded.id).created_by == "me@example.com"
+    # Only one membership row: it promoted, it did not add a second.
+    assert len(store.list_members(stranded.id)) == 1
+
+
+def test_taking_ownership_adds_someone_who_was_not_a_member(store):
+    workspace = workspaces.create(store, "Theirs", "them@example.com")
+    workspaces.make_owner(store, workspace, "me@example.com")
+    assert workspaces.can_admin(store, workspace.id, "me@example.com")
+    assert workspaces.can_admin(store, workspace.id, "them@example.com")   # unchanged
+
+
+def test_taking_ownership_is_idempotent(store):
+    workspace = workspaces.create(store, "Mine", "me@example.com")
+    workspaces.make_owner(store, workspace, "me@example.com")
+    workspaces.make_owner(store, workspace, "me@example.com")
+    assert len(store.list_members(workspace.id)) == 1
+
+
+def test_a_workspace_can_be_found_by_id_or_name(store):
+    """So the CLI does not force you to copy a uuid."""
+    workspace = workspaces.create(store, "Client campaigns", "me@example.com")
+    assert workspaces.find(store, workspace.id).id == workspace.id
+    assert workspaces.find(store, "client campaigns").id == workspace.id
+    assert workspaces.find(store, "nope") is None
+
+
 def test_a_fresh_deployment_gets_no_legacy_workspace(store):
     """Nothing predates workspaces here, so there is nothing to inherit."""
     workspaces.ensure_user(store, "first@example.com", "First")

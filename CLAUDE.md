@@ -166,7 +166,8 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   that workspace and it is RENAMED to theirs (`_claim`): an earlier build left them a second, empty
   workspace to land in while their real instructions sat elsewhere, which reads as data loss. `_claim`
   also repairs the ownerless workspace that build created — with no owner, its membership could never
-  be changed by anyone. In the dashboard every scoped read goes through `_workspace_id()` and every
+  be changed by anyone; `cli workspaces --owner EMAIL [--workspace ID_OR_NAME]` is the manual route
+  (`workspaces.make_owner`, promote-only, never demotes an existing owner). In the dashboard every scoped read goes through `_workspace_id()` and every
   by-id fetch through `_owned()` (404, not 403 — whether an id exists elsewhere is not the caller's
   business); a route that forgets either one leaks another workspace's data. `_new_workspace_id()` is
   the single-id variant for rows being CREATED. Platform *apps* are deliberately NOT scoped: they are

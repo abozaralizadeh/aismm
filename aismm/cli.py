@@ -107,10 +107,15 @@ def cmd_list(_args) -> int:
 
 
 def cmd_workspaces(args) -> int:
-    """Show who can see what, and optionally tidy up unassigned rows.
+    """Show who can see what; take ownership; optionally tidy up unassigned rows.
 
-    Unassigned rows are already visible in the default workspace (its scope
-    matches them at read time), so --adopt is housekeeping, not a repair.
+    ``--owner`` is the repair for a workspace with no owner — an earlier build
+    created its migration workspace that way, and with no owner its membership
+    could never be changed by anyone, so nobody could invite anyone or hand it
+    over. Signing in also repairs it now; this is the direct route.
+
+    ``--adopt`` is housekeeping, not a repair: unassigned rows are already
+    visible in the workspace that claims them, at read time.
     """
     from . import workspaces
     from .store import get_store
@@ -118,6 +123,22 @@ def cmd_workspaces(args) -> int:
     configure_logging()
     store = get_store()
     legacy = workspaces.legacy_workspace(store)
+
+    if args.owner:
+        target = workspaces.find(store, args.workspace) if args.workspace else legacy
+        if target is None:
+            print("Could not decide which workspace to act on. Pass --workspace <id or name>; "
+                  "the ids are listed below." if not args.workspace
+                  else f"No workspace matches {args.workspace!r}.")
+            args.owner = None
+        else:
+            workspaces.make_owner(store, target, args.owner, args.name or "")
+            print(f"{args.owner} is now an OWNER of '{target.name}'.")
+            if args.rename:
+                target = workspaces.rename(store, target, args.rename)
+                print(f"Renamed it to '{target.name}'.")
+            legacy = workspaces.legacy_workspace(store)
+
     for workspace in store.list_workspaces():
         counts = workspaces.content_counts(store, workspace)
         flags = ["shared" if workspaces.is_shared(store, workspace.id) else "private"]
@@ -226,6 +247,15 @@ def build_parser() -> argparse.ArgumentParser:
     pp.set_defaults(func=cmd_post)
 
     pw = sub.add_parser("workspaces", help="list workspaces, members and their content")
+    pw.add_argument("--owner", metavar="EMAIL",
+                    help="make this address an OWNER of a workspace (adds them if needed)")
+    pw.add_argument("--workspace", metavar="ID_OR_NAME",
+                    help="which workspace --owner applies to "
+                         "(default: the one holding pre-existing content)")
+    pw.add_argument("--name", metavar="DISPLAY_NAME", default="",
+                    help="display name to record alongside --owner")
+    pw.add_argument("--rename", metavar="NEW_NAME",
+                    help="rename the workspace --owner acted on")
     pw.add_argument("--adopt", action="store_true",
                     help="write a workspace onto rows that predate workspaces (tidy-up only)")
     pw.set_defaults(func=cmd_workspaces)

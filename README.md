@@ -352,8 +352,20 @@ the upgrade inherits that workspace, which is renamed to theirs: you land on eve
 had, in `Your name's workspace`, private to you. Colleagues who sign in later start empty.
 
 `python -m aismm.cli workspaces` prints every workspace, whether it is private or shared, its members
-and what it holds; `--adopt` writes the owning workspace onto those older rows as an optional
-tidy-up.
+and what it holds. Two flags:
+
+```bash
+# take ownership of a workspace (adds you if you are not a member yet)
+python -m aismm.cli workspaces --owner you@example.com --rename "Your workspace"
+
+# optional tidy-up: write the owning workspace onto rows that predate workspaces
+python -m aismm.cli workspaces --adopt
+```
+
+`--owner` defaults to the workspace holding pre-existing content; pass
+`--workspace <id or name>` for any other. It only ever promotes — an existing owner stays one. It is
+the direct route to the repair a sign-in performs anyway, and the way out if a workspace ever ends up
+with no owner (with none, its membership can never be changed by anyone).
 
 **What is NOT scoped:** platform *app* credentials (Apps). Those are deployment infrastructure — one
 Meta app, one X app — and the sensitive part, the access token, lives on the account, which is
