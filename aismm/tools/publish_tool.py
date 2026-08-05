@@ -390,7 +390,9 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
         return {"error": "rate_limited", "message": message,
                 "retry_after_minutes": held // 60}
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Live publish failed")
+        logger.exception("Live publish failed for %s (platform=%s, media=%s, assets=%d)",
+                         account.handle or account.external_id, account.platform.value,
+                         kind, len(paths))
         run.status = RunStatus.failed
         run.error = str(exc)
         store.update_run(run)

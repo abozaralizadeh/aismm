@@ -328,6 +328,18 @@ def test_the_api_error_carries_the_reason_not_just_a_status(monkeypatch):
     assert "max_results" in str(exc.value)
 
 
+def test_api_error_includes_x_request_id_when_present():
+    class _Response:
+        status_code = 503
+        text = "Service Unavailable"
+        headers = {"x-request-id": "x-trace-123"}
+
+        def json(self):
+            return {"title": "Service Unavailable"}
+
+    assert "x-trace-123" in str(_x()._api_error(_Response()))
+
+
 def test_a_tool_reports_the_error_rather_than_killing_the_run(monkeypatch):
     """A 403 must come back as a result dict, not an exception that ends the run."""
     from aismm.tools import twitter_tools

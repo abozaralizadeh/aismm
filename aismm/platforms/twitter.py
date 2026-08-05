@@ -339,7 +339,13 @@ class Twitter(SocialPlatform):
                     "connected; reads and writes both consume API credits.")
         elif response.status_code == 429:
             hint = " — rate limited; wait before retrying."
-        return RuntimeError(f"X API {response.status_code}: {detail}{hint}")
+        # X support can trace a failed request by this id. It is safe to show:
+        # unlike Authorization, it grants no access and expires with X's logs.
+        headers = getattr(response, "headers", {}) or {}
+        request_id = (headers.get("x-request-id") or headers.get("x-transaction-id")
+                      or headers.get("x-client-transaction-id") or "")
+        trace = f" [X request id: {request_id}]" if request_id else ""
+        return RuntimeError(f"X API {response.status_code}: {detail}{trace}{hint}")
 
     async def _get(self, access_token: str, path: str, params: dict) -> dict:
         async with httpx.AsyncClient(timeout=30) as client:
