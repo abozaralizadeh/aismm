@@ -179,7 +179,7 @@ def test_a_sequence_can_be_seeded_from_an_image(monkeypatch, tmp_path):
     result = asyncio.run(sequence_tool.perform_create_sequence(
         {}, ["shot one", "shot two"], style="ink", reference_asset_path=path))
     assert calls[0] is True                    # shot 1 got the supplied image
-    assert result["reference_used"] is True
+    assert result["reference_images_used"] == 1
 
 
 def test_a_sequence_without_a_reference_is_unchanged(monkeypatch):
@@ -199,7 +199,7 @@ def test_a_sequence_without_a_reference_is_unchanged(monkeypatch):
 
     result = asyncio.run(sequence_tool.perform_create_sequence({}, ["only shot"]))
     assert calls[0] is False
-    assert "reference_used" not in result
+    assert "reference_images_used" not in result
 
 
 # --- merging must not rotate or stretch ----------------------------------------------- #
@@ -282,3 +282,206 @@ def test_a_clip_already_at_the_target_size_is_not_padded(tmp_path):
     width, height = image.size
     black = lambda y: all(sum(image.getpixel((x, y))) < 30 for x in range(0, width, 40))
     assert not black(5) and not black(height - 6)
+
+
+# --- per-shot direction: length, cut-or-continue, and one image each ------------------- #
+# Reported after a trailer run: "lots of gaps and repeats between videos", every
+# clip 4 seconds, and one seed image for the whole sequence — in a shot where the
+# character's face wasn't visible, Sora invented a different person entirely.
+
+@pytest.fixture()
+def seq(monkeypatch, tmp_path):
+    """Record every Sora call a sequence makes, without touching the API."""
+    calls = {"creates": [], "remixes": []}
+
+    async def failover(prompt, seconds, size, *, ref_image_bytes=None, **kw):
+        calls["creates"].append({"prompt": prompt, "seconds": seconds,
+                                 "reference": ref_image_bytes})
+        return b"clip", f"job-{len(calls['creates'])}", {"endpoint": "https://e"}
+
+    async def create(resource, prompt, seconds, size, reference=None):
+        calls["creates"].append({"prompt": prompt, "seconds": seconds,
+                                 "reference": reference})
+        return b"clip", f"job-{len(calls['creates'])}"
+
+    async def remix(resource, base_job_id, prompt):
+        calls["remixes"].append({"base": base_job_id, "prompt": prompt})
+        return b"remixed", f"remix-{len(calls['remixes'])}"
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
+    monkeypatch.setattr(sequence_tool, "create_clip", create)
+    monkeypatch.setattr(sequence_tool, "remix_clip", remix)
+    monkeypatch.setattr(sequence_tool.video, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(sequence_tool.video, "concat_clips", lambda clips, size: b"merged")
+    monkeypatch.setattr(sequence_tool.video, "duration_seconds", lambda data: 8.0)
+    monkeypatch.setattr(sequence_tool.video, "extract_last_frame", lambda c, s: b"tail-frame")
+    monkeypatch.setattr(sequence_tool, "save_bytes", lambda data, ext: "/assets/seq.mp4")
+    monkeypatch.setattr(sequence_tool, "public_url", lambda p: "https://host/seq.mp4")
+    return calls
+
+
+def _panels(monkeypatch, tmp_path, count):
+    """`count` distinct images on disk, each a different colour."""
+    paths = []
+    for index in range(count):
+        path = tmp_path / f"panel{index}.jpg"
+        path.write_bytes(_jpeg(colour=(10 * index + 5, 40, 90)))
+        paths.append(str(path))
+    from aismm import assets
+
+    monkeypatch.setattr(assets, "exists", lambda p: str(p) in paths)
+    monkeypatch.setattr(assets, "read_bytes", lambda p: open(p, "rb").read())
+    return paths
+
+
+def _run_sequence(scenes, **kwargs):
+    return asyncio.run(sequence_tool.perform_create_sequence({}, scenes, **kwargs))
+
+
+def test_each_shot_gets_its_own_image(seq, monkeypatch, tmp_path):
+    """The fix for one seed doing the work of a whole sequence."""
+    paths = _panels(monkeypatch, tmp_path, 3)
+    result = _run_sequence(["a", "b", "c"], reference_asset_paths=paths)
+    references = [call["reference"] for call in seq["creates"]]
+    assert all(ref is not None for ref in references)
+    assert len(set(references)) == 3            # three DIFFERENT pictures
+    assert result["reference_images_used"] == 3
+    assert result["reference_images_given"] == 3
+
+
+def test_a_shot_with_no_image_falls_back_to_the_chained_frame(seq, monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 1)
+    _run_sequence(["a", "b"], reference_asset_paths=[paths[0], ""])
+    assert seq["creates"][0]["reference"] is not None
+    assert seq["creates"][1]["reference"] == b"tail-frame"
+
+
+def test_the_supplied_image_wins_over_the_chained_frame(seq, monkeypatch, tmp_path):
+    """Naming a panel for a shot is a more specific instruction than "continue"."""
+    paths = _panels(monkeypatch, tmp_path, 2)
+    _run_sequence(["a", "b"], reference_asset_paths=paths)
+    assert seq["creates"][1]["reference"] != b"tail-frame"
+
+
+def test_a_shot_with_an_image_is_told_it_is_a_look_not_a_paused_video(seq, monkeypatch,
+                                                                     tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 1)
+    _run_sequence(["a"], reference_asset_paths=paths)
+    prompt = seq["creates"][0]["prompt"]
+    assert "SOURCE IMAGE" in prompt
+    assert "not a frame to resume" in prompt
+
+
+# --- cuts -------------------------------------------------------------------------- #
+
+def test_a_cut_shot_gets_no_chained_frame(seq):
+    """Continuity across a jump is what produced repeated action."""
+    _run_sequence(["a", "b"], scene_continuity=["", "cut"])
+    assert seq["creates"][1]["reference"] is None
+
+
+def test_a_cut_shot_is_told_to_start_a_new_shot(seq):
+    _run_sequence(["a", "b"], scene_continuity=["", "cut"])
+    prompt = seq["creates"][1]["prompt"]
+    assert "CUT:" in prompt
+    assert "do NOT continue the previous shot" in prompt
+    assert "Keep the style, world, characters" in prompt      # same film, new shot
+
+
+def test_a_cut_still_carries_the_style(seq):
+    _run_sequence(["a", "b"], style="ink and wash, teal palette",
+                  scene_continuity=["", "cut"])
+    assert "ink and wash, teal palette" in seq["creates"][1]["prompt"]
+
+
+def test_shots_without_a_per_shot_mode_still_continue(seq):
+    _run_sequence(["a", "b"], scene_continuity=["", ""])
+    assert seq["creates"][1]["reference"] == b"tail-frame"
+
+
+def test_a_cut_shot_is_never_remixed(seq):
+    """Remix means "the previous shot, advanced" — the opposite of a cut."""
+    _run_sequence(["a", "b"], continuity="remix", scene_continuity=["", "cut"])
+    assert seq["remixes"] == []
+
+
+def test_a_later_shot_can_continue_after_a_cut(seq):
+    """The tail frame is still kept, so shot 3 can chain even though 2 was a cut."""
+    _run_sequence(["a", "b", "c"], scene_continuity=["", "cut", ""])
+    assert seq["creates"][2]["reference"] == b"tail-frame"
+
+
+# --- length ------------------------------------------------------------------------ #
+
+def test_clip_length_defaults_to_the_longest(seq):
+    """Many 4s clips read as a slideshow; the agent had been picking them."""
+    _run_sequence(["a", "b"])
+    assert [call["seconds"] for call in seq["creates"]] == [12, 12]
+
+
+def test_length_can_vary_per_shot(seq):
+    """Rhythm: a held beat at 12s, an impact at 4s."""
+    _run_sequence(["a", "b", "c"], scene_seconds=[12, 4, 8])
+    assert [call["seconds"] for call in seq["creates"]] == [12, 4, 8]
+
+
+def test_an_odd_length_is_snapped_to_what_sora_renders(seq):
+    _run_sequence(["a"], scene_seconds=[7])
+    assert seq["creates"][0]["seconds"] in (4, 8, 12)
+
+
+# --- a refused image is reported, not silently swapped ------------------------------ #
+
+def test_a_refused_image_retries_that_shot_without_it(monkeypatch, tmp_path):
+    """Not by remixing the previous shot: the operator picked THAT panel for
+    THIS shot, so a remix would quietly answer a different request."""
+    paths = _panels(monkeypatch, tmp_path, 2)
+    calls = {"creates": [], "remixes": []}
+
+    async def failover(prompt, seconds, size, *, ref_image_bytes=None, **kw):
+        calls["creates"].append(ref_image_bytes)
+        return b"clip", f"job-{len(calls['creates'])}", {"endpoint": "https://e"}
+
+    async def create(resource, prompt, seconds, size, reference=None):
+        calls["creates"].append(reference)
+        if reference is not None and len(calls["creates"]) == 2:
+            raise RuntimeError("input_reference contains a human face")
+        return b"clip", f"job-{len(calls['creates'])}"
+
+    async def remix(resource, base, prompt):
+        calls["remixes"].append(base)
+        return b"remixed", "remix-1"
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
+    monkeypatch.setattr(sequence_tool, "create_clip", create)
+    monkeypatch.setattr(sequence_tool, "remix_clip", remix)
+    monkeypatch.setattr(sequence_tool.video, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(sequence_tool.video, "concat_clips", lambda clips, size: b"merged")
+    monkeypatch.setattr(sequence_tool.video, "duration_seconds", lambda data: 8.0)
+    monkeypatch.setattr(sequence_tool.video, "extract_last_frame", lambda c, s: b"tail")
+    monkeypatch.setattr(sequence_tool, "save_bytes", lambda data, ext: "/assets/seq.mp4")
+    monkeypatch.setattr(sequence_tool, "public_url", lambda p: "https://host/seq.mp4")
+
+    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    assert calls["remixes"] == []                       # retried, not substituted
+    assert calls["creates"][-1] is None                 # ...without the image
+    assert result["reference_images_used"] == 1
+    assert result["reference_images_given"] == 2
+    assert any("rejects images containing human faces" in note
+               for note in result["reference_notes"])
+    assert any("describe the character IN `style`" in note
+               for note in result["reference_notes"])
+
+
+def test_an_unreadable_image_is_named_in_the_result(seq, monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 1)
+    result = _run_sequence(["a", "b"], reference_asset_paths=[paths[0], "/gone/panel.jpg"])
+    assert result["reference_images_given"] == 2
+    assert any("/gone/panel.jpg" in note for note in result["reference_notes"])
+
+
+def test_the_single_path_shorthand_still_works(seq, monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 1)
+    _run_sequence(["a", "b"], reference_asset_path=paths[0])
+    assert seq["creates"][0]["reference"] is not None
+    assert seq["creates"][1]["reference"] == b"tail-frame"

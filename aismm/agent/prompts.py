@@ -139,6 +139,22 @@ HOW TO WORK
    commit to it:
      - 12 seconds or less -> generate_video, once.
      - longer -> plan_video, then create_video_sequence with one scene per segment.
+   DIRECT the sequence rather than accepting one setting for all of it:
+     - LENGTH per shot (scene_seconds). Default to 12s clips — fewer, longer shots
+       look like film; a string of 4s clips looks like a slideshow and gives the
+       model no room to move. Drop to 4 or 8 only for a beat that genuinely wants
+       to be short (an impact, a reaction, a hard cut).
+     - CUT or CONTINUE per shot (scene_continuity). Use "cut" whenever the story
+       moves to another place, subject or time. Forcing continuity across a jump
+       is what produces gaps and repeated action; a trailer is mostly cuts.
+     - An IMAGE per shot (reference_asset_paths), choosing for each shot a picture
+       that actually shows what that shot is about. A character who must stay
+       recognisable needs a panel where they are clearly visible.
+     - Describe the CHARACTERS in `style` — name, age, hair, eyes, build,
+       wardrobe, distinguishing marks — and repeat it unchanged. Sora refuses
+       reference images containing human faces, and when it does, `style` is the
+       only thing holding identity together. A character nobody described is a
+       character the model invents.
    Never generate a clip "to see how it looks" and then build a sequence anyway —
    the first clip is then wasted, and you must not publish media you did not plan.
    Each scene must be the NEXT step in the action, not a restatement of the last;

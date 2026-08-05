@@ -561,6 +561,47 @@ The saved file goes into your own storage — local assets dir, and the blob con
 configured — and is then [converted to the target platform's format](#images-are-converted-locally-to-what-the-platform-accepts)
 at publish time. A 1536×1024 PNG panel becomes a 1440×960 JPEG for Instagram automatically.
 
+### Directing a video sequence
+
+A reel is several Sora clips merged, and `create_video_sequence` is directed **per shot** rather
+than by one setting for the whole video. One setting applied to every shot is what makes a sequence
+feel like a single long take with repeats in it.
+
+| Per-shot control | What it decides |
+|---|---|
+| `scene_seconds` | How long that shot runs (4, 8 or 12) |
+| `scene_continuity` | `""` continue · `"cut"` a new angle/moment · `"remix"` derive from the last shot |
+| `reference_asset_paths` | Which image anchors that shot — one per scene, `""` for none |
+
+**Cuts.** `"cut"` tells the model *same film, new shot*: identical style, world, characters and
+wardrobe, but explicitly **not** a continuation of the previous framing or action. Use it whenever
+the story moves to another place, subject or time. Forcing continuity across a jump is what produces
+gaps and repeated action — a trailer is mostly cuts.
+
+**Length.** Clips default to **12 seconds**. Fewer, longer shots read as film; a string of 4-second
+clips reads as a slideshow and gives the model no room to move. Drop to 4 or 8 for a beat that
+genuinely wants to be short — an impact, a reaction — via `scene_seconds`.
+
+**One image per shot.** Each shot can be anchored to its own picture, sent to Sora as the look and
+subject for that shot. A supplied image wins over the chained frame at that index: naming a panel
+for a shot is a more specific instruction than "continue from the last shot". A refused image is
+retried *without* it rather than substituting a remix of the previous shot, which would quietly
+answer a different request.
+
+**Character consistency is `style`'s job, not the image's.** Sora rejects reference images
+containing human faces, so identity cannot depend on them. `style` is repeated verbatim in every
+shot's prompt and survives a refusal — describe the characters there (name, age, hair, eyes, build,
+wardrobe, distinguishing marks) and repeat it unchanged. A character nobody described is a character
+the model invents: a single seed image whose face was not visible produced a video with an entirely
+different person in it.
+
+The result reports `reference_images_used` against `reference_images_given`, and `reference_notes`
+names the shots whose image was refused — precisely the shots now relying on `style`.
+
+*Not a workaround:* compositing panels into one collage and passing that to every shot. Sora treats
+`input_reference` as a **starting frame**, so a collage yields a video of a collage; and merging
+several panels makes a visible face, and therefore a refusal, more likely rather than less.
+
 ### Seeing an image
 
 Everything else the agent receives is text. `browse_page` hands it a URL, alt text and the

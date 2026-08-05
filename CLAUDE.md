@@ -336,6 +336,29 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   one Sora resource** (remix is job-scoped — GenBox's per-clip failover destroyed it). Always
   re-encode before concat and add silence to mute clips, or the merged file loses audio from the
   first silent clip onward.
+- **A sequence is directed PER SHOT, not by one setting** ([tools/sequence_tool.py](aismm/tools/sequence_tool.py)):
+  `scene_seconds` (length), `scene_continuity` (`""` inherits, `"cut"`, `"remix"`) and
+  `reference_asset_paths` (one image per shot). One mode for a whole sequence is what produced
+  "gaps and repeats": every shot was told to CONTINUE the last one, so a jump to a new place came
+  out as another take of the same beat. `"cut"` gets its own prompt contract — *same film, new
+  shot* — and is never remixed, since remix means "the previous shot, advanced". The tail frame is
+  still extracted across a cut so a later shot can chain again.
+- **A supplied image is a LOOK, not a paused video** (`from_supplied_image` in `build_clip_prompt`).
+  The continuity wording tells Sora to *resume* from the frame; applied to a panel the operator
+  chose, that asks it to continue an action that never happened. A supplied image wins over the
+  chained frame at that index — naming a panel for a shot is more specific than "continue" — and a
+  refused one is retried WITHOUT it rather than remixing the previous shot, which would quietly
+  answer a different request.
+- **`seconds_each` defaults to 12, deliberately.** The agent was picking 4s clips and the result read
+  as a slideshow; 12s is fewer seams, less drift and room for the action to move. Per-shot lengths
+  are the rhythm lever, not the default.
+- **Sora refuses `input_reference` containing human faces, so IDENTITY lives in `style`.** A single
+  seed whose face was not visible let Sora invent a different character entirely. `style` is repeated
+  verbatim in every prompt and survives a refusal, so the character description belongs there; the
+  result reports `reference_images_used` vs `..._given` plus `reference_notes` naming the refused
+  shots, which are exactly the ones now depending on `style`. A collage of panels is NOT a fix:
+  `input_reference` is a starting frame, so a collage yields a video of a collage, and compositing
+  several panels makes a visible face — and thus a refusal — more likely, not less.
 - **A remix chains from the PREVIOUS shot, never from shot 1.** Anchoring every fallback remix to
   shot 1 was the original design and it published a reel whose opening moment played three times:
   each later shot applied its own prompt to the same untouched starting point, so nothing advanced.

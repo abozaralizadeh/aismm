@@ -114,7 +114,8 @@ def plan_segments(target_seconds: int, prefer: int = 12) -> dict:
 
 
 def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
-                      continues_from_frame: bool, continues_from_remix: bool = False) -> str:
+                      continues_from_frame: bool, continues_from_remix: bool = False,
+                      is_cut: bool = False, from_supplied_image: bool = False) -> str:
     """Assemble one clip's prompt: style + continuity contract + this scene.
 
     The style block is repeated in EVERY clip — that is lever 1. When a reference
@@ -122,11 +123,38 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
     gets its own wording (lever 3): the source video the model is editing IS the
     previous shot, and saying so is what turns "another take of the same moment"
     into "the next moment".
+
+    Two more contracts, because "continue from the last shot" is not always the
+    right instruction:
+
+    * ``from_supplied_image`` — the reference is a picture the operator chose,
+      NOT the previous shot's tail. Telling the model to "continue from" it makes
+      it try to resume an action that never happened; it should treat it as the
+      look and the subject to open on.
+    * ``is_cut`` — a deliberate cut to a new angle or moment. Without saying so,
+      a later shot handed continuity language produces another take of the same
+      beat, which is what reads as *repeats*. Saying "new shot, same film" is what
+      makes the sequence move.
     """
     parts = []
     if style.strip():
         parts.append(f"STYLE (keep identical in every shot): {style.strip()}")
-    if continues_from_frame:
+    if from_supplied_image:
+        parts.append(
+            "SOURCE IMAGE: the supplied reference is a still of THIS story's "
+            "subject and setting. Match its characters, wardrobe, colours and art "
+            "style exactly, and animate the action described below from it. It is "
+            "a reference for how things LOOK, not a frame to resume — do not treat "
+            "it as a paused video."
+        )
+    elif is_cut:
+        parts.append(
+            "CUT: this is a NEW shot in the same film — a different angle, subject "
+            "or moment. Keep the style, world, characters and wardrobe identical, "
+            "but do NOT continue the previous shot's action or framing. Show what "
+            "is described below as its own moment."
+        )
+    elif continues_from_frame:
         parts.append(
             "CONTINUITY: the supplied reference image is the FINAL FRAME of the "
             "previous shot. Begin this shot from that exact framing, lighting, "
@@ -157,11 +185,18 @@ def _looks_like_reference_rejection(detail: str) -> bool:
 
 
 async def perform_create_sequence(
-    state: dict, scenes: list[str], *, style: str = "", seconds_each: int = 8,
+    state: dict, scenes: list[str], *, style: str = "", seconds_each: int = 12,
     orientation: str = "portrait", continuity: str = "auto",
     scene_seconds: list[int] | None = None, reference_asset_path: str = "",
+    reference_asset_paths: list[str] | None = None,
+    scene_continuity: list[str] | None = None,
 ) -> dict:
-    """Generate each scene with continuity, then merge into one MP4."""
+    """Generate each scene, then merge into one MP4.
+
+    Three per-shot controls, because one setting for the whole sequence is what
+    produced gaps and repeats: ``scene_seconds`` (how long), ``scene_continuity``
+    (continue or cut), and ``reference_asset_paths`` (which picture anchors it).
+    """
     scenes = [s for s in (scenes or []) if (s or "").strip()][:MAX_CLIPS]
     if not scenes:
         return {"error": "no_scenes", "message": "Pass at least one scene description."}
@@ -177,33 +212,69 @@ async def perform_create_sequence(
     lengths = [sora_config.normalize_seconds(s) for s in lengths[:len(scenes)]]
     mode = (continuity or "auto").lower()
 
+    # Per-shot continuity. "" inherits the sequence mode; "cut" makes this shot a
+    # deliberate new angle. A sequence that continues from every shot has no
+    # cuts, which is why a trailer built that way felt like one long take with
+    # repeats in it.
+    per_shot_mode = list(scene_continuity or [])
+    while len(per_shot_mode) < len(scenes):
+        per_shot_mode.append("")
+    per_shot_mode = [(m or "").strip().lower() for m in per_shot_mode[:len(scenes)]]
+
+    # Per-shot reference images. Shot i is anchored to the picture the agent
+    # chose for it; one seed doing the work for a whole sequence is how a
+    # character nobody described drifted into somebody else entirely.
+    supplied = list(reference_asset_paths or [])
+    if reference_asset_path and not supplied:
+        supplied = [reference_asset_path]
+    while len(supplied) < len(scenes):
+        supplied.append("")
+    supplied = supplied[:len(scenes)]
+
+    seeds: list[bytes | None] = []
+    seed_notes: list[str] = []
+    for path in supplied:
+        data, note = load_reference_image(path, size)
+        if path and data is None:
+            logger.warning("Reference %s unusable: %s", path, note)
+            seed_notes.append(f"{path}: {note}")
+        seeds.append(data)
+
     clips: list[bytes] = []
     details: list[dict] = []
     resource = None            # pinned after clip 1 so remix stays available
     previous_job_id = ""       # the shot just rendered — what a remix chains FROM
 
-    # An image the agent chose seeds shot 1; every later shot chains from the
-    # shot before it as usual. Sending the real picture is the whole point —
-    # describing it in the prompt instead discards everything it actually shows.
-    reference, reference_note = load_reference_image(reference_asset_path, size)
-    seeded = reference is not None
-    if reference_asset_path and reference is None:
-        logger.warning("Reference %s unusable: %s", reference_asset_path, reference_note)
+    reference: bytes | None = None      # the previous shot's final frame
+    refused_seeds: list[int] = []
 
     for index, (scene, seconds) in enumerate(zip(scenes, lengths), start=1):
-        # A supplied reference seeds shot 1 even in "none"/"remix" mode: the
-        # operator asked for that picture, which is not the same request as
-        # continuity between shots.
-        use_frame = reference is not None and (mode in {"auto", "frame"}
-                                               or (index == 1 and seeded))
+        shot_mode = per_shot_mode[index - 1] or mode
+        is_cut = shot_mode in {"cut", "none"} and index > 1
+        seed = seeds[index - 1]
+
+        # A picture the agent chose for THIS shot wins over the chained frame:
+        # naming that panel is a more specific instruction than "continue from
+        # the last shot", and the shared style block still carries the look.
+        if seed is not None:
+            active, from_image = seed, True
+        elif is_cut:
+            active, from_image = None, False
+        else:
+            active, from_image = (reference if mode in {"auto", "frame"} else None), False
+
+        use_frame = active is not None
         prompt = build_clip_prompt(scene, style, index=index, total=len(scenes),
-                                   continues_from_frame=use_frame)
+                                   continues_from_frame=use_frame and not from_image,
+                                   is_cut=is_cut, from_supplied_image=from_image)
         clip = job_id = None
         how = ""
 
         # A later clip in remix mode derives from the PREVIOUS shot, so the action
-        # advances. Remixing shot 1 every time replays shot 1 every time.
-        if index > 1 and mode == "remix" and resource is not None and previous_job_id:
+        # advances. Remixing shot 1 every time replays shot 1 every time. A shot
+        # with its own reference image, or a deliberate cut, is never remixed.
+        if (index > 1 and shot_mode == "remix" and seed is None and not is_cut
+                and resource is not None and previous_job_id):
             try:
                 remix_prompt = build_clip_prompt(
                     scene, style, index=index, total=len(scenes),
@@ -217,20 +288,42 @@ async def perform_create_sequence(
             try:
                 if resource is None:
                     clip, job_id, resource = await create_clip_with_failover(
-                        prompt, seconds, size, ref_image_bytes=reference if use_frame else None)
-                    how = "create"
+                        prompt, seconds, size, ref_image_bytes=active)
+                    how = "create+image" if from_image else ("create+frame" if use_frame
+                                                             else "create")
                 else:
                     # Stay on the pinned resource so remix remains possible.
-                    clip, job_id = await create_clip(
-                        resource, prompt, seconds, size,
-                        reference if use_frame else None)
-                    how = "create+frame" if use_frame else "create"
+                    clip, job_id = await create_clip(resource, prompt, seconds, size, active)
+                    how = "create+image" if from_image else ("create+frame" if use_frame
+                                                             else "create")
             except Exception as exc:  # noqa: BLE001
                 detail = format_http_error(exc) if hasattr(exc, "response") else str(exc)
+                # A refused SUPPLIED image is retried without it: the operator
+                # picked that panel for this shot, so remixing the previous shot
+                # would silently answer a different request. The style block still
+                # carries the look.
+                if from_image and _looks_like_reference_rejection(detail):
+                    logger.info("Reference image refused for shot %d (%s); rendering it "
+                                "from the prompt alone", index, detail[:160])
+                    refused_seeds.append(index)
+                    retry_prompt = build_clip_prompt(
+                        scene, style, index=index, total=len(scenes),
+                        continues_from_frame=False, is_cut=is_cut)
+                    try:
+                        if resource is None:
+                            clip, job_id, resource = await create_clip_with_failover(
+                                retry_prompt, seconds, size)
+                        else:
+                            clip, job_id = await create_clip(
+                                resource, retry_prompt, seconds, size, None)
+                        how = "create(image refused)"
+                    except Exception as retry_exc:  # noqa: BLE001
+                        logger.warning("Shot %d failed without its image too: %s",
+                                       index, retry_exc)
                 # Azure refuses input_reference containing faces — exactly where
                 # GenBox loses continuity. Fall back to remixing the PREVIOUS shot
                 # rather than making an unrelated clip (or replaying shot 1).
-                if (use_frame and mode == "auto" and previous_job_id and resource is not None
+                elif (use_frame and mode == "auto" and previous_job_id and resource is not None
                         and _looks_like_reference_rejection(detail)):
                     logger.info("Reference refused for shot %d (%s); remixing shot %d (%s) "
                                 "instead", index, detail[:160], index - 1, previous_job_id)
@@ -269,20 +362,13 @@ async def perform_create_sequence(
                     f" — {seconds}s requested" if "requested_seconds" in detail_row else "",
                     len(clip))
 
-        if mode in {"auto", "frame"}:
+        # Keep the tail frame for whichever later shot wants to continue from it.
+        if mode in {"auto", "frame"} or any(m == "" for m in per_shot_mode[index:]):
             try:
                 reference = await asyncio.to_thread(video.extract_last_frame, clip, size)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Last-frame extraction failed for shot %d: %s", index, exc)
                 reference = None
-
-    if seeded:
-        first = details[0] if details else {}
-        used = str(first.get("how", "")).startswith("create") and "fallback" not in first.get("how", "")
-        if not used:
-            reference_note = reference_note or (
-                "Sora refused the reference image for the first shot (it rejects human "
-                "faces), so that shot came from the prompt alone.")
 
     try:
         merged = await asyncio.to_thread(video.concat_clips, clips, size)
@@ -298,10 +384,20 @@ async def perform_create_sequence(
     result = {"asset_path": path, "public_url": asset["public_url"], "kind": "video",
               "size": size, "duration_seconds": round(duration, 1),
               "clips_merged": len(clips), "shots": details}
-    if reference_asset_path:
-        result["reference_used"] = seeded and not reference_note
-        if reference_note:
-            result["reference_note"] = reference_note
+    asked_for = sum(1 for path in supplied if path)
+    if asked_for:
+        used = sum(1 for row in details if row.get("how", "").startswith("create+image"))
+        result["reference_images_used"] = used
+        result["reference_images_given"] = asked_for
+        notes = list(seed_notes)
+        if refused_seeds:
+            notes.append(
+                f"Sora refused the reference image on shot(s) "
+                f"{', '.join(str(i) for i in refused_seeds)} — it rejects images "
+                f"containing human faces. Those shots came from the prompt and style "
+                f"alone, so describe the character IN `style` to keep them consistent.")
+        if notes:
+            result["reference_notes"] = notes
 
     warnings = []
     if len(clips) < len(scenes):
@@ -335,11 +431,16 @@ def _make_plan_video(state: dict):
 
         Args:
             target_seconds: How long the finished video should be.
-            prefer_clip_seconds: Base clip length — 12 gives the fewest seams and
-                the least visual drift; 4 gives finer control over pacing.
+            prefer_clip_seconds: Base clip length. **Leave this at 12** unless you
+                have a reason: 12s clips give the fewest seams, the least visual
+                drift and room for the action to breathe. Short clips are a tool
+                for specific beats, not a default — a video built from 4s clips is
+                mostly cuts, and each clip has barely time to move.
 
         Returns the segment lengths, the clip count, and the total actually
         achievable — check ``note``, since not every duration is reachable exactly.
+        The plan is a STARTING POINT: vary the real lengths per shot with
+        ``scene_seconds`` so the pacing matches the story rather than a grid.
         """
         return plan_segments(target_seconds, prefer_clip_seconds)
 
@@ -354,55 +455,76 @@ def _make_create_sequence(state: dict):
     async def create_video_sequence(
         scenes: list[str],
         style: str = "",
-        seconds_each: int = 8,
+        seconds_each: int = 12,
         orientation: str = "portrait",
         continuity: str = "auto",
         scene_seconds: list[int] | None = None,
         reference_asset_path: str = "",
+        reference_asset_paths: list[str] | None = None,
+        scene_continuity: list[str] | None = None,
     ) -> dict:
-        """Generate several Sora clips that look like one scene, and merge them.
+        """Generate several Sora clips and merge them into one video.
 
-        Use this for any video longer than 12 seconds. Describe each shot
-        separately, in order; the shots are rendered with continuity between them
-        and stitched into a single MP4 you pass to ``publish``.
+        Use this for any video longer than 12 seconds. YOU direct it: how long
+        each shot runs, which image anchors it, and whether it continues the
+        previous shot or cuts to a new one. Those are per-shot decisions — one
+        setting applied to a whole sequence is what makes a video feel like one
+        long take with repeats in it.
 
         Args:
-            scenes: One description per shot, in order (max 12). Describe only what
-                CHANGES in each — the shared look belongs in ``style``.
-            style: The look to hold constant across every shot: subject, wardrobe,
-                location, lighting, lens, mood. This text is repeated verbatim in
-                every shot's prompt, which is the single most effective thing you
-                can do for consistency. Be specific and reuse it unchanged.
-            seconds_each: Clip length for every shot (snapped to 4, 8 or 12). Keep
-                it the SAME for every shot unless you have a reason: a shot that
-                falls back to remixing cannot change length (see below).
+            scenes: One description per shot, in order (max 12). Describe only
+                what CHANGES in each — the shared look belongs in ``style``. Each
+                scene must be the NEXT beat, never a restatement of the last.
+            style: The look to hold constant across every shot: the CHARACTERS
+                (name, age, hair, eyes, build, wardrobe, distinguishing marks),
+                the location, lighting, lens, palette and mood. Repeated verbatim
+                in every shot's prompt, which is the single most effective thing
+                you can do for consistency — and the only one that still works
+                when a reference image is refused. If a character matters, they
+                belong here in detail; a character nobody described is a
+                character the model invents.
+            seconds_each: Default clip length (snapped to 4, 8 or 12). Prefer 12:
+                fewer, longer shots read as film, while many 4s shots read as a
+                slideshow and give the model no room to move. Use
+                ``scene_seconds`` to vary it per shot.
             orientation: "portrait" for Reels/TikTok/Shorts, "landscape" otherwise.
-            continuity: "auto" (recommended) chains each shot from the previous
-                shot's final frame, and falls back to remixing the previous shot
-                if the reference is refused — which happens whenever human faces
-                are in frame. "frame" chains only. "remix" derives each shot from
-                the one before it, the strongest lever when people are on camera.
-                "none" makes independent clips — use it when the exact per-shot
-                length matters more than the visual match.
-            scene_seconds: Optional per-shot lengths, overriding ``seconds_each``.
-            reference_asset_path: An IMAGE the first shot is built from — an
-                ``asset_path`` from ``save_media``, ``generate_image`` or a
-                reference attachment. The real picture goes to Sora, and later
-                shots chain from it through the sequence. Use this whenever the
-                video should look like something you already have; do NOT
-                describe the image in ``style`` instead, which throws away
-                everything the picture actually shows. Fitted to the clip size
-                for you.
+            continuity: The DEFAULT for shots that don't say otherwise. "auto"
+                (recommended) chains each shot from the previous shot's final
+                frame and falls back to remixing the previous shot if the
+                reference is refused. "remix" derives each from the one before —
+                the strongest lever when people are on camera. "frame" chains
+                only. "none" makes every shot an independent cut.
+            scene_seconds: Per-shot lengths. Match the length to the SHOT: a held
+                emotional beat or an establishing shot wants 12s; a quick reaction
+                or an impact wants 4s. Mixing lengths is what gives a sequence
+                rhythm.
+            scene_continuity: Per-shot direction, one entry per scene. "" (the
+                default) uses ``continuity``. **"cut"** makes that shot a
+                deliberate new angle or moment — same world, same characters, same
+                style, but not a continuation. Use "cut" whenever the story moves
+                to a different place, subject or time; forcing continuity across a
+                jump is what produces gaps and repeated action. "remix" derives
+                this shot from the previous one.
+            reference_asset_paths: One image per shot, same order as ``scenes``;
+                use "" for shots with no image. The real picture is sent to Sora
+                as the look and subject for that shot, so a shot showing a
+                character should be given a panel where that character is clearly
+                visible. This beats one image seeding the whole sequence: a single
+                seed that does not show a face leaves the model to invent one.
+                Do NOT describe an image in the prompt in place of passing it.
+            reference_asset_path: Shorthand for a single image on shot 1.
 
         Returns the merged ``asset_path``, its **measured** duration, and per-shot
-        detail showing how each shot was produced and how long it really is.
+        detail: ``how`` says whether a shot used its image ("create+image"), the
+        previous frame ("create+frame"), a remix, or nothing.
 
-        Two things to check in the result. A remix inherits its source clip's
-        duration, so a shot that falls back to remixing renders at the PREVIOUS
-        shot's length and its ``requested_seconds`` will differ — the ``warning``
-        field says when this happened. And Sora 2 has no seed, so shots are
-        similar rather than identical: keep ``style`` rich, and make each scene a
-        clear step forward in the action rather than a restatement of the last.
+        Check three things in the result. ``reference_images_used`` vs
+        ``reference_images_given`` — Sora rejects images containing human faces,
+        and ``reference_notes`` names the shots it refused, which are exactly the
+        shots whose consistency now depends on ``style``. A remix inherits its
+        source clip's duration, so a shot that fell back to remixing renders at
+        the PREVIOUS shot's length and its ``requested_seconds`` will differ.
+        And Sora 2 has no seed, so shots are similar rather than identical.
         """
         if state.get("video_failures", 0) >= 2:
             return {"error": "video_circuit_open",
@@ -410,7 +532,9 @@ def _make_create_sequence(state: dict):
         result = await perform_create_sequence(
             state, scenes, style=style, seconds_each=seconds_each,
             orientation=orientation, continuity=continuity, scene_seconds=scene_seconds,
-            reference_asset_path=reference_asset_path)
+            reference_asset_path=reference_asset_path,
+            reference_asset_paths=reference_asset_paths,
+            scene_continuity=scene_continuity)
         if result.get("error"):
             state["video_failures"] = state.get("video_failures", 0) + 1
         return result
