@@ -453,3 +453,82 @@ def test_an_older_run_without_a_prompt_says_so(dash, store, instruction):
     run = store.add_run(Run(instruction_id=instruction.id, account_id="a"))
     page = dash.test_client().get(f"/runs/{run.id}").get_data(as_text=True)
     assert "predates prompt capture" in page
+
+
+# --- attaching while CREATING an instruction ----------------------------------------- #
+# Reported: the upload section only appeared once the instruction existed, so the
+# first thing you wanted to give it had to wait for a second visit. An attachment
+# needs an instruction id and there is none until the row is saved — so the file
+# rides along with the save and is attached immediately afterwards.
+
+def test_the_new_instruction_form_offers_a_file(dash):
+    page = dash.test_client().get("/instructions/new").get_data(as_text=True)
+    assert 'enctype="multipart/form-data"' in page
+    assert 'type="file"' in page
+    assert 'name="purpose"' in page
+
+
+def test_a_file_chosen_while_creating_is_attached(dash, store):
+    dash.test_client().post(
+        "/instructions",
+        data={"name": "Comicbook", "publish_mode": "dry_run", "media_pref": "auto",
+              "purpose": "context", "note": "brand voice",
+              "file": (io.BytesIO(text_pdf()), "voice.pdf")},
+        content_type="multipart/form-data", follow_redirects=True)
+
+    instruction = store.list_instructions()[0]
+    files = store.list_instruction_files(instruction.id)
+    assert [f.filename for f in files] == ["voice.pdf"]
+    assert files[0].purpose is AttachmentPurpose.context
+    assert files[0].note == "brand voice"
+    assert "never alarmist" in files[0].text        # same extraction as the edit page
+
+
+def test_the_purpose_is_honoured_on_creation(dash, store):
+    dash.test_client().post(
+        "/instructions",
+        data={"name": "Comicbook", "publish_mode": "dry_run", "media_pref": "auto",
+              "purpose": "reference",
+              "file": (io.BytesIO(png_bytes()), "sheet.png")},
+        content_type="multipart/form-data", follow_redirects=True)
+    files = store.list_instruction_files(store.list_instructions()[0].id)
+    assert files[0].purpose is AttachmentPurpose.reference
+
+
+def test_creating_WITHOUT_a_file_still_works(dash, store):
+    """The field is optional; an empty file part must not fail the save."""
+    response = dash.test_client().post(
+        "/instructions",
+        data={"name": "No file", "publish_mode": "dry_run", "media_pref": "auto"},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert response.status_code == 200
+    instruction = store.list_instructions()[0]
+    assert instruction.name == "No file"
+    assert store.list_instruction_files(instruction.id) == []
+
+
+def test_attaching_on_creation_lands_on_the_edit_page(dash, store):
+    """So you can see what was attached and add more, rather than being sent to
+    the list with no confirmation of the file."""
+    response = dash.test_client().post(
+        "/instructions",
+        data={"name": "Comicbook", "publish_mode": "dry_run", "media_pref": "auto",
+              "file": (io.BytesIO(text_pdf()), "voice.pdf")},
+        content_type="multipart/form-data", follow_redirects=True)
+    page = response.get_data(as_text=True)
+    assert "voice.pdf" in page
+    assert f'value="{store.list_instructions()[0].id}"' in page
+
+
+def test_an_oversized_file_is_refused_but_the_instruction_is_saved(dash, store):
+    """Losing the whole instruction over an attachment would be worse."""
+    huge = io.BytesIO(b"x" * (app_module.MAX_UPLOAD_BYTES + 1))
+    response = dash.test_client().post(
+        "/instructions",
+        data={"name": "Comicbook", "publish_mode": "dry_run", "media_pref": "auto",
+              "file": (huge, "huge.pdf")},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert "the limit is" in response.get_data(as_text=True)
+    instruction = store.list_instructions()[0]
+    assert instruction.name == "Comicbook"
+    assert store.list_instruction_files(instruction.id) == []

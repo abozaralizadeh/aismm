@@ -114,7 +114,15 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   error '402 Payment Required'" told the agent nothing. `Twitter._api_error` explains 402 (billing,
   buy credits at console.x.com), 401/403 (token) and 429 (rate limit) distinctly, and EVERY X call
   path routes through it — `_upload_media` and `fetch_identity` used `raise_for_status()` and so
-  leaked the raw message. **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
+  leaked the raw message. **X 5xx is X, not you** — 503 on `/2/media/upload/initialize` or `POST /2/tweets` is a
+  frequent, documented X-side outage that has run for hours on ONE endpoint while the others
+  worked. `_api_error` says so explicitly and points at republish, because the reflex (regenerate
+  the media, rewrite the caption, reconnect the account) costs money and fixes nothing.
+  `scripts/diagnose_x.py` probes read + media-initialize per account **without posting** to say
+  which endpoint is affected. Media *initialize* is retried (502/503/504, 3 attempts) because it
+  cannot have created anything yet; FINALIZE and `POST /2/tweets` are deliberately NOT retried —
+  X may have accepted them even when the response is lost.
+- **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
   is the generic "One or more parameters to your request was invalid" while `errors[].message` names
   the actual parameter.
 - **X media upload uses the SUB-PATH endpoints, not `command=`**

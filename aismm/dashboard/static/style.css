@@ -371,3 +371,11 @@ th .sort-active { color: var(--accent); }
 }
 .workspace-card { padding: 14px 16px; }
 .workspace-card h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* A grouped block inside a form (the create page's optional file attachment).
+   .form label forces column layout, so the fieldset needs its own framing. */
+.form .subform {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  margin: 4px 0 12px; background: var(--panel-2);
+}
+.form .subform legend { padding: 0 6px; font-weight: 600; }

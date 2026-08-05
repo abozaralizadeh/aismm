@@ -999,6 +999,38 @@ pre-truncating or numbering by hand.
 > Required'` — leaves the agent guessing whether it did something wrong. It didn't, and no rewording
 > of the post will help. Buy credits at [console.x.com](https://console.x.com).
 
+### When X returns 503
+
+`X API 503: Service Unavailable` is **X's own service failing**, not your post, token, app or
+billing — and it is common enough to expect. X has returned 5xx on a single endpoint for hours at a
+time: media upload failing while posting worked, and the reverse. Nothing about the caption, the
+media or the account causes it, so regenerating content or reconnecting the account is wasted
+effort (and, on a pay-per-use API, wasted credits).
+
+To find out which endpoint is affected — without posting anything:
+
+```bash
+python scripts/diagnose_x.py
+```
+
+It reads the profile and starts a media upload, abandoning it before FINALIZE, then reports the
+status of each with X's request id. `--repeat 5` shows whether it is intermittent or solid.
+
+| What it shows | What to do |
+|---|---|
+| Everything 503 | X is down for this app. Wait. |
+| Only media upload 503 | Post text-only meanwhile, or wait. |
+| Only posting 503 | The media is fine — republish when it clears. |
+| 401 / 403 | The token or the app, not X. Reconnect the account. |
+| 402 | Billing: buy credits at console.x.com. |
+
+When X recovers, use **Publish this again** on the failed run rather than re-running the agent: it
+sends the media that run already produced, with no new generation to pay for.
+
+The media *initialize* step retries a 502/503/504 up to three times on its own, because at that
+point X cannot yet have created anything. FINALIZE and the post itself are deliberately not retried
+— X may have accepted them even when its response was lost, and a retry would duplicate the post.
+
 ### Stories, and the music question
 
 **Stories are supported.** `publish(..., placement="story")` creates a `media_type=STORIES`
@@ -1309,7 +1341,9 @@ a successful retry posts for real.
 
 ### Files attached to an instruction
 
-An instruction can carry files, available to **every run** of it, uploaded on its edit page (25MB each):
+An instruction can carry files, available to **every run** of it (25MB each). Attach the first
+one on the **create** form — it is stored as soon as the instruction is saved — and add or remove
+more from its edit page at any time:
 
 | Purpose | What happens |
 |---|---|

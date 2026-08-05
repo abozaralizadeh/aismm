@@ -355,6 +355,16 @@ class Twitter(SocialPlatform):
                     "connected; reads and writes both consume API credits.")
         elif response.status_code == 429:
             hint = " — rate limited; wait before retrying."
+        elif response.status_code >= 500:
+            # X's 5xx are frequent, and have run for hours at a time on a single
+            # endpoint (media upload while tweets worked, and the reverse). None
+            # of it is caused by the caption, the media, the token or the app,
+            # and rewriting the post is wasted effort.
+            hint = (" — this is X's own service failing, NOT your post, token, app or "
+                    "billing. X returns 5xx on one endpoint at a time and it can last "
+                    "hours. Do not regenerate the content: when X recovers, use "
+                    "'Publish this again' on the failed run to send the same media. "
+                    "Check which endpoint is affected with: python scripts/diagnose_x.py")
         # X support can trace a failed request by this id. It is safe to show:
         # unlike Authorization, it grants no access and expires with X's logs.
         headers = getattr(response, "headers", {}) or {}

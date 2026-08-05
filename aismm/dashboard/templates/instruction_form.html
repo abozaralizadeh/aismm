@@ -3,7 +3,8 @@
 {% block content %}
 <h1>{{ "Edit" if instruction else "New" }} instruction</h1>
 
-<form method="post" action="{{ url_for('save_instruction') }}" class="form">
+<form method="post" action="{{ url_for('save_instruction') }}" class="form"
+      enctype="multipart/form-data">
   {% if instruction %}<input type="hidden" name="id" value="{{ instruction.id }}">{% endif %}
 
   <label>Name
@@ -190,14 +191,39 @@
     </label>
   </div>
 
+  {% if not instruction %}
+  <fieldset class="subform">
+    <legend>Attach a file <span class="muted small">— optional</span></legend>
+    <p class="hint">
+      Files every run of this instruction can use. A <strong>context</strong> PDF or image goes to
+      the model as a file, so it reads the real layout and pixels; a <strong>reference</strong>
+      image is handed to the image and video generators to hold a look. Max 25MB.
+      It is attached when you save, and you can add more afterwards.
+    </p>
+    <label>File
+      <input type="file" name="file">
+    </label>
+    <div class="grid-2">
+      <label>Purpose
+        <select name="purpose">
+          {% for p in purposes %}<option value="{{ p.value }}">{{ p.value }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Note <span class="muted small">— what it is for</span>
+        <input type="text" name="note" placeholder="e.g. brand voice guide; use this palette">
+      </label>
+    </div>
+  </fieldset>
+  {% endif %}
+
   <div class="row">
     <button class="btn btn-primary" type="submit">Save</button>
     <a class="btn" href="{{ url_for('instructions') }}">Cancel</a>
   </div>
 </form>
 
+{% if instruction %}<h2>Attached files</h2>{% endif %}
 {% if instruction %}
-<h2>Attached files</h2>
 <p class="muted small">
   Files every run of this instruction can use. A <strong>context</strong> PDF or image is sent to the
   model directly as a file — it reads the real layout and pixels, not our own extraction. Plain text
@@ -206,8 +232,9 @@
   handed to the image or video generator to hold a look, and is never sent to the text model. Max
   25MB per file.
 </p>
+{% endif %}
 
-{% if files %}
+{% if instruction and files %}
 <div class="table-scroll">
 <table>
   <thead><tr><th>File</th><th>Purpose</th><th>Size</th><th>Extracted</th><th>Note</th><th></th></tr></thead>
@@ -233,10 +260,12 @@
   </tbody>
 </table>
 </div>
-{% else %}
+{% elif instruction %}
 <p class="muted">No files attached yet.</p>
 {% endif %}
 
+{% if instruction %}
+{# An existing instruction has an id, so a file can be attached on its own. #}
 <form method="post" enctype="multipart/form-data" class="form card"
       action="{{ url_for('upload_instruction_file', instruction_id=instruction.id) }}">
   <label>Add a file

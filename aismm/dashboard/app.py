@@ -692,6 +692,20 @@ def create_app() -> Flask:
             store.set_memory(instr.id, f.get("memory", "").strip())
         _refresh_scheduler()
         flash(f"Saved instruction '{instr.name}'.", "success")
+
+        # A file chosen on the CREATE form: there was no instruction id to hang
+        # it on until now, so it rides along with the save.
+        attached = False
+        for upload in request.files.getlist("file"):
+            if not upload or not upload.filename:
+                continue
+            ok, message = _attach_file(store, instr.id, upload,
+                                       f.get("purpose", "context"), f.get("note", ""))
+            flash(message, "success" if ok else "error")
+            attached = True
+        if attached:
+            # Land on the edit page so they can see what was attached and add more.
+            return redirect(url_for("edit_instruction", instruction_id=instr.id))
         return redirect(url_for("instructions"))
 
     @app.route("/instructions/<instruction_id>/delete", methods=["POST"])
@@ -753,8 +767,6 @@ def create_app() -> Flask:
         return redirect(request.referrer or url_for("instructions"))
 
     # ---- instruction attachments ----------------------------------------- #
-    MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-
     @app.route("/instructions/<instruction_id>/files", methods=["POST"])
     def upload_instruction_file(instruction_id):
         store = get_store()
@@ -763,29 +775,10 @@ def create_app() -> Flask:
         if not upload or not upload.filename:
             flash("Choose a file to upload.", "error")
             return redirect(url_for("edit_instruction", instruction_id=instruction_id))
-
-        data = upload.read()
-        if len(data) > MAX_UPLOAD_BYTES:
-            flash(f"{upload.filename} is {len(data) // 1024 // 1024}MB; the limit is "
-                  f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.", "error")
-            return redirect(url_for("edit_instruction", instruction_id=instruction_id))
-
-        filename = secure_filename(upload.filename) or "upload"
-        suffix = filename.rsplit(".", 1)[-1] if "." in filename else "bin"
-        content_type = upload.mimetype or ""
-        try:
-            purpose = AttachmentPurpose(request.form.get("purpose", "context"))
-        except ValueError:
-            purpose = AttachmentPurpose.context
-
-        text, note = attachments.extract_text(data, content_type, filename)
-        record = InstructionFile(
-            instruction_id=instruction_id, filename=filename, content_type=content_type,
-            purpose=purpose, asset_path=save_bytes(data, suffix), size_bytes=len(data),
-            text=text, note=request.form.get("note", "").strip() or note)
-        store.add_instruction_file(record)
-        flash(f"Attached {filename}" + (f" — {len(text):,} characters of text extracted"
-                                        if text else f" ({note})" if note else ""), "success")
+        ok, message = _attach_file(store, instruction_id, upload,
+                                   request.form.get("purpose", "context"),
+                                   request.form.get("note", ""))
+        flash(message, "success" if ok else "error")
         return redirect(url_for("edit_instruction", instruction_id=instruction_id))
 
     @app.route("/files/<file_id>/delete", methods=["POST"])
@@ -1051,6 +1044,43 @@ def _tool_catalog(selected: list[str]) -> list[dict]:
     if leftover:
         grouped.append({"title": "Other", "blurb": "", "tools": leftover})
     return grouped
+
+
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+def _attach_file(store, instruction_id: str, upload, purpose_value: str, note: str):
+    """Store one uploaded file against an instruction. Returns ``(ok, message)``.
+
+    Shared by the create form and the edit page's uploader so a file attached
+    while creating an instruction goes through exactly the same extraction,
+    size limit and purpose handling — the create form used to have no uploader
+    at all, because an attachment needs an instruction id and there is none
+    until the row is saved. It is saved first, then the file is attached.
+    """
+    data = upload.read()
+    if not data:
+        return False, f"{upload.filename} is empty."
+    if len(data) > MAX_UPLOAD_BYTES:
+        return False, (f"{upload.filename} is {len(data) // 1024 // 1024}MB; the limit is "
+                       f"{MAX_UPLOAD_BYTES // 1024 // 1024}MB.")
+
+    filename = secure_filename(upload.filename) or "upload"
+    suffix = filename.rsplit(".", 1)[-1] if "." in filename else "bin"
+    content_type = upload.mimetype or ""
+    try:
+        purpose = AttachmentPurpose(purpose_value or "context")
+    except ValueError:
+        purpose = AttachmentPurpose.context
+
+    text, extraction_note = attachments.extract_text(data, content_type, filename)
+    store.add_instruction_file(InstructionFile(
+        instruction_id=instruction_id, filename=filename, content_type=content_type,
+        purpose=purpose, asset_path=save_bytes(data, suffix), size_bytes=len(data),
+        text=text, note=(note or "").strip() or extraction_note))
+    return True, (f"Attached {filename}"
+                  + (f" — {len(text):,} characters of text extracted" if text
+                     else f" ({extraction_note})" if extraction_note else ""))
 
 
 def _warn_about_collateral_damage(store, just_connected, platform,

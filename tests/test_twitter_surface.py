@@ -633,3 +633,27 @@ def test_a_repeated_message_is_not_printed_twice(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(_x().list_posts("t", account))
     assert str(exc.value).count("bad id") == 1
+
+
+def test_a_5xx_is_named_as_X_side_not_as_your_post(monkeypatch):
+    """Reported as "X API 503: Service Unavailable" after a run that had worked
+    the night before. Nothing in the post, token, app or billing causes it, and
+    regenerating the content is wasted money."""
+    _failing_get(monkeypatch, 503, {"title": "Service Unavailable"})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    message = str(exc.value)
+    assert "X's own service failing" in message
+    assert "Publish this again" in message          # the cheap recovery
+    assert "diagnose_x" in message                  # how to pinpoint it
+    assert "BILLING" not in message
+
+
+def test_a_500_and_a_504_get_the_same_treatment(monkeypatch):
+    for status in (500, 502, 504):
+        _failing_get(monkeypatch, status, {"title": "oops"})
+        account = Account(platform=PlatformName.twitter, external_id="9")
+        with pytest.raises(RuntimeError) as exc:
+            asyncio.run(_x().list_posts("t", account))
+        assert "X's own service failing" in str(exc.value)
