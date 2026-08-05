@@ -28,6 +28,7 @@ logger = logging.getLogger("aismm.platforms.twitter")
 
 API = "https://api.x.com/2"
 _CHUNK = 4 * 1024 * 1024  # <5MB per APPEND
+_TRANSIENT_UPLOAD_STATUSES = {502, 503, 504}
 
 # initialize validates media_type against this list, so a PNG announced as
 # image/jpeg is a 400 rather than a re-encode. The bytes are the authority —
@@ -179,9 +180,24 @@ class Twitter(SocialPlatform):
         url = f"{API}/media/upload"
 
         # INITIALIZE — JSON, and total_bytes must be a number.
-        r = await client.post(f"{url}/initialize", headers=headers,
-                              json={"media_type": media_type, "total_bytes": len(data),
-                                    "media_category": category})
+        initialize_payload = {"media_type": media_type, "total_bytes": len(data),
+                              "media_category": category}
+        # A failure before X returns a media id cannot have created upload state
+        # or a tweet, so retrying this narrow operation cannot duplicate a post.
+        # Do not apply the same rule to FINALIZE or POST /tweets: X may have
+        # accepted those even if its response was lost.
+        r = None
+        for attempt, delay in enumerate((0, 1, 3), start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            r = await client.post(f"{url}/initialize", headers=headers, json=initialize_payload)
+            if r.status_code not in _TRANSIENT_UPLOAD_STATUSES:
+                break
+            request_id = (getattr(r, "headers", {}) or {}).get("x-request-id", "")
+            logger.warning("X media initialize returned HTTP %d (attempt %d/3%s); retrying",
+                           r.status_code, attempt,
+                           f", request id {request_id}" if request_id else "")
+        assert r is not None
         if r.status_code >= 400:
             raise self._api_error(r)
         body = r.json()

@@ -118,6 +118,42 @@ def test_a_single_image_post_still_works(api):
     assert api["tweets"][0]["media"]["media_ids"] == ["media1"]
 
 
+def test_transient_media_initialize_failure_is_retried(monkeypatch):
+    from aismm.platforms import twitter as tw
+
+    calls = {"initialize": 0}
+
+    class _Resp:
+        def __init__(self, status, payload):
+            self.status_code, self._payload, self.text, self.headers = status, payload, "", {}
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def post(self, url, **kwargs):
+            if url.endswith("/initialize"):
+                calls["initialize"] += 1
+                return (_Resp(503, {"title": "Service Unavailable"}) if calls["initialize"] == 1
+                        else _Resp(200, {"data": {"id": "media1"}}))
+            if url.endswith("/finalize"):
+                return _Resp(200, {"data": {"id": "media1"}})
+            return _Resp(200, {"data": {"id": "post1"}})
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kwargs: _Client())
+    monkeypatch.setattr(tw, "read_bytes", lambda path: b"\xff\xd8\xffdata")
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(tw.asyncio, "sleep", no_sleep)
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    asyncio.run(_x().publish(access_token="t", account=account, caption="hi", asset_path="/a.jpg",
+                             asset_paths=None, media_kind="image"))
+    assert calls["initialize"] == 2
+
+
 def test_a_community_target_is_sent_with_the_post(api):
     account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
     account.set_meta({"community_id": "123"})
