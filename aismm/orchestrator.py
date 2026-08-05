@@ -13,6 +13,7 @@ import threading
 import time
 
 from . import cooldown, logging_setup, publish_ledger, tokens
+from .config import settings
 from .agent import run_for_account
 from .assets import exists as asset_exists
 from .assets import kind_from_path
@@ -39,7 +40,7 @@ _LOCK_HEARTBEAT = 60
 # a 10-thread pool with max_instances=1, so one run that never returns silences
 # that instruction permanently and leaks a pool thread; ten of them stop every
 # instruction. Nothing in a run legitimately takes this long.
-RUN_TIMEOUT_SECONDS = 3600
+RUN_TIMEOUT_SECONDS = settings.run_timeout_seconds
 
 
 def _run_async(coro):
@@ -53,8 +54,11 @@ async def _with_timeout(coro, seconds: int = 0):
     ``asyncio.TimeoutError`` is ``TimeoutError`` on 3.11+; normalized here so the
     caller can catch the builtin on every supported version.
     """
+    limit = seconds or RUN_TIMEOUT_SECONDS
+    if limit <= 0:
+        return await coro                 # RUN_TIMEOUT_SECONDS=0 disables the ceiling
     try:
-        return await asyncio.wait_for(coro, timeout=seconds or RUN_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(coro, timeout=limit)
     except asyncio.TimeoutError as exc:
         raise TimeoutError(str(exc) or "run timed out") from None
 

@@ -561,6 +561,20 @@ The saved file goes into your own storage — local assets dir, and the blob con
 configured — and is then [converted to the target platform's format](#images-are-converted-locally-to-what-the-platform-accepts)
 at publish time. A 1536×1024 PNG panel becomes a 1440×960 JPEG for Instagram automatically.
 
+### Timeouts
+
+| | Default | Env | What it protects |
+|---|---|---|---|
+| One run | 2 hours | `RUN_TIMEOUT_SECONDS` | APScheduler runs jobs with `max_instances=1`, so a run that never returns silences its instruction **permanently** and leaks a pool thread |
+| One Sora clip | 30 minutes | `SORA_JOB_TIMEOUT_SECONDS` | A resource that stopped answering; the clip is retried on a different one |
+
+`RUN_TIMEOUT_SECONDS=0` removes the run ceiling entirely. Only do that if you understand the
+consequence: one hung run then blocks that instruction until the service is restarted, with nothing
+in the log to say why it stopped posting.
+
+A long video sequence is legitimately slow — nine Sora clips plus merging is tens of minutes — which
+is why the default is two hours rather than one.
+
 ### Directing a video sequence
 
 A reel is several Sora clips merged, and `create_video_sequence` is directed **per shot** rather

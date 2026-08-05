@@ -360,3 +360,72 @@ def test_the_prompt_points_at_the_duration_warning():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS
 
     assert "check `warning`" in MANAGER_INSTRUCTIONS
+
+
+# --- one bad shot must not discard the rest ------------------------------------------ #
+# Reported: a nine-shot trailer came back as a 12-second stub — "only 1 of 9 shots
+# rendered". Shot 2 failed and the loop abandoned shots 3-9 without attempting
+# them. A sequence is independent clips; one failure is a gap, not the end.
+
+def _flaky(monkeypatch, tmp_path, failing: set[int]):
+    """Sora that fails on the given 1-based shot numbers."""
+    calls = {"attempts": 0}
+
+    async def failover(prompt, seconds, size, *, ref_image_bytes=None, **kw):
+        calls["attempts"] += 1
+        if calls["attempts"] in failing:
+            raise RuntimeError(f"shot {calls['attempts']} exploded")
+        return b"clip", f"job-{calls['attempts']}", RESOURCE_A
+
+    async def create(resource, prompt, seconds, size, reference=None):
+        calls["attempts"] += 1
+        if calls["attempts"] in failing:
+            raise RuntimeError(f"shot {calls['attempts']} exploded")
+        return b"clip", f"job-{calls['attempts']}"
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
+    monkeypatch.setattr(sequence_tool, "create_clip", create)
+    monkeypatch.setattr(sequence_tool.video, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(sequence_tool.video, "extract_last_frame", lambda c, s: b"frame")
+    monkeypatch.setattr(sequence_tool.video, "concat_clips",
+                        lambda clips, size: b"merged" * len(clips))
+    monkeypatch.setattr(sequence_tool.video, "duration_seconds", lambda data: 8.0)
+    monkeypatch.setattr(sequence_tool, "save_bytes", lambda data, ext: str(tmp_path / "m.mp4"))
+    monkeypatch.setattr(sequence_tool, "public_url", lambda p: "https://host/m.mp4")
+    return calls
+
+
+def test_a_failed_shot_is_skipped_and_the_rest_still_render(monkeypatch, tmp_path):
+    calls = _flaky(monkeypatch, tmp_path, failing={2})
+    result = asyncio.run(sequence_tool.perform_create_sequence(
+        {}, [f"shot {i}" for i in range(1, 6)]))
+    assert calls["attempts"] == 5                 # every shot was ATTEMPTED
+    assert result["clips_merged"] == 4            # four of five made it
+    assert [row["shot"] for row in result["failed_shots"]] == [2]
+
+
+def test_the_warning_names_which_shots_failed(monkeypatch, tmp_path):
+    _flaky(monkeypatch, tmp_path, failing={2})
+    result = asyncio.run(sequence_tool.perform_create_sequence(
+        {}, [f"shot {i}" for i in range(1, 6)]))
+    assert "shot(s) 2 failed" in result["warning"]
+    assert "publish them if the result still tells the story" in result["warning"]
+
+
+def test_a_failure_on_shot_one_no_longer_ends_the_sequence(monkeypatch, tmp_path):
+    """It used to return immediately, losing eight shots that were never tried."""
+    calls = _flaky(monkeypatch, tmp_path, failing={1})
+    result = asyncio.run(sequence_tool.perform_create_sequence(
+        {}, [f"shot {i}" for i in range(1, 5)]))
+    assert calls["attempts"] == 4
+    assert result["clips_merged"] == 3
+
+
+def test_systemic_failure_stops_rather_than_grinding_through(monkeypatch, tmp_path):
+    """A dead resource or an empty account should not burn twelve attempts."""
+    calls = _flaky(monkeypatch, tmp_path, failing=set(range(1, 13)))
+    result = asyncio.run(sequence_tool.perform_create_sequence(
+        {}, [f"shot {i}" for i in range(1, 10)]))
+    assert calls["attempts"] == sequence_tool._MAX_SHOT_FAILURES
+    assert result["error"] == "video_generation_failed"
+    assert "Every shot failed" in result["message"]

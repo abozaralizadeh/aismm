@@ -70,6 +70,9 @@ logger = logging.getLogger("aismm.tools.sequence")
 
 ALLOWED_SECONDS = (4, 8, 12)
 MAX_CLIPS = 12                      # 12 × 12s = 144s, well past any platform's limit
+# Stop only when the failures look systemic (a dead resource, no credits) rather
+# than incidental. Below this a failed shot is skipped and the sequence goes on.
+_MAX_SHOT_FAILURES = 3
 # Moved to sora_client so generate_video can use it too.
 
 
@@ -247,6 +250,7 @@ async def perform_create_sequence(
 
     reference: bytes | None = None      # the previous shot's final frame
     refused_seeds: list[int] = []
+    failed_shots: list[dict] = []
 
     for index, (scene, seconds) in enumerate(zip(scenes, lengths), start=1):
         shot_mode = per_shot_mode[index - 1] or mode
@@ -336,11 +340,18 @@ async def perform_create_sequence(
                     except Exception as remix_exc:  # noqa: BLE001
                         logger.warning("Remix fallback failed too: %s", remix_exc)
                 if clip is None:
-                    logger.error("Shot %d/%d failed: %s", index, len(scenes), detail[:300])
-                    if not clips:
-                        return {"error": "video_generation_failed",
-                                "message": f"First shot failed: {detail}"}
-                    break        # keep what we have rather than losing everything
+                    # Skip this shot and keep going. Abandoning the rest on the
+                    # first failure turned one transient Sora error into a
+                    # 12-second stub of a nine-shot trailer — eight shots that
+                    # were never even attempted. A sequence is independent
+                    # clips; one bad clip is a gap, not the end.
+                    logger.error("Shot %d/%d failed, continuing with the rest: %s",
+                                 index, len(scenes), detail[:300])
+                    failed_shots.append({"shot": index, "error": detail[:300]})
+                    if len(failed_shots) >= _MAX_SHOT_FAILURES:
+                        logger.error("Giving up after %d failed shots", len(failed_shots))
+                        break
+                    continue
 
         clips.append(clip)
         previous_job_id = job_id or previous_job_id
@@ -369,6 +380,11 @@ async def perform_create_sequence(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Last-frame extraction failed for shot %d: %s", index, exc)
                 reference = None
+
+    if not clips:
+        first = failed_shots[0]["error"] if failed_shots else "no clips were produced"
+        return {"error": "video_generation_failed",
+                "message": f"Every shot failed. First error: {first}"}
 
     try:
         merged = await asyncio.to_thread(video.concat_clips, clips, size)
@@ -400,9 +416,15 @@ async def perform_create_sequence(
             result["reference_notes"] = notes
 
     warnings = []
+    if failed_shots:
+        result["failed_shots"] = failed_shots
     if len(clips) < len(scenes):
-        warnings.append(f"only {len(clips)} of {len(scenes)} shots rendered; "
-                        f"the video is shorter than planned")
+        which = ", ".join(str(row["shot"]) for row in failed_shots)
+        warnings.append(f"only {len(clips)} of {len(scenes)} shots rendered "
+                        f"({'shot(s) ' + which + ' failed' if which else 'some failed'}); "
+                        f"the video is shorter than planned. The clips that DID render "
+                        f"are merged and usable — publish them if the result still tells "
+                        f"the story, or report_failure if it does not")
     # A remix cannot honour a requested length, so say so rather than letting the
     # agent describe a duration the file does not have.
     short = [d for d in details if "requested_seconds" in d]

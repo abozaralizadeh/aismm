@@ -33,6 +33,16 @@ def enabled() -> bool:
     return bool(pool())
 
 
+def job_timeout_seconds() -> float:
+    """How long ONE Sora job may run before it is abandoned.
+
+    A ceiling on a single clip, not on the sequence: the caller retries a timed
+    out clip on a different resource. Twelve-second clips normally return in
+    minutes, so this only fires when a resource has stopped answering.
+    """
+    return float(settings.sora_job_timeout_seconds or 1800)
+
+
 def pool_size() -> int:
     return len(pool())
 

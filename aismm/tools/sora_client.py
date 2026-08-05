@@ -142,7 +142,8 @@ async def remix_video_job(resource, base_job_id, prompt) -> str:
         return resp.json()["id"]
 
 
-async def poll_until_complete(resource, job_id, interval=6.0, timeout=900.0) -> dict:
+async def poll_until_complete(resource, job_id, interval=6.0, timeout=None) -> dict:
+    timeout = config.job_timeout_seconds() if timeout is None else timeout
     url = _videos_url(resource, f"/{job_id}")
     waited = 0.0
     async with httpx.AsyncClient(timeout=60) as client:

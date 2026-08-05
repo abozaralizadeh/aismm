@@ -240,6 +240,15 @@ class Settings:
     enable_scheduler: bool = True
     # Carry-over memory is summarized once it grows past this many characters.
     memory_max_chars: int = 6000
+    # A ceiling on ONE run, not a target. It exists because APScheduler runs jobs
+    # with max_instances=1: a run that never returns silences its instruction
+    # permanently and leaks a pool thread. Generous by default — a nine-shot video
+    # sequence is legitimately tens of minutes of Sora rendering — but never
+    # absent. Set RUN_TIMEOUT_SECONDS=0 to disable it entirely, knowing that a
+    # single hung run then blocks that instruction until the service restarts.
+    run_timeout_seconds: int = 7200
+    # How long ONE Sora job may take before it is abandoned and retried elsewhere.
+    sora_job_timeout_seconds: int = 1800
     # Refuse to publish a caption that narrates the run's own failure. See
     # tools/publish_tool.meta_caption_reason.
     publish_content_guard: bool = True
@@ -382,6 +391,9 @@ def load_settings() -> Settings:
         store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
         memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
+        run_timeout_seconds=int(os.getenv("RUN_TIMEOUT_SECONDS", "7200") or 0),
+        sora_job_timeout_seconds=int(
+            os.getenv("SORA_JOB_TIMEOUT_SECONDS", "1800") or 1800),
         publish_content_guard=_bool(os.getenv("PUBLISH_CONTENT_GUARD"), True),
         publish_duplicate_guard_strict=_bool(
             os.getenv("PUBLISH_DUPLICATE_GUARD_STRICT"), False),

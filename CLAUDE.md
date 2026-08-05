@@ -328,6 +328,12 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
 - **AI disclosure is per instruction too** (`Instruction.disclose_ai` checkbox). The global
   `AI_DISCLOSURE_ENABLED` is the master — an instruction may opt out below it, never back on.
 
+- **A failed shot is SKIPPED, not the end of the sequence** (`_MAX_SHOT_FAILURES`). The loop used to
+  `break` on the first failure, which turned one transient Sora error into "only 1 of 9 shots
+  rendered" — eight shots never even attempted, and a 12s stub of a 45s trailer. Shots are
+  independent clips, so a failure is a gap; only a systemic problem (3 failures: dead resource, no
+  credits) stops it. `failed_shots` names them and the `warning` tells the agent the merged clips
+  are still usable.
 - **Multi-clip video** ([tools/sequence_tool.py](aismm/tools/sequence_tool.py) +
   [video.py](aismm/video.py)): Sora renders 4/8/12s, so longer videos are merged with
   imageio-ffmpeg's bundled binary. Three consistency levers, all applied together because GenBox
@@ -540,7 +546,8 @@ Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_E
   that no longer existed. Now a live run renews its lock every 60s and the TTL is 300s, so an orphaned
   lock clears in one TTL. Don't raise `_LOCK_TTL` to "allow longer runs" — that is what the heartbeat
   is for; the TTL only measures how long a *dead* owner blocks the next run.
-- **A run has a wall-clock ceiling** (`RUN_TIMEOUT_SECONDS`, 1h). APScheduler runs jobs in a bounded
+- **A run has a wall-clock ceiling** (`settings.run_timeout_seconds`, default 2h, env
+  `RUN_TIMEOUT_SECONDS`; `0` disables it). APScheduler runs jobs in a bounded
   pool with `max_instances=1`, so one run that never returns silences its instruction *permanently*
   and leaks a pool thread; enough of them stop every instruction. The scheduler also logs
   `EVENT_JOB_MAX_INSTANCES`/`EVENT_JOB_MISSED` — a skipped fire used to be completely silent, which is
