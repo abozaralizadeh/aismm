@@ -74,7 +74,7 @@ def _make_recent_posts(state: dict):
         return None
 
     @function_tool
-    async def instagram_recent_posts(limit: int = 10) -> dict:
+    async def instagram_recent_posts(limit: int = 25) -> dict:
         """List this account's recent Instagram posts, with captions and counts.
 
         Use it to see what has already been published before choosing a topic —
@@ -82,7 +82,9 @@ def _make_recent_posts(state: dict):
         established voice from its own back catalogue.
 
         Args:
-            limit: How many posts to return (1–100, newest first).
+            limit: How many posts to return, newest first. Pages automatically,
+                so ask for as many as the job needs — up to 500. Walking back to
+                the start of a story arc usually needs far more than the default.
         """
         async def call(platform, account, token):
             posts = await platform.list_media(token, account, limit=limit)

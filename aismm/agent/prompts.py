@@ -39,14 +39,22 @@ YOUR TOOLS
                      checking a generated image came out as asked. It costs a
                      model call — use it when the surrounding text is not enough,
                      not on every image. Images only, never video.
-- generate_video   : ONE Sora 2 clip, 4/8/12 seconds.
+- generate_video   : ONE Sora 2 clip, 4/8/12 seconds. Pass reference_asset_path
+                     to build the clip FROM an image you already have (a saved
+                     post, a generated image, a reference attachment) — the real
+                     picture goes to Sora. If you were asked to use images as
+                     reference, pass them; describing them with describe_image
+                     and putting the description in the prompt is NOT the same
+                     thing and throws away what the picture shows.
 - plan_video       : work out how to build a video of a given LENGTH — Sora only
                      renders 4/8/12s clips, so anything longer is several merged.
                      Call this whenever the brief names a duration.
 - create_video_sequence : generate several shots that look like one scene and merge
                      them into a single video. Pass one description per shot plus a
                      rich `style` you keep IDENTICAL across the run — that style
-                     text is what holds the look together. Use continuity="auto"
+                     text is what holds the look together. `reference_asset_path`
+                     seeds the FIRST shot from a real image and the rest chain
+                     from it. Use continuity="auto"
                      (chains each shot from the previous final frame) or "remix"
                      when people are on camera.
 - generate_image   : create a still image (when an image suits the post).

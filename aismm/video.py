@@ -104,15 +104,40 @@ def extract_last_frame(clip_bytes: bytes, size: str) -> bytes:
 
 
 def _normalize(source: str, destination: str, size: str) -> None:
-    """Re-encode one clip to uniform H.264/AAC at ``size``, adding silence if mute."""
+    """Re-encode one clip to uniform H.264/AAC at ``size``, adding silence if mute.
+
+    Two things beyond the re-encode, both about clips that did not come from Sora
+    (anything ``save_media`` pulled off the web or a phone):
+
+    **Rotation is baked in, and the flag is cleared.** A portrait video shot on a
+    phone is usually stored landscape with a 90° display matrix that the player
+    applies. ffmpeg autorotates when filtering, so the pixels come out upright —
+    but if the display matrix also survives into the output, the player rotates
+    the *already upright* picture a second time, which is how merged clips ended
+    up on their side. ``-metadata:s:v:0 rotate=0`` clears it on the way out.
+
+    Do **not** "fix" this with ``-display_rotation 0`` on the input: that does not
+    mean "bake it in", it means *ignore* the source's rotation, so a phone video
+    stays sideways. Measured: with that flag a 360x640 clip flagged 90° filled a
+    720x1280 frame (i.e. was never rotated); with plain autorotation it became
+    640x360 letterboxed, which is correct.
+
+    **Fit and pad, never stretch.** ``scale=w:h`` alone squashes a 9:16 clip into
+    a 16:9 frame. Letterboxing keeps every source's geometry, which matters as
+    soon as one sequence mixes a saved post with a generated clip.
+    """
     width, height = (int(part) for part in size.split("x"))
-    video_filter = f"scale={width}:{height},setsar=1,fps={FPS}"
+    video_filter = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                    f"setsar=1,fps={FPS}")
+    source_args = ["-i", source]      # autorotation is ffmpeg's default; keep it
     common = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(FPS),
+              "-metadata:s:v:0", "rotate=0",
               "-c:a", "aac", "-ar", SAMPLE_RATE, "-ac", CHANNELS, destination]
     if has_audio(source):
-        _run([ffmpeg_exe(), "-y", "-i", source, "-vf", video_filter, *common])
+        _run([ffmpeg_exe(), "-y", *source_args, "-vf", video_filter, *common])
     else:
-        _run([ffmpeg_exe(), "-y", "-i", source,
+        _run([ffmpeg_exe(), "-y", *source_args,
               "-f", "lavfi", "-i",
               f"anullsrc=channel_layout=stereo:sample_rate={SAMPLE_RATE}",
               "-vf", video_filter, "-map", "0:v:0", "-map", "1:a:0", "-shortest",

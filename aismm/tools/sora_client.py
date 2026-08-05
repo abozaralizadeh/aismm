@@ -37,6 +37,46 @@ _SUCCESS_STATES = {"completed", "succeeded"}
 _FAILURE_STATES = {"failed", "cancelled", "canceled"}
 
 
+# Azure's Sora refuses an ``input_reference`` containing human faces, and says so
+# in prose rather than with a code. Shared by every caller that passes one.
+FACE_REJECTION_MARKERS = ("input_reference", "face", "person", "people", "human")
+
+
+def looks_like_reference_rejection(detail: str) -> bool:
+    low = (detail or "").lower()
+    return any(marker in low for marker in FACE_REJECTION_MARKERS)
+
+
+def load_reference_image(asset_path: str, size: str):
+    """``(png_bytes, note)`` for an image the agent chose as a reference.
+
+    Returns ``(None, why)`` when it cannot be used, so the caller can generate
+    from the prompt alone rather than failing the whole clip. Sora requires the
+    reference to match the clip's dimensions exactly, so it is letterboxed to
+    ``size`` here — the agent should not have to know that.
+    """
+    from ..assets import exists as asset_exists
+    from ..assets import read_bytes
+    from .. import media
+
+    path = (asset_path or "").strip()
+    if not path:
+        return None, ""
+    if not asset_exists(path):
+        return None, (f"No asset at {path} — pass an asset_path from save_media, "
+                      f"generate_image or a reference attachment.")
+    try:
+        data = read_bytes(path)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Could not read {path}: {exc}"
+    if data[4:8] == b"ftyp" or path.lower().endswith((".mp4", ".mov", ".webm")):
+        return None, "A reference must be an image, not a video."
+    try:
+        return media.fit_reference(data, size), ""
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Could not prepare {path} as a reference: {exc}"
+
+
 def format_http_error(exc: httpx.HTTPStatusError) -> str:
     """Build an actionable message from an Azure error response (status + body).
 

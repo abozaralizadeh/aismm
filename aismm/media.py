@@ -256,3 +256,24 @@ def image_needs_conversion(asset_path: str, caps) -> bool:
         return False
     ext = Path(asset_path).suffix.lower().lstrip(".")
     return ext not in formats
+
+
+def fit_reference(data: bytes, size: str) -> bytes:
+    """Letterbox an arbitrary image to exactly ``size``, as PNG.
+
+    Sora rejects an ``input_reference`` whose dimensions do not match the
+    requested clip size, so an image saved from a page or a post — any shape,
+    any format — has to be fitted first. Padded, never cropped or stretched:
+    the point of a reference is what it looks like, and a squashed character
+    sheet is a worse reference than a letterboxed one.
+    """
+    from PIL import Image, ImageOps
+
+    width, height = (int(part) for part in size.lower().split("x"))
+    image = _flatten(_load(data))
+    scaled = ImageOps.contain(image, (width, height), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    canvas.paste(scaled, ((width - scaled.width) // 2, (height - scaled.height) // 2))
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()

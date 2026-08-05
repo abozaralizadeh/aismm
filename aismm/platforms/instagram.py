@@ -37,6 +37,9 @@ from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
 
 GRAPH_VERSION = "v21.0"
+# One request is capped at 100 by Graph; this bounds how many pages we walk.
+MAX_MEDIA_PAGE_TOTAL = 500
+
 GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
 logger = logging.getLogger("aismm.platforms.instagram")
@@ -745,10 +748,29 @@ class Instagram(SocialPlatform):
 
     async def list_media(self, access_token: str, account: Account, *, limit: int = 10,
                          fields: str = "") -> list[dict]:
-        """Recent posts on this account, with their captions and counts."""
-        payload = await self._graph_get(access_token, f"{account.external_id}/media", {
-            "fields": fields or self.MEDIA_FIELDS, "limit": max(1, min(limit, 100))})
-        return payload.get("data", [])
+        """Recent posts on this account, with their captions and counts.
+
+        **Pages.** Graph caps one response at 100 regardless of what you ask for,
+        so a request for 200 used to come back with 100 and no indication that
+        anything was missing — which silently truncates work that walks back
+        through an arc ("every post since the intro"). Follow ``paging.next``
+        until the caller's limit is met or the account runs out.
+        """
+        wanted = max(1, min(int(limit or 10), MAX_MEDIA_PAGE_TOTAL))
+        collected: list[dict] = []
+        params = {"fields": fields or self.MEDIA_FIELDS, "limit": min(wanted, 100)}
+        path = f"{account.external_id}/media"
+        while True:
+            payload = await self._graph_get(access_token, path, params)
+            collected.extend(payload.get("data") or [])
+            if len(collected) >= wanted:
+                break
+            after = (((payload.get("paging") or {}).get("cursors") or {}).get("after") or "")
+            if not after or not (payload.get("paging") or {}).get("next"):
+                break
+            params = {**params, "after": after,
+                      "limit": min(wanted - len(collected), 100)}
+        return collected[:wanted]
 
     async def list_comments(self, access_token: str, media_id: str, *,
                             limit: int = 25) -> list[dict]:

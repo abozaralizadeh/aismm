@@ -61,13 +61,16 @@ from .. import video
 from ..assets import public_url, save_bytes
 from . import sora_config
 from .registry import register_tool
-from .sora_client import create_clip, create_clip_with_failover, format_http_error, remix_clip
+from .sora_client import (
+    create_clip, create_clip_with_failover, format_http_error, load_reference_image,
+    looks_like_reference_rejection, remix_clip,
+)
 
 logger = logging.getLogger("aismm.tools.sequence")
 
 ALLOWED_SECONDS = (4, 8, 12)
 MAX_CLIPS = 12                      # 12 × 12s = 144s, well past any platform's limit
-_FACE_REJECTION_MARKERS = ("input_reference", "face", "person", "people", "human")
+# Moved to sora_client so generate_video can use it too.
 
 
 def plan_segments(target_seconds: int, prefer: int = 12) -> dict:
@@ -150,14 +153,13 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
 
 
 def _looks_like_reference_rejection(detail: str) -> bool:
-    low = (detail or "").lower()
-    return any(marker in low for marker in _FACE_REJECTION_MARKERS)
+    return looks_like_reference_rejection(detail)
 
 
 async def perform_create_sequence(
     state: dict, scenes: list[str], *, style: str = "", seconds_each: int = 8,
     orientation: str = "portrait", continuity: str = "auto",
-    scene_seconds: list[int] | None = None,
+    scene_seconds: list[int] | None = None, reference_asset_path: str = "",
 ) -> dict:
     """Generate each scene with continuity, then merge into one MP4."""
     scenes = [s for s in (scenes or []) if (s or "").strip()][:MAX_CLIPS]
@@ -179,10 +181,21 @@ async def perform_create_sequence(
     details: list[dict] = []
     resource = None            # pinned after clip 1 so remix stays available
     previous_job_id = ""       # the shot just rendered — what a remix chains FROM
-    reference: bytes | None = None
+
+    # An image the agent chose seeds shot 1; every later shot chains from the
+    # shot before it as usual. Sending the real picture is the whole point —
+    # describing it in the prompt instead discards everything it actually shows.
+    reference, reference_note = load_reference_image(reference_asset_path, size)
+    seeded = reference is not None
+    if reference_asset_path and reference is None:
+        logger.warning("Reference %s unusable: %s", reference_asset_path, reference_note)
 
     for index, (scene, seconds) in enumerate(zip(scenes, lengths), start=1):
-        use_frame = mode in {"auto", "frame"} and reference is not None
+        # A supplied reference seeds shot 1 even in "none"/"remix" mode: the
+        # operator asked for that picture, which is not the same request as
+        # continuity between shots.
+        use_frame = reference is not None and (mode in {"auto", "frame"}
+                                               or (index == 1 and seeded))
         prompt = build_clip_prompt(scene, style, index=index, total=len(scenes),
                                    continues_from_frame=use_frame)
         clip = job_id = None
@@ -263,6 +276,14 @@ async def perform_create_sequence(
                 logger.warning("Last-frame extraction failed for shot %d: %s", index, exc)
                 reference = None
 
+    if seeded:
+        first = details[0] if details else {}
+        used = str(first.get("how", "")).startswith("create") and "fallback" not in first.get("how", "")
+        if not used:
+            reference_note = reference_note or (
+                "Sora refused the reference image for the first shot (it rejects human "
+                "faces), so that shot came from the prompt alone.")
+
     try:
         merged = await asyncio.to_thread(video.concat_clips, clips, size)
     except Exception as exc:  # noqa: BLE001
@@ -277,6 +298,10 @@ async def perform_create_sequence(
     result = {"asset_path": path, "public_url": asset["public_url"], "kind": "video",
               "size": size, "duration_seconds": round(duration, 1),
               "clips_merged": len(clips), "shots": details}
+    if reference_asset_path:
+        result["reference_used"] = seeded and not reference_note
+        if reference_note:
+            result["reference_note"] = reference_note
 
     warnings = []
     if len(clips) < len(scenes):
@@ -333,6 +358,7 @@ def _make_create_sequence(state: dict):
         orientation: str = "portrait",
         continuity: str = "auto",
         scene_seconds: list[int] | None = None,
+        reference_asset_path: str = "",
     ) -> dict:
         """Generate several Sora clips that look like one scene, and merge them.
 
@@ -359,6 +385,14 @@ def _make_create_sequence(state: dict):
                 "none" makes independent clips — use it when the exact per-shot
                 length matters more than the visual match.
             scene_seconds: Optional per-shot lengths, overriding ``seconds_each``.
+            reference_asset_path: An IMAGE the first shot is built from — an
+                ``asset_path`` from ``save_media``, ``generate_image`` or a
+                reference attachment. The real picture goes to Sora, and later
+                shots chain from it through the sequence. Use this whenever the
+                video should look like something you already have; do NOT
+                describe the image in ``style`` instead, which throws away
+                everything the picture actually shows. Fitted to the clip size
+                for you.
 
         Returns the merged ``asset_path``, its **measured** duration, and per-shot
         detail showing how each shot was produced and how long it really is.
@@ -375,7 +409,8 @@ def _make_create_sequence(state: dict):
                     "message": "Video generation failed repeatedly this run."}
         result = await perform_create_sequence(
             state, scenes, style=style, seconds_each=seconds_each,
-            orientation=orientation, continuity=continuity, scene_seconds=scene_seconds)
+            orientation=orientation, continuity=continuity, scene_seconds=scene_seconds,
+            reference_asset_path=reference_asset_path)
         if result.get("error"):
             state["video_failures"] = state.get("video_failures", 0) + 1
         return result
