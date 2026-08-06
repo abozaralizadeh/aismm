@@ -99,21 +99,32 @@ def test_an_empty_filter_result_offers_a_way_back(dash, store):
     assert "No instructions yet" not in page          # not the same situation
 
 
-def test_the_newest_media_is_shown_as_a_thumbnail(dash, store, account, tmp_path):
-    """The fastest way to spot an instruction that has quietly gone wrong."""
+def test_a_run_shows_what_it_produced(dash, store, account):
+    """On the RUNS list, where each row has its own asset — the fastest way to
+    spot a run that went wrong without opening it."""
     instruction = _instruction(store, "Comicbook")
-    (tmp_path / "assets" / "panel.jpg").write_bytes(b"\xff\xd8\xff")
     store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
                       status=RunStatus.published, asset_path="/x/panel.jpg"))
-    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    page = dash.test_client().get("/runs").get_data(as_text=True)
     assert 'class="thumb"' in page
     assert "panel.jpg" in page
 
 
-def test_an_instruction_with_no_media_still_renders(dash, store):
-    _instruction(store, "Fresh")
-    page = dash.test_client().get("/instructions").get_data(as_text=True)
+def test_a_run_with_no_media_still_renders(dash, store, account):
+    instruction = _instruction(store, "Comicbook")
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.failed))
+    page = dash.test_client().get("/runs").get_data(as_text=True)
     assert "thumb-empty" in page
+
+
+def test_the_instruction_list_has_no_thumbnail(dash, store, account):
+    """It belonged on runs: an instruction has no media of its own."""
+    instruction = _instruction(store, "Comicbook")
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.published, asset_path="/x/panel.jpg"))
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert 'class="thumb"' not in page
 
 
 # --- 2 & 3. reviewing staged media ---------------------------------------------------- #

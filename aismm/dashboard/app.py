@@ -742,26 +742,12 @@ def create_app() -> Flask:
             # the reading is the thing you actually want to check.
             readbacks={i.id: describe_schedule(i.schedule) if i.schedule else ""
                        for i in rows},
-            thumbnails=_latest_media(store, scope), total=len(rows),
+            total=len(rows),
             modes=list(PublishMode), sorts=INSTRUCTION_SORTS,
             filters={"q": search, "enabled": enabled, "mode": mode, "sort": sort,
                      "dir": "desc" if descending else "asc"},
             instructions_url=instructions_url,
         )
-
-    def _latest_media(store, scope):
-        """Newest asset per instruction — one query, not one per row.
-
-        Seeing what an instruction has been producing is the fastest way to spot
-        one that has quietly gone wrong, so it belongs on the list rather than
-        two clicks away.
-        """
-        newest: dict[str, str] = {}
-        for run in store.list_runs(limit=300, workspace_id=scope, sort="created_at",
-                                   descending=True):
-            if run.asset_path and run.instruction_id not in newest:
-                newest[run.instruction_id] = run.asset_path.split("/")[-1]
-        return newest
 
     @app.route("/instructions/new")
     def new_instruction():

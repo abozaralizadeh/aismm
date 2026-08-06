@@ -238,3 +238,43 @@ def test_the_agent_is_told_it_can_look_at_images():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS
 
     assert "describe_image" in MANAGER_INSTRUCTIONS
+
+
+# --- it must not be used to proof-read our own output --------------------------------- #
+# Reported: an image generation run FAILED because the agent checked its own
+# output with describe_image, which read a correct Persian footer as garbled and
+# a correct phone number as malformed. Both images were fine. A verifier less
+# reliable than the thing it verifies will veto good work.
+
+def test_the_tool_warns_against_proof_reading_generated_images():
+    import inspect
+
+    source = inspect.getsource(vision_tool)
+    assert "Do not use this to proof-read an image you generated" in source
+    # ...and says WHY, so the caution survives an edit that shortens it.
+    for reason in ("phone numbers", "non-Latin scripts", "right-to-left"):
+        assert reason in source
+
+
+def test_the_tool_no_longer_advertises_checking_your_own_image():
+    """This line is what invited the behaviour in the first place."""
+    import inspect
+
+    source = inspect.getsource(vision_tool)
+    assert "came out right" not in source
+
+
+def test_the_prompt_says_the_same():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "NEVER use it to proof-read an image YOU generated" in p
+    assert "came out as asked" not in p
+
+
+def test_the_prompt_forbids_inventing_acceptance_tests():
+    """The failures listed are failures of INPUT. Producing an image you asked
+    for correctly is finished work."""
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "Do not\ninvent extra acceptance tests of your own OUTPUT" in p
+    assert "let\nthe human looking at the approval queue decide" in p

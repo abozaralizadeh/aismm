@@ -295,6 +295,15 @@ both layers.
   form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus
   and never returns. `tests/test_responsive.py` enforces both; it also covers the viewport tag, the
   scrollable nav, and 44px tap targets.
+- **`describe_image` must NEVER proof-read our own generated image.** It reads text
+  approximately and is worst at exactly what is worth checking — phone numbers, non-Latin scripts,
+  RTL, small print. A live run failed because it read a *correct* Persian footer as garbled and a
+  *correct* phone number as malformed: a verifier less reliable than the thing it verifies vetoes
+  good work, burns a second generation, and can fail the run. The tool docstring and the prompt both
+  forbid it now; the earlier wording ("checking a generated image came out as asked") is what invited
+  it. The prompt also says the report_failure cases are failures of **input** — the agent must not
+  invent acceptance tests of its own **output** and fail on them; when unsure, publish through the
+  instruction's gate and let the approval queue decide.
 - **Preview media is `object-fit: contain`, thumbnails are `cover`.** A 9:16 reel cropped into a
   4:3 box means reviewing a post whose edges you cannot see — so anything being *judged*
   (`.staged-media`, `.detail-media`) letterboxes, while a 52px thumbnail may crop because it is a
@@ -307,7 +316,7 @@ both layers.
   scrolls at 70vh rather than pushing the page down.
 - **Instructions are filtered in the VIEW, runs in the STORE.** Deliberate asymmetry: the run table
   grows without bound and must be paged in SQL, while an operator has tens of instructions. The
-  thumbnail column is ONE `list_runs` call mapped by instruction, never one query per row.
+  media thumbnail belongs on the RUNS list — a run has an asset, an instruction does not.
 - **Never put `display:flex` on a `<td>`** — it drops the cell out of table layout and its contents
   overlap the neighbouring columns. Row actions are `<td class="actions-cell"><div class="actions">`;
   the cell is `width:1%` + `nowrap` so it shrinks to fit rather than being squeezed by the data

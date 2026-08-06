@@ -40,27 +40,11 @@
 <div class="table-scroll">
 <table>
   <thead>
-    <tr><th></th><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
+    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
   </thead>
   <tbody>
   {% for i in instructions %}
     <tr>
-      <td class="thumb-cell">
-        {% set thumb = thumbnails.get(i.id) %}
-        {% if thumb %}
-          <a href="{{ url_for('edit_instruction', instruction_id=i.id) }}"
-             title="Newest media this instruction produced">
-            {% if thumb.lower().endswith(('.mp4', '.mov', '.webm')) %}
-              <video class="thumb" src="{{ url_for('asset', filename=thumb) }}#t=0.5"
-                     preload="metadata" muted playsinline></video>
-            {% else %}
-              <img class="thumb" src="{{ url_for('asset', filename=thumb) }}" alt="" loading="lazy">
-            {% endif %}
-          </a>
-        {% else %}
-          <span class="thumb thumb-empty" aria-hidden="true"></span>
-        {% endif %}
-      </td>
       <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
       <td class="small">{{ i.account_ids|length }}</td>
       <td class="schedule-cell small">

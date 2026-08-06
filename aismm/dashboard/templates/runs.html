@@ -107,6 +107,7 @@
 <div class="table-scroll">
 <table>
   <thead><tr>
+    <th></th>
     <th>{{ sort_header('created_at', 'When', filters, runs_url) }}</th>
     <th>{{ sort_header('instruction_id', 'Instruction', filters, runs_url) }}</th>
     <th>{{ sort_header('account_id', 'Account', filters, runs_url) }}</th>
@@ -119,6 +120,21 @@
     {% set instr = instructions.get(r.instruction_id) %}
     {% set acct = accounts.get(r.account_id) %}
     <tr>
+      <td class="thumb-cell">
+        {# What this run actually produced. Seeing it in the list is the fastest
+           way to spot a run that went wrong without opening it. #}
+        {% set file = r.asset_path.split('/')[-1] if r.asset_path else '' %}
+        <a href="{{ url_for('run_detail', run_id=r.id) }}">
+          {% if file and file.lower().endswith(('.mp4', '.mov', '.webm')) %}
+            <video class="thumb" src="{{ url_for('asset', filename=file) }}#t=0.5"
+                   preload="metadata" muted playsinline></video>
+          {% elif file %}
+            <img class="thumb" src="{{ url_for('asset', filename=file) }}" alt="" loading="lazy">
+          {% else %}
+            <span class="thumb thumb-empty" aria-hidden="true"></span>
+          {% endif %}
+        </a>
+      </td>
       <td class="small nowrap">
         <a href="{{ url_for('run_detail', run_id=r.id) }}">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</a>
       </td>

@@ -129,16 +129,25 @@ def _make_describe_image(state: dict):
         """LOOK at an image and get back a description of what is in it.
 
         You cannot see images by default — ``browse_page`` gives you a URL and
-        alt text, not the picture. Call this when the answer is *in* the image:
-        which panel shows what, the text in a speech bubble, whether a chart or a
-        photo is actually there, whether a generated image came out right, or
-        which of several images to post.
+        alt text, not the picture. Call this to UNDERSTAND an image you did not
+        make: which panel shows what, roughly what a speech bubble says, whether
+        a chart or a photo is actually there, or which of several images to post.
 
         ``asset_path_or_url`` is either an ``asset_path`` from ``save_media`` /
         ``generate_image``, or a public image URL from ``browse_page``.
         ``question`` narrows the description — "what does the sign say?", "is the
         character holding a letter?" — and is far more useful than a generic
         look. Images only; a video cannot be described this way.
+
+        **Do not use this to proof-read an image you generated.** It reads text
+        approximately, and it is least reliable on exactly the things worth
+        checking: phone numbers, non-Latin scripts, right-to-left text, small
+        print. It has reported a correct phone number as malformed and a correct
+        Persian footer as garbled — a false alarm here throws away a good image,
+        burns another generation, and can fail the whole run. If exact rendered
+        wording matters, keep it out of the image and put it in the caption, or
+        stage the post for a human to look at. Judge your own output by whether
+        you asked for the right thing, not by asking this whether it arrived.
 
         This costs a model call, so use it when the surrounding text is not
         enough, not on every image you come across.
