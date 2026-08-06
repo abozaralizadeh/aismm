@@ -485,3 +485,60 @@ def test_the_single_path_shorthand_still_works(seq, monkeypatch, tmp_path):
     _run_sequence(["a", "b"], reference_asset_path=paths[0])
     assert seq["creates"][0]["reference"] is not None
     assert seq["creates"][1]["reference"] == b"tail-frame"
+
+
+# --- the agent is told how to get a reference worth passing ---------------------------- #
+# Sora has no seed, so a character nobody pinned down is a character it invents.
+# The routine — character sheet, then paint the opening frame of every cut with
+# the image tool, then hand those frames to the sequence — is expressible with
+# the tools as they are, so it lives in the prompt rather than in code.
+
+def test_the_prompt_describes_the_character_sheet_routine():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "CHARACTER SHEET" in p
+    # Reuse before regeneration: attached file, then memory, then real pictures,
+    # and only then generate one.
+    assert "reference file" in p and "update_memory" in p
+    assert "generate_image" in p
+
+
+def test_the_prompt_says_to_paint_the_opening_frame_of_every_cut():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "OPENING FRAME" in p
+    assert "every \"cut\" shot" in p
+
+
+def test_the_prompt_says_continuing_shots_need_no_image():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "SHOTS THAT CONTINUE" in p
+
+
+def test_the_prompt_still_warns_that_a_painted_frame_can_be_refused():
+    """The sheet does not remove Sora's face restriction, so `style` still has to
+    carry the character."""
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "refuse a painted frame" in p
+    assert "reference_notes" in p
+
+
+def test_the_sequence_tool_points_at_the_image_tool():
+    """The agent reads the tool docstring at call time, not just the system prompt."""
+    import inspect
+
+    source = inspect.getsource(sequence_tool)
+    assert "generate_image" in source
+    assert "opening frame" in source.lower()
+
+
+def test_the_image_tool_mentions_the_character_sheet():
+    import inspect
+
+    from aismm.tools import image_tool
+
+    source = inspect.getsource(image_tool)
+    assert "CHARACTER SHEET" in source
+    assert "OPENING FRAME" in source

@@ -618,6 +618,20 @@ for a shot is a more specific instruction than "continue from the last shot". A 
 retried *without* it rather than substituting a remix of the previous shot, which would quietly
 answer a different request.
 
+**Paint the opening frame of every cut.** The strongest way to fill
+`reference_asset_paths` is not to hunt for a suitable existing picture — it is to generate one:
+
+1. **Build a character sheet once.** An attached reference file, or real pictures of the character,
+   or `generate_image` from a full description. Its `asset_path` goes into the instruction's memory
+   so later runs reuse the same character instead of drifting weekly.
+2. **Decide the shot list and where the cuts fall.**
+3. **For shot 1 and every `"cut"` shot**, call `generate_image` with the character sheet in *its*
+   `reference_asset_paths`, describing that exact moment, and pass the result as that shot's video
+   reference. Image generation accepts up to 16 references and none of the video model's
+   restrictions, so this is where you actually control who is on screen.
+4. **Shots that continue need nothing** — leave their entry `""` and they chain from the previous
+   shot's final frame.
+
 **Character consistency is `style`'s job, not the image's.** Sora rejects reference images
 containing human faces, so identity cannot depend on them. `style` is repeated verbatim in every
 shot's prompt and survives a refusal — describe the characters there (name, age, hair, eyes, build,

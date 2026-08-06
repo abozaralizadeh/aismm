@@ -425,3 +425,42 @@ def test_the_form_round_trips_the_checkbox(store, monkeypatch):
     assert store.get_instruction(instruction.id).disclose_ai is False
     app.test_client().post("/instructions", data={**base, "disclose_ai": "on"})
     assert store.get_instruction(instruction.id).disclose_ai is True
+
+
+# --- what the dashboard TELLS you it will do --------------------------------------- #
+# The checkbox's description survived the switch from "a sentence in the caption"
+# to "the platform's own label", and went on promising the old behaviour.
+
+def _instruction_form(monkeypatch, tmp_path, store, **disclosure_kwargs):
+    from aismm.config import AuthSettings
+    from aismm.dashboard import app as app_module
+    from aismm.dashboard import sso
+
+    patched = dataclasses.replace(config_module.settings, auth=AuthSettings(),
+                                  data_dir=tmp_path,
+                                  disclosure=DisclosureSettings(**disclosure_kwargs))
+    for module in (sso, app_module, config_module):
+        monkeypatch.setattr(module, "settings", patched)
+    monkeypatch.setattr(app_module, "get_store", lambda: store)
+    application = app_module.create_app()
+    application.secret_key = "test"
+    return application.test_client().get("/instructions/new").get_data(as_text=True)
+
+
+def test_the_checkbox_describes_the_native_label(monkeypatch, tmp_path, store):
+    page = _instruction_form(monkeypatch, tmp_path, store)
+    assert "platform&#39;s own AI label" in page or "platform's own AI label" in page
+    for platform_label in ("Add AI Label", "Made with AI", "AIGC", "synthetic-media"):
+        assert platform_label in page
+
+
+def test_it_does_not_promise_a_caption_line_by_default(monkeypatch, tmp_path, store):
+    page = _instruction_form(monkeypatch, tmp_path, store)
+    assert "Nothing is added to the caption text" in page
+    assert "Appends" not in page
+
+
+def test_it_mentions_the_caption_line_when_that_is_switched_on(monkeypatch, tmp_path, store):
+    page = _instruction_form(monkeypatch, tmp_path, store, in_caption=True)
+    assert "also appended to the caption" in page
+    assert "AI_DISCLOSURE_CAPTION=1" in page

@@ -529,11 +529,19 @@ def _make_create_sequence(state: dict):
                 this shot from the previous one.
             reference_asset_paths: One image per shot, same order as ``scenes``;
                 use "" for shots with no image. The real picture is sent to Sora
-                as the look and subject for that shot, so a shot showing a
-                character should be given a panel where that character is clearly
-                visible. This beats one image seeding the whole sequence: a single
-                seed that does not show a face leaves the model to invent one.
-                Do NOT describe an image in the prompt in place of passing it.
+                as the look and subject for that shot.
+
+                **The strongest way to fill this is to paint the opening frames
+                yourself.** For shot 1 and every ``"cut"`` shot, call
+                ``generate_image`` first with your character sheet in its
+                ``reference_asset_paths``, describing that exact moment, and pass
+                the result here. Image generation takes up to 16 references and
+                none of Sora's restrictions, so it is where you actually control
+                who is on screen. Leave ``""`` for shots that CONTINUE — those
+                chain from the previous shot's final frame, which is the point of
+                continuity. A saved panel or photo works too, as long as it shows
+                what that shot is about. Never describe an image in the prompt in
+                place of passing it.
             reference_asset_path: Shorthand for a single image on shot 1.
 
         Returns the merged ``asset_path``, its **measured** duration, and per-shot

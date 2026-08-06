@@ -377,6 +377,16 @@ both layers.
   out as another take of the same beat. `"cut"` gets its own prompt contract — *same film, new
   shot* — and is never remixed, since remix means "the previous shot, advanced". The tail frame is
   still extracted across a cut so a later shot can chain again.
+- **The opening frame of a cut should be PAINTED, not found** (prompt + both tool docstrings).
+  Character sheet first (attached file → memory → real pictures → `generate_image`), then
+  `generate_image` paints shot 1 and every `"cut"` shot with the sheet in its
+  `reference_asset_paths`, and those frames become the video's per-shot references; continuing
+  shots take `""` and chain from the previous tail frame. Image generation accepts 16 references and
+  has none of Sora's restrictions, so it is the only place the cast is actually controllable. It
+  needs no code — the tools already take all of this — so it lives in the prompt, and the sheet's
+  `asset_path` belongs in the instruction memory or it is rebuilt (differently) every run. It does
+  NOT remove the face refusal: a painted frame showing a face can still be rejected, which is why
+  `style` must carry the character description regardless.
 - **A supplied image is a LOOK, not a paused video** (`from_supplied_image` in `build_clip_prompt`).
   The continuity wording tells Sora to *resume* from the frame; applied to a panel the operator
   chose, that asks it to continue an action that never happened. A supplied image wins over the

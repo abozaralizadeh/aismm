@@ -147,14 +147,50 @@ HOW TO WORK
      - CUT or CONTINUE per shot (scene_continuity). Use "cut" whenever the story
        moves to another place, subject or time. Forcing continuity across a jump
        is what produces gaps and repeated action; a trailer is mostly cuts.
-     - An IMAGE per shot (reference_asset_paths), choosing for each shot a picture
-       that actually shows what that shot is about. A character who must stay
-       recognisable needs a panel where they are clearly visible.
+     - An IMAGE per shot (reference_asset_paths) — see the opening-frame routine
+       below, which is how you get one worth passing.
      - Describe the CHARACTERS in `style` — name, age, hair, eyes, build,
        wardrobe, distinguishing marks — and repeat it unchanged. Sora refuses
        reference images containing human faces, and when it does, `style` is the
        only thing holding identity together. A character nobody described is a
        character the model invents.
+
+   BUILD A CHARACTER SHEET FIRST, then paint the opening frame of every cut.
+   Sora has no seed and will invent a character nobody pinned down, so do not ask
+   it to imagine your cast twice:
+
+   a) GET A CHARACTER SHEET before generating any video. In order of preference:
+        1. one the operator attached to the instruction (a reference file), or an
+           asset_path recorded in your memory from an earlier run — reuse it, do
+           not make a new one;
+        2. real pictures of the character from the source you are working from
+           (save_media on the clearest panels or photos);
+        3. failing both, MAKE one: generate_image with a prompt describing the
+           character in full — face, hair, build, wardrobe, palette, art style —
+           and, if you have reference pictures, pass them as
+           reference_asset_paths so it matches rather than invents.
+      Record the sheet's asset_path with update_memory so later runs reuse the
+      same character instead of drifting into a different one every week.
+
+   b) DECIDE THE SHOT LIST AND THE CUTS before generating anything: which shots
+      continue the previous moment and which cut to a new one.
+
+   c) PAINT THE OPENING FRAME of shot 1 and of every "cut" shot with
+      generate_image, passing the character sheet (plus any location or prop
+      reference) in reference_asset_paths and describing that exact moment.
+      Image generation takes up to 16 references and has none of Sora's
+      restrictions, so this is where you actually control who is on screen and
+      what the frame looks like. Pass each painted frame as that shot's entry in
+      the video's reference_asset_paths.
+
+   d) SHOTS THAT CONTINUE need nothing from you: leave their reference_asset_paths
+      entry as "" and the sequence chains them from the previous shot's final
+      frame, which is what continuity means.
+
+   Sora may still refuse a painted frame that shows a face; the shot is then
+   rendered from the prompt and `style` alone and the result says so in
+   reference_notes. That is why `style` must carry the character description even
+   when you have a sheet.
    Never generate a clip "to see how it looks" and then build a sequence anyway —
    the first clip is then wasted, and you must not publish media you did not plan.
    Each scene must be the NEXT step in the action, not a restatement of the last;

@@ -177,9 +177,16 @@
       Add the AI-generated label
     </label>
     <span class="hint">
-      Appends “{{ settings.disclosure.text }}” to the caption and sets the platform's own AI flag
-      (TikTok AIGC, YouTube synthetic-media). Required in the EU from 2 Aug 2026 and by every major
-      platform's own rules — untick only if you have a specific reason.
+      Sets the platform's own AI label on every post — the same switch their apps show a human
+      (Instagram's <em>Add AI Label</em>, X's <em>Made with AI</em>, TikTok's AIGC label, YouTube's
+      synthetic-media disclosure). Required in the EU from 2 Aug 2026 and by every major platform's
+      own rules — untick only if you have a specific reason.
+      {% if settings.disclosure.in_caption %}
+        <br>“{{ settings.disclosure.text }}” is also appended to the caption
+        (<code>AI_DISCLOSURE_CAPTION=1</code>).
+      {% else %}
+        <br>Nothing is added to the caption text; the label is the platform's own, rendered by them.
+      {% endif %}
       {% if not settings.disclosure.enabled %}
         <br><strong>Disabled globally</strong> by AI_DISCLOSURE_ENABLED=0, so this box has no effect.
       {% endif %}
