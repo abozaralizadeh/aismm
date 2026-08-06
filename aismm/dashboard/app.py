@@ -379,13 +379,24 @@ def create_app() -> Flask:
             flash("An X Community ID contains digits only. Leave it blank for the home timeline.",
                   "error")
             return redirect(url_for("accounts"))
+        share = request.form.get("share_with_followers") == "on"
         if community_id:
             meta["community_id"] = community_id
+            meta["share_with_followers"] = share
         else:
+            # No community, no choice to remember: the flag only exists to widen
+            # a community post, and leaving it set would silently apply to a
+            # community added later.
             meta.pop("community_id", None)
+            meta.pop("share_with_followers", None)
         account.set_meta(meta)
         store.upsert_account(account)
-        flash("X posts will go to the selected destination.", "success")
+        if community_id:
+            flash(f"X posts go to community {community_id}"
+                  + (" and to your followers." if share else " only — followers will not see them."),
+                  "success")
+        else:
+            flash("X posts go to the home timeline.", "success")
         return redirect(url_for("accounts"))
 
     @app.route("/accounts/<account_id>/check", methods=["POST"])

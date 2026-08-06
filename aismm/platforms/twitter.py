@@ -276,6 +276,13 @@ class Twitter(SocialPlatform):
                 community_id = str((account.meta or {}).get("community_id", "")).strip()
                 if community_id:
                     payload["community_id"] = community_id
+                    # X's own composer shows this as "Also share with followers".
+                    # A community post is otherwise visible only to that
+                    # community, so this is the difference between reaching your
+                    # audience and reaching a room. Sent ONLY with a community:
+                    # the field means nothing on a normal post.
+                    if (account.meta or {}).get("share_with_followers"):
+                        payload["share_with_followers"] = True
                 # Media rides on the FIRST post: that is the one shown in a
                 # timeline, and X would otherwise repeat the image down the thread.
                 if media_ids and index == 0:

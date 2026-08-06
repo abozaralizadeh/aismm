@@ -125,6 +125,13 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
   is the generic "One or more parameters to your request was invalid" while `errors[].message` names
   the actual parameter.
+- **A community post is invisible to your followers unless you say otherwise** — `POST /2/tweets`
+  takes `community_id` AND `share_with_followers` (boolean, default false), which is the switch X's
+  own composer shows beside the community picker. Both live in `account.meta` and are set per
+  connection on the Accounts page. `share_with_followers` is sent ONLY alongside a `community_id`
+  (it means nothing on a normal post) and is cleared when the community is cleared, so it cannot
+  silently apply to a community set later. It goes on EVERY post of a thread: the later posts belong
+  to the same community and the same audience.
 - **X media upload uses the SUB-PATH endpoints, not `command=`**
   ([platforms/twitter.py](aismm/platforms/twitter.py) `_upload_media`): `POST
   /2/media/upload/initialize` (**JSON**, `total_bytes` a real integer), `/{id}/append` (multipart,

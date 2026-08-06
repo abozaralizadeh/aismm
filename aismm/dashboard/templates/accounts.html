@@ -76,9 +76,20 @@
           <input type="text" name="community_id" inputmode="numeric" pattern="[0-9]*"
                  value="{{ a.meta.get('community_id', '') }}" placeholder="Blank = home timeline">
         </label>
+        <label class="check">
+          <input type="checkbox" name="share_with_followers"
+                 {% if a.meta.get('share_with_followers') %}checked{% endif %}>
+          Also share with followers
+        </label>
         <button class="btn small">Save destination</button>
       </form>
-      <span class="muted small">One community per post. X does not provide this app access to list joined communities. Copy the numeric ID from the community URL: <code>x.com/i/communities/ID</code>.</span>
+      <span class="muted small">One community per post. X does not provide this app access to list
+        joined communities. Copy the numeric ID from the community URL:
+        <code>x.com/i/communities/ID</code>.
+        <br><strong>Also share with followers</strong> is the same switch X shows in its composer: a
+        community post is otherwise visible only inside that community, so leave it ticked if the
+        point is to reach your own audience. It has no effect when the destination is the home
+        timeline.</span>
     </td></tr>
     {% endif %}
   {% endfor %}

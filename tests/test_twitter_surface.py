@@ -162,6 +162,48 @@ def test_a_community_target_is_sent_with_the_post(api):
     assert api["tweets"][0]["community_id"] == "123"
 
 
+# --- "Also share with followers" ------------------------------------------------------ #
+# A community post is visible only inside that community. X's own composer offers
+# this switch beside the community picker, and without it a post aimed at growing
+# an audience reaches a room instead.
+
+def _community_publish(api, meta, caption="hi"):
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    account.set_meta(meta)
+    asyncio.run(_x().publish(access_token="t", account=account, caption=caption,
+                             asset_path="", asset_paths=None, media_kind="text"))
+    return api["tweets"]
+
+
+def test_sharing_with_followers_is_sent_when_enabled(api):
+    tweets = _community_publish(api, {"community_id": "123", "share_with_followers": True})
+    assert tweets[0]["share_with_followers"] is True
+    assert tweets[0]["community_id"] == "123"
+
+
+def test_it_is_omitted_when_not_enabled(api):
+    """False and absent are the same to X, but sending nothing is honest about
+    the fact that we are not asking for anything."""
+    tweets = _community_publish(api, {"community_id": "123"})
+    assert "share_with_followers" not in tweets[0]
+
+
+def test_it_is_never_sent_without_a_community(api):
+    """The field only means something on a community post."""
+    tweets = _community_publish(api, {"share_with_followers": True})
+    assert "share_with_followers" not in tweets[0]
+    assert "community_id" not in tweets[0]
+
+
+def test_every_post_in_a_thread_carries_it(api):
+    """A thread's later posts belong to the same community and the same audience."""
+    tweets = _community_publish(api, {"community_id": "123", "share_with_followers": True},
+                                caption="x" * 700)
+    assert len(tweets) > 1
+    assert all(post["share_with_followers"] is True for post in tweets)
+    assert all(post["community_id"] == "123" for post in tweets)
+
+
 def test_four_images_are_all_attached(api):
     _publish(asset_path="/a.jpg", asset_paths=[f"/{n}.jpg" for n in range(4)])
     assert len(api["uploads"]) == 4

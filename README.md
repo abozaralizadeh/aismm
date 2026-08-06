@@ -1054,6 +1054,21 @@ pre-truncating or numbering by hand.
 > Required'` — leaves the agent guessing whether it did something wrong. It didn't, and no rewording
 > of the post will help. Buy credits at [console.x.com](https://console.x.com).
 
+### Posting to an X Community
+
+An X account can post to a **Community** instead of the home timeline. On **Accounts**, set the
+numeric community ID (copy it from `x.com/i/communities/ID` — X gives this app no way to list the
+communities you have joined) and choose who sees the post:
+
+**Also share with followers** is the same switch X shows in its own composer. A community post is
+otherwise visible *only inside that community*, so leave it ticked whenever the point is to reach
+your own audience as well. It has no effect when the destination is the home timeline, and it is
+cleared automatically if you clear the community — so it can never silently apply to a community you
+set later.
+
+Both settings apply to every post of an auto-generated thread, since the later posts belong to the
+same community and the same audience.
+
 ### When X returns 503
 
 `X API 503: Service Unavailable` is **X's own service failing**, not your post, token, app or
