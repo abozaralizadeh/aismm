@@ -18,6 +18,17 @@
   <span class="muted small" aria-live="polite">Refreshes every 30 seconds</span>
 </div>
 
+{% if stale_runs %}
+<div class="flash flash-error">
+  <strong>{{ stale_runs }} run(s) are still marked “running” but nothing is running them.</strong>
+  A run is only closed by the process executing it, so a restart, deploy or crash mid-run leaves the
+  row stuck. Nothing was published by them.
+  <form method="post" action="{{ url_for('reap_runs') }}" class="inline-form">
+    <button class="btn small" type="submit">Close them</button>
+  </form>
+</div>
+{% endif %}
+
 <h2>Awaiting approval</h2>
 {% if pending %}
 <div class="staged-list">
@@ -25,7 +36,7 @@
   <div class="staged">
     <div class="staged-media">
       {% if s.media_kind == 'video' %}
-        <video controls src="{{ url_for('asset', filename=s.asset_path.split('/')[-1]) }}"></video>
+        <video controls playsinline preload="metadata" src="{{ url_for('asset', filename=s.asset_path.split('/')[-1]) }}"></video>
       {% elif s.media_kind == 'image' %}
         <img src="{{ url_for('asset', filename=s.asset_path.split('/')[-1]) }}" alt="preview">
       {% else %}

@@ -682,12 +682,81 @@ def create_app() -> Flask:
                                 platform=record.platform.value if record else None))
 
     # ---- instructions ---------------------------------------------------- #
+    INSTRUCTION_SORTS = {"name": "Name", "created_at": "Created", "schedule": "Schedule",
+                         "next_run": "Next run"}
+
     @app.route("/instructions")
     def instructions():
+        """The instruction list, searchable and sortable.
+
+        Filtered HERE rather than in the store, unlike runs: the run table grows
+        without bound and must be paged in SQL, while an operator has tens of
+        instructions at most. One extra query for the thumbnails, not one per row.
+        """
         store = get_store()
-        instrs = store.list_instructions(workspace_id=_workspace_id())
-        next_runs = {i.id: _next_run_info(i, store) for i in instrs}
-        return render_template("instructions.html", instructions=instrs, next_runs=next_runs)
+        scope = _workspace_id()
+        rows = store.list_instructions(workspace_id=scope)
+        next_runs = {i.id: _next_run_info(i, store) for i in rows}
+
+        args = request.args
+        search = args.get("q", "").strip()
+        enabled = args.get("enabled", "").strip()
+        mode = args.get("mode", "").strip()
+        sort = args.get("sort", "name")
+        if sort not in INSTRUCTION_SORTS:
+            sort = "name"
+        descending = args.get("dir", "asc") == "desc"
+
+        if search:
+            needle = search.lower()
+            rows = [i for i in rows
+                    if needle in i.name.lower() or needle in (i.brief or "").lower()
+                    or needle in (i.schedule or "").lower()]
+        if enabled in ("1", "0"):
+            rows = [i for i in rows if i.enabled == (enabled == "1")]
+        if mode:
+            rows = [i for i in rows if i.publish_mode.value == mode]
+
+        far_future = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
+
+        def _next_at(instruction):
+            info = next_runs.get(instruction.id) or {}
+            return info.get("at") or far_future
+
+        keys = {"name": lambda i: i.name.lower(),
+                "created_at": lambda i: i.created_at,
+                "schedule": lambda i: (i.schedule or "").lower(),
+                "next_run": _next_at}
+        rows.sort(key=keys[sort], reverse=descending)
+
+        def instructions_url(**overrides):
+            params = {"q": search, "enabled": enabled, "mode": mode, "sort": sort,
+                      "dir": "desc" if descending else "asc", **overrides}
+            return url_for("instructions",
+                           **{k: v for k, v in params.items() if v not in ("", None)})
+
+        return render_template(
+            "instructions.html", instructions=rows, next_runs=next_runs,
+            thumbnails=_latest_media(store, scope), total=len(rows),
+            modes=list(PublishMode), sorts=INSTRUCTION_SORTS,
+            filters={"q": search, "enabled": enabled, "mode": mode, "sort": sort,
+                     "dir": "desc" if descending else "asc"},
+            instructions_url=instructions_url,
+        )
+
+    def _latest_media(store, scope):
+        """Newest asset per instruction — one query, not one per row.
+
+        Seeing what an instruction has been producing is the fastest way to spot
+        one that has quietly gone wrong, so it belongs on the list rather than
+        two clicks away.
+        """
+        newest: dict[str, str] = {}
+        for run in store.list_runs(limit=300, workspace_id=scope, sort="created_at",
+                                   descending=True):
+            if run.asset_path and run.instruction_id not in newest:
+                newest[run.instruction_id] = run.asset_path.split("/")[-1]
+        return newest
 
     @app.route("/instructions/new")
     def new_instruction():
@@ -911,12 +980,31 @@ def create_app() -> Flask:
             all_instructions=store.list_instructions(workspace_id=_workspace_id()),
             all_accounts=store.list_accounts(workspace_id=_workspace_id()),
             statuses=list(RunStatus),
+            # A run stuck on "running" has no process behind it — the service was
+            # restarted mid-run. Offer the tidy-up only when there is something
+            # to tidy, so the button isn't permanent furniture.
+            stale_runs=len(_stale_runs(store)),
             sorts=RUN_SORTS,
             per_page_choices=PER_PAGE_CHOICES,
             filters=current,
             runs_url=runs_url,
             page=page, pages=pages, total=total,
         )
+
+    def _stale_runs(store):
+        """This workspace's abandoned runs. Never another workspace's."""
+        return [run for run in orchestrator.reap_stale_runs(store, apply=False)
+                if _in_scope(run)]
+
+    @app.route("/runs/reap", methods=["POST"])
+    def reap_runs():
+        """Close out runs abandoned by a crashed or restarted process."""
+        store = get_store()
+        closed = orchestrator.close_stale_runs(store, _stale_runs(store))
+        flash(f"Closed {closed} abandoned run(s) — they were still marked running "
+              f"long after the service that started them stopped." if closed
+              else "No abandoned runs to close.", "success")
+        return redirect(request.referrer or url_for("runs"))
 
     @app.route("/runs/<run_id>")
     def run_detail(run_id):
@@ -989,14 +1077,15 @@ def create_app() -> Flask:
         _owned(get_store().get_staged(staged_id))
         res = orchestrator.approve_staged(staged_id)
         flash(f"Approve: {res}", "success" if res.get("status") == "published" else "error")
-        return redirect(url_for("runs"))
+        # Back where it was clicked: the run page is where the post is visible.
+        return redirect(request.referrer or url_for("runs"))
 
     @app.route("/staged/<staged_id>/reject", methods=["POST"])
     def reject(staged_id):
         _owned(get_store().get_staged(staged_id))
         orchestrator.reject_staged(staged_id)
         flash("Post rejected.", "success")
-        return redirect(url_for("runs"))
+        return redirect(request.referrer or url_for("runs"))
 
     # ---- assets (also the PUBLIC url Instagram fetches) ------------------ #
     # Intentionally exempt from the SSO guard: Instagram fetches media from this
@@ -1004,7 +1093,11 @@ def create_app() -> Flask:
     # itself is the secret.
     @app.route("/assets/<path:filename>")
     def asset(filename):
-        return send_from_directory(settings.assets_dir, filename)
+        # ?download=1 forces a save rather than inline playback. iOS Safari gives
+        # no way to save a <video> it is playing — long-press does nothing — so
+        # without this there is no route to the file from a phone at all.
+        return send_from_directory(settings.assets_dir, filename,
+                                   as_attachment=bool(request.args.get("download")))
 
     @app.route("/healthz")
     def healthz():

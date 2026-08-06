@@ -3,7 +3,106 @@
 {% block content %}
 <h1>Accounts</h1>
 
-<h2>Connect a new account</h2>
+<h2>Connected <span class="muted small">({{ accounts|length }})</span></h2>
+{% if accounts %}
+<div class="account-list">
+  {% for a in accounts %}
+    {% set state = token_state.get(a.id, {}) %}
+    <section class="account-card">
+      <header class="account-head">
+        <div class="account-who">
+          <span class="badge">{{ a.platform.value }}</span>
+          <strong>{{ a.handle or a.external_id or "—" }}</strong>
+        </div>
+        <div class="account-token small">
+          {% if a.expires_at %}
+            <span title="{{ a.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC">
+              Token {{ state.expiry }}</span>
+            {% if state.refreshable %}
+              <span class="muted">· renews automatically</span>
+            {% elif state.stale %}
+              <span class="badge badge-failed">reconnect</span>
+            {% else %}
+              <span class="muted">· no refresh token</span>
+            {% endif %}
+          {% else %}
+            <span class="muted">No expiry recorded</span>
+          {% endif %}
+        </div>
+      </header>
+
+      <dl class="account-facts small">
+        <div><dt>Account ID</dt><dd class="mono">{{ a.external_id or a.id }}</dd></div>
+        <div><dt>Connected</dt><dd>{{ a.created_at.strftime('%Y-%m-%d') }}</dd></div>
+      </dl>
+
+      {% if a.platform.value == 'twitter' %}
+        {% set ids = a.meta.get('community_ids') or ([a.meta.get('community_id')] if a.meta.get('community_id') else []) %}
+        <details class="account-section" {% if ids %}open{% endif %}>
+          <summary>
+            Posts go to
+            <strong>
+              {% if ids | length > 1 %}
+                {{ ids | length }} communities, in rotation
+              {% elif ids %}
+                community {{ ids[0] }}
+              {% else %}
+                the home timeline
+              {% endif %}
+            </strong>
+          </summary>
+          <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}"
+                class="form">
+            <label>Community ID(s)
+              <input type="text" name="community_id" value="{{ ids | join(', ') }}"
+                     placeholder="Blank = home timeline. Several = rotate, one per run">
+              <span class="hint">
+                Copy the number from the community URL: <code>x.com/i/communities/ID</code> — X gives
+                this app no way to list the ones you have joined.
+                {% if ids and ids | length > 1 %}
+                  <br>The next post goes to
+                  <code>{{ ids[(a.meta.get('community_cursor') or 0) % (ids | length)] }}</code>.
+                  <strong>One post per run</strong>, never the same post to several communities:
+                  X treats near-identical posts from one account as spam, and a scheduled
+                  instruction covers them all anyway with different content each time.
+                {% elif ids %}
+                  <br>Add more, comma-separated, to rotate through several — one per run.
+                {% endif %}
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" name="share_with_followers"
+                     {% if a.meta.get('share_with_followers') %}checked{% endif %}>
+              Also share with followers
+            </label>
+            <span class="hint">
+              The same switch X shows in its composer. A community post is otherwise visible
+              <strong>only inside that community</strong>. No effect on the home timeline.
+            </span>
+            <div class="row"><button class="btn small">Save destination</button></div>
+          </form>
+        </details>
+      {% endif %}
+
+      <footer class="account-actions">
+        <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
+          <button class="btn small" title="Ask the platform what this stored token actually allows">
+            Check permissions
+          </button>
+        </form>
+        <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
+              onsubmit="return confirm('Disconnect {{ a.handle or a.external_id }}?\n\nInstructions targeting it will stop publishing.');">
+          <button class="btn btn-danger small">Disconnect</button>
+        </form>
+      </footer>
+    </section>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No accounts connected yet — pick a platform below.</p>
+{% endif %}
+
+<h2>Connect another</h2>
 <div class="platform-grid">
   {% for p in platforms %}
   <div class="platform-card">
@@ -27,86 +126,4 @@
   </div>
   {% endfor %}
 </div>
-
-<h2>Connected</h2>
-{% if accounts %}
-<div class="table-scroll">
-<table>
-  <thead><tr><th>Platform</th><th>Handle</th><th>Account ID</th><th>Token expires</th><th></th></tr></thead>
-  <tbody>
-  {% for a in accounts %}
-    <tr>
-      <td>{{ a.platform.value }}</td>
-      <td>{{ a.handle or "—" }}</td>
-      <td class="mono small">{{ a.external_id or a.id }}</td>
-      {% set state = token_state.get(a.id, {}) %}
-      <td class="small">
-        {% if a.expires_at %}
-          <span title="{{ a.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC">{{ state.expiry }}</span>
-          {% if state.refreshable %}
-            <br><span class="muted">renews automatically</span>
-          {% elif state.stale %}
-            <br><span class="badge badge-failed">reconnect</span>
-          {% else %}
-            <br><span class="muted">no refresh token</span>
-          {% endif %}
-        {% else %}
-          <span class="muted">—</span>
-        {% endif %}
-      </td>
-      <td class="actions-cell">
-        <div class="actions">
-          <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
-            <button class="btn small"
-                    title="Ask Meta which permissions this stored token actually has">
-              Check permissions
-            </button>
-          </form>
-          <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
-                onsubmit="return confirm('Disconnect this account?');">
-            <button class="btn btn-danger small">Disconnect</button>
-          </form>
-        </div>
-      </td>
-    </tr>
-    {% if a.platform.value == 'twitter' %}
-    <tr class="community-row"><td colspan="5">
-      <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}" class="community-form">
-        <label>X destination
-          {% set ids = a.meta.get('community_ids') or ([a.meta.get('community_id')] if a.meta.get('community_id') else []) %}
-          <input type="text" name="community_id"
-                 value="{{ ids | join(', ') }}"
-                 placeholder="Blank = home timeline. Several = rotate, one per run">
-        </label>
-        <label class="check">
-          <input type="checkbox" name="share_with_followers"
-                 {% if a.meta.get('share_with_followers') %}checked{% endif %}>
-          Also share with followers
-        </label>
-        <button class="btn small">Save destination</button>
-      </form>
-      <span class="muted small">X does not provide this app access to list joined communities. Copy
-        the numeric ID from the community URL: <code>x.com/i/communities/ID</code>.
-        {% if ids and ids | length > 1 %}
-          <br><strong>Rotating {{ ids | length }} communities</strong> — the next post goes to
-          <code>{{ ids[(a.meta.get('community_cursor') or 0) % (ids | length)] }}</code>, then the
-          one after it. <strong>One post per run, never the same post to several communities</strong>:
-          X's rules treat duplicate or near-identical posts from one account as spam, and a scheduled
-          instruction covers every community anyway with different content each time.
-        {% elif ids %}
-          <br>Add more IDs (comma-separated) to rotate through several communities, one per run.
-        {% endif %}
-        <br><strong>Also share with followers</strong> is the same switch X shows in its composer: a
-        community post is otherwise visible only inside that community, so leave it ticked if the
-        point is to reach your own audience. It has no effect when the destination is the home
-        timeline.</span>
-    </td></tr>
-    {% endif %}
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% else %}
-<p class="muted">No accounts connected yet.</p>
-{% endif %}
 {% endblock %}

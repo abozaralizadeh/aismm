@@ -153,5 +153,24 @@ def start() -> BackgroundScheduler:
     sched = get_scheduler()
     if not sched.running:
         sched.start()
+    _reap_stale_runs()
     refresh_jobs()
     return sched
+
+
+def _reap_stale_runs() -> None:
+    """Close out runs abandoned by a previous process. Never fatal.
+
+    Booting is exactly when they exist: a run is only moved off ``running`` by
+    the code executing it, so a restart mid-run strands the row. Doing this here
+    means a deploy tidies up after itself instead of leaving a Runs page full of
+    work that will never finish.
+    """
+    try:
+        from .orchestrator import reap_stale_runs
+
+        reaped = reap_stale_runs()
+        if reaped:
+            logger.warning("Marked %d abandoned run(s) as failed at startup", len(reaped))
+    except Exception as exc:  # noqa: BLE001 - never block the scheduler on tidying
+        logger.warning("Could not reap stale runs: %s", exc)

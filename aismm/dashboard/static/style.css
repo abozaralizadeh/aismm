@@ -200,9 +200,21 @@ form { margin: 0; }
 .retry-form { max-width: none; padding: .8rem 0 .2rem; }
 .retry-form textarea { min-height: 12rem; }
 
-.staged-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+/* auto-FIT (not auto-fill) so a single card doesn't sit in a narrow column with
+   three empty tracks beside it; the max track width stops that one card from
+   stretching across a wide screen instead. */
+.staged-list {
+  display: grid; gap: 1rem; justify-content: start;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 380px));
+  max-height: 70vh; overflow-y: auto; padding-right: 4px;
+}
 .staged { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.staged-media video, .staged-media img { width: 100%; display: block; max-height: 320px; object-fit: cover; background: #000; }
+/* CONTAIN, never cover: a 9:16 reel in a 4:3 box was being cropped — you were
+   reviewing a post while unable to see its edges. Letterboxing shows the frame
+   the platform will show. */
+.staged-media video, .staged-media img {
+  width: 100%; display: block; height: 200px; object-fit: contain; background: #000;
+}
 .text-preview { padding: 2rem; text-align: center; color: var(--muted); background: var(--panel-2); }
 .staged-body { padding: .9rem; }
 .caption { white-space: pre-wrap; margin: .5rem 0 .9rem; }
@@ -266,7 +278,9 @@ th .sort-active { color: var(--accent); }
 .logbox-error { border-color: var(--danger); background: rgba(240,97,109,.08); }
 .detail-media video, .detail-media img {
   max-width: 100%; border-radius: 8px; background: #000; max-height: 26rem;
+  object-fit: contain;               /* never crop the thing being reviewed */
 }
+.media-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin: .4rem 0 1rem; }
 
 /* ===================================================================== *
  * Small screens
@@ -379,3 +393,59 @@ th .sort-active { color: var(--accent); }
   margin: 4px 0 12px; background: var(--panel-2);
 }
 .form .subform legend { padding: 0 6px; font-weight: 600; }
+
+/* The schedule cheat-sheet: a long help block folded away until asked for. */
+.schedule-help { margin-top: 8px; }
+.schedule-help > summary { cursor: pointer; color: var(--accent); }
+.schedule-help h4 { margin: 14px 0 4px; font-size: 0.95em; }
+.schedule-help table { font-size: 0.95em; }
+.schedule-help td:first-child { white-space: nowrap; }
+.schedule-help p { margin: 8px 0; }
+
+/* A button sitting inside a flash message (the stale-run cleanup). */
+.flash .inline-form { display: inline-block; margin-left: 8px; }
+
+/* Newest media per instruction, so a run that has quietly gone wrong is visible
+   from the list. object-fit: cover is right HERE — a thumbnail is a glance, not
+   the thing being reviewed. */
+.thumb-cell { width: 1%; padding-right: 0; }
+.thumb {
+  width: 52px; height: 52px; border-radius: 6px; object-fit: cover;
+  background: var(--panel-2); display: block; border: 1px solid var(--border);
+}
+.thumb-empty { border-style: dashed; }
+
+/* ===================================================================== *
+ * Accounts
+ *
+ * Was one table plus a second full-width row crammed under each X account
+ * (colspan=5), so the destination form read as an orphan of the row above it.
+ * A card per account keeps each connection's facts, settings and actions
+ * together, and needs no horizontal scroll on a phone.
+ * ===================================================================== */
+.account-list { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
+.account-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+}
+.account-head {
+  display: flex; flex-wrap: wrap; gap: .5rem 1rem;
+  align-items: baseline; justify-content: space-between;
+}
+.account-who { display: flex; align-items: center; gap: .5rem; }
+.account-who strong { font-size: 1.05rem; }
+.account-token { color: var(--muted); }
+
+.account-facts { display: flex; flex-wrap: wrap; gap: .3rem 1.6rem; margin: .7rem 0 0; }
+.account-facts > div { display: flex; gap: .4rem; }
+.account-facts dt { color: var(--muted); margin: 0; }
+.account-facts dd { margin: 0; }
+
+.account-section { margin-top: .9rem; border-top: 1px solid var(--border); padding-top: .7rem; }
+.account-section > summary { cursor: pointer; }
+.account-section .form { margin-top: .7rem; }
+
+.account-actions {
+  display: flex; flex-wrap: wrap; gap: .6rem;
+  margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--border);
+}

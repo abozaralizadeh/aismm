@@ -857,6 +857,25 @@ ported — and are **heartbeated** while their run is alive (see below). Tokens 
 **before** they reach the table, exactly as with SQLite, so the storage account never holds a usable
 credential.
 
+### Runs stuck on "running"
+
+A run is only ever closed by the process executing it. If the service restarts, is redeployed or is
+killed mid-run, that row stays **running** forever even though nothing is doing it — the lock it held
+clears itself within a few minutes, so the instruction keeps working, but the run never resolves.
+
+They are closed automatically **when the service starts**, so a deploy tidies up after itself. When
+some are already sitting there, the Runs page offers a one-click **Close them**, and from a shell:
+
+```bash
+python -m aismm.cli runs            # show what would be closed
+python -m aismm.cli runs --apply    # close them
+```
+
+A run is only considered abandoned once it is older than the run ceiling plus fifteen minutes — a
+live run cannot get that old, because the ceiling would have ended it. Nothing that was actually
+published is affected: the closed run says why it was abandoned, and if it had already produced media
+you can still **Publish this again**.
+
 ### Why a run can't block the next one forever
 
 Each `(instruction, account)` pair is single-flighted by a lock, so a double schedule fire never

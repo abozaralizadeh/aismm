@@ -295,6 +295,19 @@ both layers.
   form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus
   and never returns. `tests/test_responsive.py` enforces both; it also covers the viewport tag, the
   scrollable nav, and 44px tap targets.
+- **Preview media is `object-fit: contain`, thumbnails are `cover`.** A 9:16 reel cropped into a
+  4:3 box means reviewing a post whose edges you cannot see — so anything being *judged*
+  (`.staged-media`, `.detail-media`) letterboxes, while a 52px thumbnail may crop because it is a
+  glance, not the thing being judged. `<video>` needs **`playsinline`** or iOS Safari takes the whole
+  screen to play, and `/assets/<file>?download=1` sets `as_attachment` because iOS cannot save a
+  playing video any other way — the bare URL must stay inline, since Instagram fetches it.
+- **`.staged-list` uses `auto-fit`, not `auto-fill`** — `auto-fill` leaves empty tracks beside a
+  single card, which is what made one staged post sit in a narrow column with a gap next to it. The
+  max track width (380px) stops that one card stretching across a wide screen instead, and the list
+  scrolls at 70vh rather than pushing the page down.
+- **Instructions are filtered in the VIEW, runs in the STORE.** Deliberate asymmetry: the run table
+  grows without bound and must be paged in SQL, while an operator has tens of instructions. The
+  thumbnail column is ONE `list_runs` call mapped by instruction, never one query per row.
 - **Never put `display:flex` on a `<td>`** — it drops the cell out of table layout and its contents
   overlap the neighbouring columns. Row actions are `<td class="actions-cell"><div class="actions">`;
   the cell is `width:1%` + `nowrap` so it shrinks to fit rather than being squeezed by the data
@@ -329,6 +342,14 @@ both layers.
   for any column the models declare and the DB lacks (Azure Table is schemaless, so it needs
   nothing). Prefer a real column over a side table for new per-instruction fields; `InstructionState`
   stays a side table because memory/note are large, mutable and semantically separate.
+- **`,` combines, `;` separates** ([schedules.py](aismm/schedules.py)) — the difference between 6
+  posts a week and 3. `03:00 thu, 03:00 tue, 15:00 sun` is ONE cron whose hours and days are
+  cross-multiplied (03:00 *and* 15:00, on all three days); with `;` it is three separate triggers.
+  `describe()` dedupes the hours (reading back "at 03:00 and 03:00" looks like a bug rather than a
+  cross-product) and appends "N× a week" whenever a part has more than one time of day, which is the
+  only thing that makes the multiplication visible. Steps and unparsed day fields are NOT counted —
+  a wrong count is worse than none. The instruction form carries the full cheat-sheet in a
+  `<details>`; keep it in step with what the parser accepts.
 - **One schedule → SEVERAL triggers** ([schedules.py](aismm/schedules.py)): `parse_schedule` returns a
   list and `refresh_jobs` registers one job per trigger (`instr:<id>`, `instr:<id>:1`, …). Ambiguous
   input is REFUSED, not guessed — a bare `6` could be 06:00 or every 6h. `describe()` is the
@@ -584,6 +605,16 @@ both layers.
   that no longer existed. Now a live run renews its lock every 60s and the TTL is 300s, so an orphaned
   lock clears in one TTL. Don't raise `_LOCK_TTL` to "allow longer runs" — that is what the heartbeat
   is for; the TTL only measures how long a *dead* owner blocks the next run.
+- **A run is only closed by the process running it, so a restart strands the row**
+  (`orchestrator.reap_stale_runs` + `close_stale_runs`). The wall-clock ceiling ends an overrunning
+  run — but only while the process lives; a gunicorn restart, deploy or OOM kill mid-run leaves
+  `status=running` forever and the Runs page fills with work nothing is doing. The heartbeated LOCK
+  clears itself within one TTL, so the *instruction* recovers on its own; the RUN does not. Age is
+  the signal and a safe one: a live run cannot outlast `RUN_TIMEOUT_SECONDS`, so past that plus a
+  15-minute grace there is no process behind it (with the ceiling disabled it falls back to 24h).
+  Swept at `scheduler.start()` — booting is exactly when they exist — plus a button on /runs and
+  `cli runs [--apply]`. The sweep must never block the scheduler: its failure is logged and startup
+  continues.
 - **A run has a wall-clock ceiling** (`settings.run_timeout_seconds`, default 2h, env
   `RUN_TIMEOUT_SECONDS`; `0` disables it). APScheduler runs jobs in a bounded
   pool with `max_instances=1`, so one run that never returns silences its instruction *permanently*

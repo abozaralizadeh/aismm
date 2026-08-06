@@ -113,11 +113,96 @@
       <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
              placeholder="09:00,18:00 mon-fri">
       <span class="hint">
-        Times of day, weekdays, intervals or cron — combined freely. All times UTC.<br>
+        Times of day, weekdays, intervals or cron. <strong>All times UTC.</strong><br>
         <code>09:00</code> · <code>9am, 6pm</code> · <code>09:00 mon-fri</code> ·
-        <code>09:30 and 17:45 weekends</code> · <code>every 6h</code> ·
-        <code>hourly</code>/<code>daily</code>/<code>weekly</code> ·
-        <code>0 9 * * *</code> · <code>every 6h; 08:00 mon</code>
+        <code>every 6h</code> · <code>daily</code> · <code>0 9 * * *</code>
+
+        <details class="schedule-help">
+          <summary>All the forms, with examples</summary>
+
+          <p><strong><code>,</code> combines · <code>;</code> separates.</strong> This is the one
+          that catches people out. A comma builds <em>one</em> schedule from every time and every
+          day you list — each time on each day:</p>
+          <div class="table-scroll">
+          <table>
+            <thead><tr><th>You write</th><th>It fires</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>03:00 thu, 03:00 tue, 15:00 sun</code></td>
+                <td>03:00 <em>and</em> 15:00, on Tue, Thu <em>and</em> Sun — <strong>6× a week</strong></td>
+              </tr>
+              <tr>
+                <td><code>03:00 thu; 03:00 tue; 15:00 sun</code></td>
+                <td>03:00 Thu, 03:00 Tue, 15:00 Sun — <strong>3× a week</strong></td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <p>So: use <code>,</code> when the times really do apply to all those days
+          (<code>09:00, 18:00 mon-fri</code> = twice a day on weekdays), and <code>;</code> when
+          each entry is its own separate schedule. <code>and</code> and a newline work like
+          <code>,</code>. The <strong>Reads as</strong> line below always shows what your text was
+          understood to mean — check it.</p>
+
+          <h4>Times of day</h4>
+          <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><td><code>09:00</code></td><td>every day at 09:00</td></tr>
+              <tr><td><code>9am, 6pm</code></td><td>twice every day</td></tr>
+              <tr><td><code>09:30</code></td><td>minutes work too</td></tr>
+              <tr><td><code>midnight</code> · <code>noon</code></td><td>named times</td></tr>
+            </tbody>
+          </table>
+          </div>
+
+          <h4>Days</h4>
+          <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><td><code>09:00 mon</code></td><td>one day a week</td></tr>
+              <tr><td><code>09:00 mon,wed,fri</code></td><td>three days a week</td></tr>
+              <tr><td><code>09:00 mon-fri</code></td><td>a range</td></tr>
+              <tr><td><code>09:00 weekdays</code> · <code>weekends</code></td><td>shorthand for mon-fri / sat,sun</td></tr>
+              <tr><td><code>09:00 and 18:00 weekends</code></td><td>two times, Sat and Sun — 4× a week</td></tr>
+            </tbody>
+          </table>
+          </div>
+
+          <h4>Intervals</h4>
+          <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><td><code>every 6h</code></td><td>every six hours</td></tr>
+              <tr><td><code>every 90m</code> · <code>every 30s</code> · <code>every 2 days</code></td><td>any unit</td></tr>
+              <tr><td><code>hourly</code> · <code>daily</code> · <code>weekly</code> · <code>monthly</code></td><td>named</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p>An interval counts from the <strong>Starts</strong> field below, or from when the
+          instruction was created if you leave it empty — not from the moment you press Save.</p>
+
+          <h4>Raw cron, if you prefer it</h4>
+          <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><td><code>0 9 * * *</code></td><td>09:00 every day (min hour dom month dow)</td></tr>
+              <tr><td><code>30 8 * * 1-5</code></td><td>08:30 on weekdays</td></tr>
+              <tr><td><code>0 */4 * * *</code></td><td>every 4 hours, on the hour</td></tr>
+              <tr><td><code>@daily</code> · <code>@weekly</code> · <code>@hourly</code></td><td>nicknames</td></tr>
+            </tbody>
+          </table>
+          </div>
+
+          <h4>Mixing</h4>
+          <p><code>every 6h; 08:00 mon</code> — an interval <em>plus</em> a fixed weekly time. Each
+          part separated by <code>;</code> becomes its own schedule, so you can combine any of the
+          forms above.</p>
+
+          <p class="muted">Ambiguous input is refused rather than guessed: a bare <code>6</code>
+          could mean 06:00 or every 6 hours, so write <code>06:00</code> or <code>every 6h</code>.
+          If the readback says <em>not understood</em>, the instruction will never fire.</p>
+        </details>
         {% if instruction and instruction.schedule %}
           <br><strong>Reads as:</strong> {{ schedule_readback }}
           {% if instruction and next_run and next_run.at %}

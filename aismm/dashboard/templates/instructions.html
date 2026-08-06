@@ -2,19 +2,64 @@
 {% block title %}Instructions · AISMM{% endblock %}
 {% block content %}
 <div class="row-between">
-  <h1>Instructions</h1>
+  <h1>Instructions <span class="muted small">({{ total }})</span></h1>
   <a class="btn btn-primary" href="{{ url_for('new_instruction') }}">+ New instruction</a>
 </div>
+
+<form method="get" action="{{ url_for('instructions') }}" class="filters">
+  <input type="search" name="q" value="{{ filters.q }}"
+         placeholder="Search name, brief or schedule…">
+  <select name="enabled">
+    <option value="">Enabled &amp; paused</option>
+    <option value="1" {% if filters.enabled == '1' %}selected{% endif %}>Enabled only</option>
+    <option value="0" {% if filters.enabled == '0' %}selected{% endif %}>Paused only</option>
+  </select>
+  <select name="mode">
+    <option value="">Any publish mode</option>
+    {% for m in modes %}
+      <option value="{{ m.value }}" {% if filters.mode == m.value %}selected{% endif %}>{{ m.value }}</option>
+    {% endfor %}
+  </select>
+  <select name="sort">
+    {% for key, label in sorts.items() %}
+      <option value="{{ key }}" {% if filters.sort == key %}selected{% endif %}>Sort by {{ label }}</option>
+    {% endfor %}
+  </select>
+  <select name="dir">
+    <option value="asc" {% if filters.dir == 'asc' %}selected{% endif %}>Ascending</option>
+    <option value="desc" {% if filters.dir == 'desc' %}selected{% endif %}>Descending</option>
+  </select>
+  <button class="btn small" type="submit">Apply</button>
+  {% if filters.q or filters.enabled or filters.mode %}
+    <a class="btn small" href="{{ url_for('instructions') }}">Clear</a>
+  {% endif %}
+</form>
 
 {% if instructions %}
 <div class="table-scroll">
 <table>
   <thead>
-    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
+    <tr><th></th><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
   </thead>
   <tbody>
   {% for i in instructions %}
     <tr>
+      <td class="thumb-cell">
+        {% set thumb = thumbnails.get(i.id) %}
+        {% if thumb %}
+          <a href="{{ url_for('edit_instruction', instruction_id=i.id) }}"
+             title="Newest media this instruction produced">
+            {% if thumb.lower().endswith(('.mp4', '.mov', '.webm')) %}
+              <video class="thumb" src="{{ url_for('asset', filename=thumb) }}#t=0.5"
+                     preload="metadata" muted playsinline></video>
+            {% else %}
+              <img class="thumb" src="{{ url_for('asset', filename=thumb) }}" alt="" loading="lazy">
+            {% endif %}
+          </a>
+        {% else %}
+          <span class="thumb thumb-empty" aria-hidden="true"></span>
+        {% endif %}
+      </td>
       <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
       <td class="small">{{ i.account_ids|length }}</td>
       <td class="mono small">{{ i.schedule or "—" }}</td>
@@ -56,6 +101,9 @@
   </tbody>
 </table>
 </div>
+{% elif filters.q or filters.enabled or filters.mode %}
+<p class="muted">Nothing matches that filter.
+  <a href="{{ url_for('instructions') }}">Clear it</a>.</p>
 {% else %}
 <p class="muted">No instructions yet. <a href="{{ url_for('new_instruction') }}">Create one</a>.</p>
 {% endif %}

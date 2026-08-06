@@ -237,7 +237,8 @@ def test_the_page_says_where_the_next_post_goes(dash, store, account):
     _save(dash, account, community_id="111, 222, 333")
     _rotate(store, account, 1)
     page = dash.test_client().get("/accounts").get_data(as_text=True)
-    assert "Rotating 3 communities" in page
+    assert "3 communities, in rotation" in page
+    assert "The next post goes to" in page
     assert "<code>222</code>" in page
 
 

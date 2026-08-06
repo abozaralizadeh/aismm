@@ -11,6 +11,7 @@ import asyncio
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from . import cooldown, logging_setup, publish_ledger, tokens
 from .config import settings
@@ -196,6 +197,72 @@ def republish_run(run_id: str, caption: str = "") -> dict:
         return {"error": "publish_failed", "message": str(exc)}
     finally:
         logging_setup.current_run_id.reset(log_token)
+
+
+# A run that outlives this is not slow, it is gone: the in-process ceiling would
+# have ended it, so only a process that DIED without unwinding leaves one behind.
+_REAP_GRACE_SECONDS = 900
+# Used when the run ceiling is disabled (RUN_TIMEOUT_SECONDS=0) and there is
+# therefore no bound to derive one from.
+_REAP_FALLBACK_SECONDS = 86400
+
+
+def stale_run_cutoff(older_than_seconds: int = 0) -> int:
+    """How old a ``running`` run must be before it is certainly abandoned."""
+    if older_than_seconds > 0:
+        return older_than_seconds
+    ceiling = RUN_TIMEOUT_SECONDS
+    return ceiling + _REAP_GRACE_SECONDS if ceiling > 0 else _REAP_FALLBACK_SECONDS
+
+
+def reap_stale_runs(store=None, *, older_than_seconds: int = 0, apply: bool = True) -> list:
+    """Mark abandoned ``running`` runs as failed. Returns the runs it found.
+
+    A run is only ever moved off ``running`` by the code that is executing it —
+    so when the process dies mid-run (a gunicorn restart, an OOM kill, a deploy)
+    the row says "running" forever. The lock it held is heartbeated and clears
+    itself within one TTL, so the *instruction* recovers; the run row does not,
+    and the Runs page fills with runs that will never finish.
+
+    Age is the signal, and it is a safe one: a live run cannot be older than
+    ``RUN_TIMEOUT_SECONDS`` because that ceiling would have ended it, so anything
+    past the ceiling plus a grace period has no process behind it. ``apply=False``
+    reports without writing.
+    """
+    from .store import get_store
+
+    store = store or get_store()
+    cutoff_seconds = stale_run_cutoff(older_than_seconds)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+
+    stale = []
+    for run in store.list_runs(status=RunStatus.running, limit=10_000):
+        created = run.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created < cutoff:
+            stale.append(run)
+
+    if apply:
+        close_stale_runs(store, stale, minutes=cutoff_seconds // 60)
+    if stale:
+        logger.warning("%s %d stale run(s) that were still marked running",
+                       "Reaped" if apply else "Found", len(stale))
+    return stale
+
+
+def close_stale_runs(store, runs, *, minutes: int = 0) -> int:
+    """Mark the given abandoned runs failed, saying why. Returns how many."""
+    for run in runs:
+        run.status = RunStatus.failed
+        how_long = f" after {minutes} minutes" if minutes else ""
+        run.error = ((run.error or "") + (
+            f"\nAbandoned: this run was still marked running{how_long}, which means "
+            f"the service stopped (restart, deploy or crash) before it could finish. "
+            f"Nothing was published by it — use 'Publish this again' if it had already "
+            f"produced media, or re-run the agent.")).strip()
+        store.update_run(run)
+    return len(runs)
 
 
 def retry_run(run_id: str, prompt: str = "") -> dict:

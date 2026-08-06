@@ -133,13 +133,21 @@
       <div class="detail-media">
         {% set filename = run.asset_path.split('/')[-1] %}
         {% if filename.lower().endswith(('.mp4', '.mov', '.webm')) %}
-          <video controls src="{{ url_for('asset', filename=filename) }}"></video>
+          <video controls playsinline preload="metadata" src="{{ url_for('asset', filename=filename) }}"></video>
         {% else %}
           <img src="{{ url_for('asset', filename=filename) }}" alt="run media">
         {% endif %}
       </div>
+      <div class="media-actions">
+        <a class="btn small" href="{{ url_for('asset', filename=filename, download=1) }}"
+           download="{{ filename }}">Download</a>
+        <a class="btn small" href="{{ url_for('asset', filename=filename) }}"
+           target="_blank" rel="noopener">Open in a new tab</a>
+        {% if asset_url %}
+          <a class="btn small" href="{{ asset_url }}" target="_blank" rel="noopener">Public URL ↗</a>
+        {% endif %}
+      </div>
       <p class="small muted mono">{{ run.asset_path }}</p>
-      {% if asset_url %}<p class="small"><a href="{{ asset_url }}" target="_blank">public URL ↗</a></p>{% endif %}
     {% endif %}
 
     {% if staged %}
@@ -153,7 +161,24 @@
             <td><span class="badge badge-{{ s.status.value }}">{{ s.status.value }}</span></td>
             <td class="small">{{ s.media_kind }}</td>
             <td class="small">{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-            <td>{% if s.external_url %}<a href="{{ s.external_url }}" target="_blank">open ↗</a>{% endif %}</td>
+            <td class="actions-cell">
+              <div class="actions">
+                {# Decide it here: this page is where the post is actually
+                   visible, so sending you back to Runs to click Approve was
+                   asking you to judge it from memory. #}
+                {% if s.status.value == 'pending_approval' %}
+                  <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
+                    <button class="btn btn-primary small">Approve &amp; publish</button>
+                  </form>
+                  <form method="post" action="{{ url_for('reject', staged_id=s.id) }}"
+                        onsubmit="return confirm('Reject this post? It will not be published.');">
+                    <button class="btn btn-danger small">Reject</button>
+                  </form>
+                {% elif s.external_url %}
+                  <a class="btn small" href="{{ s.external_url }}" target="_blank" rel="noopener">open ↗</a>
+                {% endif %}
+              </div>
+            </td>
           </tr>
         {% endfor %}
         </tbody>

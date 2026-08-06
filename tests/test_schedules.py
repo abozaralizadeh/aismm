@@ -167,7 +167,7 @@ def test_parse_trigger_returns_the_first_trigger():
 
 @pytest.mark.parametrize("text,expected", [
     ("09:00", "at 09:00 UTC"),
-    ("9am, 6pm", "at 09:00 and 18:00 UTC"),
+    ("9am, 6pm", "at 09:00 and 18:00 UTC — 14× a week"),
     ("09:00 mon-fri", "at 09:00 UTC on mon-fri"),
     ("every 6h", "every 6 hours"),
     ("every 30m", "every 30 minutes"),
@@ -188,3 +188,52 @@ def test_readback_of_a_combination_lists_both():
 def test_readback_survives_step_cron():
     """int() on "*/4" used to raise while rendering the help text."""
     assert "*/4" in describe("0 */4 * * *")
+
+
+# --- the comma/semicolon trap --------------------------------------------------------- #
+# Reported as unclear, and it is the difference between 6 posts a week and 3:
+# a comma builds ONE schedule from every time × every day, a semicolon makes
+# each entry its own schedule.
+
+def test_commas_build_one_schedule_from_every_time_and_every_day():
+    triggers = parse_schedule("03:00 thu, 03:00 tue, 15:00 sun")
+    assert len(triggers) == 1
+    assert describe("03:00 thu, 03:00 tue, 15:00 sun") == \
+        "at 03:00 and 15:00 UTC on thu,tue,sun — 6× a week"
+
+
+def test_semicolons_keep_each_entry_separate():
+    triggers = parse_schedule("03:00 thu; 03:00 tue; 15:00 sun")
+    assert len(triggers) == 3
+    assert describe("03:00 thu; 03:00 tue; 15:00 sun") == (
+        "at 03:00 UTC on thu · at 03:00 UTC on tue · at 15:00 UTC on sun")
+
+
+def test_a_repeated_time_is_not_read_back_twice():
+    """"at 03:00 and 03:00" reads like a bug rather than like a cross-product."""
+    assert describe("03:00 thu, 03:00 tue").count("03:00") == 1
+
+
+# --- how often it actually fires ------------------------------------------------------ #
+# The count is what makes the cross-product visible. Only shown when there is
+# more than one time of day, since that is when times multiply across days.
+
+@pytest.mark.parametrize("text,expected", [
+    ("09:00, 18:00", "14× a week"),
+    ("09:00, 18:00 mon-fri", "10× a week"),
+    ("09:00 and 18:00 weekends", "4× a week"),
+    ("03:00, 09:00, 15:00 mon,wed", "6× a week"),
+])
+def test_the_readback_says_how_often_it_fires(text, expected):
+    assert expected in describe(text)
+
+
+@pytest.mark.parametrize("text", ["09:00", "09:00 mon", "every 6h", "0 9 * * *", "daily"])
+def test_a_single_daily_time_is_not_annotated(text):
+    """"7× a week" on a once-a-day schedule is noise."""
+    assert "a week" not in describe(text)
+
+
+def test_a_step_expression_is_not_counted():
+    """A wrong count is worse than none."""
+    assert "a week" not in describe("0 */4 * * *")

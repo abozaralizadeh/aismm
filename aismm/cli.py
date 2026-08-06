@@ -106,6 +106,31 @@ def cmd_list(_args) -> int:
     return 0
 
 
+def cmd_runs(args) -> int:
+    """Close out runs left marked ``running`` by a process that died."""
+    from . import orchestrator
+    from .store import get_store
+
+    configure_logging()
+    store = get_store()
+    stale = orchestrator.reap_stale_runs(store, older_than_seconds=args.older_than,
+                                         apply=args.apply)
+    cutoff = orchestrator.stale_run_cutoff(args.older_than)
+    if not stale:
+        print(f"\nNo runs have been stuck on 'running' for more than "
+              f"{cutoff // 60} minutes.")
+        return 0
+    print(f"\n{'Marked failed' if args.apply else 'Would mark failed'} "
+          f"({len(stale)}, stuck for more than {cutoff // 60} minutes):")
+    for run in stale:
+        print(f"  {run.id[:8]}  started {run.created_at:%Y-%m-%d %H:%M}  "
+              f"instruction={run.instruction_id[:8]}")
+    if not args.apply:
+        print("\nRe-run with --apply to write the change.")
+    print()
+    return 0
+
+
 def cmd_workspaces(args) -> int:
     """Show who can see what; take ownership; optionally tidy up unassigned rows.
 
@@ -263,6 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--instruction", required=True, help="instruction id (prefix) or name")
     pp.add_argument("--account", help="limit to one account id")
     pp.set_defaults(func=cmd_post)
+
+    pruns = sub.add_parser("runs", help="close out runs stuck on 'running' after a crash")
+    pruns.add_argument("--apply", action="store_true",
+                       help="write the change (default is a dry run)")
+    pruns.add_argument("--older-than", type=int, default=0, metavar="SECONDS",
+                       help="how long a run must have been stuck (default: the run "
+                            "timeout plus 15 minutes)")
+    pruns.set_defaults(func=cmd_runs)
 
     pw = sub.add_parser("workspaces", help="list workspaces, members and their content")
     pw.add_argument("--owner", metavar="EMAIL",
