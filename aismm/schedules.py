@@ -224,6 +224,49 @@ def parse_trigger(schedule: str, *, anchor: datetime | None = None):
     return triggers[0] if triggers else None
 
 
+_ALL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _count_days(day_of_week: str) -> int:
+    """How many weekdays a cron day field covers, or 0 if it cannot be counted."""
+    if day_of_week in ("*", "mon-sun"):
+        return 7
+    chosen = set()
+    for part in day_of_week.split(","):
+        part = part.strip()
+        if part in _ALL_DAYS:
+            chosen.add(part)
+        elif "-" in part:                      # a range: mon-fri
+            start, _, end = part.partition("-")
+            if start not in _ALL_DAYS or end not in _ALL_DAYS:
+                return 0
+            first, last = _ALL_DAYS.index(start), _ALL_DAYS.index(end)
+            span = (_ALL_DAYS[first:last + 1] if first <= last
+                    else _ALL_DAYS[first:] + _ALL_DAYS[:last + 1])
+            chosen.update(span)
+        else:
+            return 0                            # a step, or something unparsed
+    return len(chosen)
+
+
+def _weekly_fires(hour: str, day_of_week: str) -> int:
+    """How many times a week one cron part fires, or 0 when it is not worth saying.
+
+    Only counted for a list of literal hours (steps like ``*/4`` are left alone —
+    a wrong count is worse than none), and only reported when there is more than
+    ONE time of day. That is when times multiply across days, which is the thing
+    worth seeing: a schedule with a single daily time does not need to be told it
+    runs seven times a week.
+    """
+    if not hour.replace(",", "").isdigit():
+        return 0
+    times = len({h for h in hour.split(",")})
+    if times < 2:
+        return 0
+    days = _count_days(day_of_week)
+    return times * days if days else 0
+
+
 def describe(schedule: str, *, starts_at: datetime | None = None) -> str:
     """Plain-English readback of what a schedule string was understood to mean.
 
@@ -252,14 +295,26 @@ def describe(schedule: str, *, starts_at: datetime | None = None) -> str:
             if hour == "*":
                 when = f"every hour at minute {minute}"
             elif hour.replace(",", "").isdigit() and minute.isdigit():
-                # Cron holds several hours as "9,18"; render each as HH:MM.
-                when = "at " + " and ".join(
-                    f"{int(h):02d}:{int(minute):02d}" for h in hour.split(","))
+                # Cron holds several hours as "9,18"; render each as HH:MM. Deduped
+                # and sorted: "03:00 thu, 03:00 tue" collapses both times into ONE
+                # cron field, and reading back "at 03:00 and 03:00" looks like a
+                # bug rather than like the cross-product it actually is.
+                hours = sorted({int(h) for h in hour.split(",")})
+                when = "at " + " and ".join(f"{h:02d}:{int(minute):02d}" for h in hours)
             else:
                 # Steps and ranges ("*/4", "9-17") — show the cron fields as-is.
                 when = f"cron hour={hour} minute={minute}"
             days = "" if day_of_week in ("*", "mon-sun") else f" on {day_of_week}"
-            pieces.append(f"{when} UTC{days}")
+            piece = f"{when} UTC{days}"
+            # Several times AND several days in one part is a CROSS-PRODUCT: it
+            # fires at every listed time on every listed day. That is what
+            # separating with commas means, and it is not what someone writing
+            # "03:00 thu, 03:00 tue, 15:00 sun" usually wants — so say the number
+            # out loud, because 6 vs 3 is the whole difference.
+            fires = _weekly_fires(hour, day_of_week)
+            if fires and fires > 1:
+                piece += f" — {fires}× a week"
+            pieces.append(piece)
     rendered = " · ".join(pieces)
     if starts_at:
         rendered += f", starting {starts_at.strftime('%Y-%m-%d %H:%M')} UTC"
