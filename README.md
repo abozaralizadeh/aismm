@@ -412,6 +412,22 @@ Connect · Brand B — Meta app →
 
 ## Connecting accounts
 
+### Checking a connection
+
+**Accounts → Check permissions** answers what a stored token actually is, on every platform:
+
+- **Instagram** asks Graph's `/debug_token` — the only way to tell a `PAGE` token from a `USER` one,
+  which is the difference between publishing and a confusing code 190.
+- **X, TikTok, YouTube** have no token-introspection endpoint, so the token is proved by *using* it
+  (one cheap authenticated call) and the report lists the scopes recorded when the account was
+  connected.
+
+The scope list comes from the provider's own token response at connect time, because most providers
+cannot be asked afterwards. An account connected before that was recorded still reports whether the
+token works — it just says the scope list is unavailable rather than claiming everything is granted.
+
+
+
 For each platform you: (1) create a developer app, (2) put its credentials in `.env`, (3) register
 the redirect URL above, then (4) click **Connect** on the dashboard's **Accounts** page and approve.
 

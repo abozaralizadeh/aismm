@@ -210,7 +210,7 @@ def test_the_check_names_the_missing_permission(dash, store, monkeypatch):
         Account(platform=PlatformName.instagram, handle="x", external_id="1"),
         access_token="T")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True, "profile_id": "9",
                 "scopes": ["instagram_basic", "instagram_content_publish"]}  # no pages_*
 
@@ -229,7 +229,7 @@ def test_the_check_confirms_a_healthy_token(dash, store, monkeypatch):
         Account(platform=PlatformName.instagram, handle="x", external_id="1"),
         access_token="T")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True, "profile_id": "9",
                 "scopes": list(Instagram.REQUIRED_SCOPES)}
 
@@ -263,7 +263,7 @@ def test_a_user_token_is_named_as_the_cause(dash, store, monkeypatch):
         Account(platform=PlatformName.instagram, handle="genaicomicbook", external_id="1"),
         access_token="T")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "USER", "is_valid": True,
                 "scopes": list(Instagram.REQUIRED_SCOPES), "profile_id": "9"}
 
@@ -282,7 +282,7 @@ def test_a_page_token_with_full_scopes_reads_healthy(dash, store, monkeypatch):
         Account(platform=PlatformName.instagram, handle="x", external_id="1"),
         access_token="T")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True,
                 "scopes": list(Instagram.REQUIRED_SCOPES), "profile_id": "9"}
 
@@ -300,14 +300,17 @@ def test_an_expired_token_says_reconnect(dash, store, monkeypatch):
         Account(platform=PlatformName.instagram, handle="x", external_id="1"),
         access_token="T")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": False,
                 "scopes": list(Instagram.REQUIRED_SCOPES), "profile_id": "9"}
 
     monkeypatch.setattr(Instagram, "inspect_token", inspect)
     page = dash.test_client().post(f"/accounts/{account.id}/check",
                                    follow_redirects=True).get_data(as_text=True)
-    assert "no longer valid" in page
+    # Named per platform now that every platform can be checked — saying
+    # "Instagram says" on an X account would be nonsense.
+    assert "instagram rejected this token" in page.lower()
+    assert "reconnect" in page.lower()
 
 
 # --- connecting one account can break another ---------------------------------------- #
@@ -328,7 +331,7 @@ def test_a_broken_sibling_is_reported_right_after_connecting(store, monkeypatch)
     older = _connected(store, "genaicomicbook", "1")
     just_added = _connected(store, "emortezaei", "2")
 
-    async def inspect(_self, token):
+    async def inspect(_self, token, _account=None):
         if token == "token-genaicomicbook":
             return {"type": "USER", "is_valid": True, "scopes": ["instagram_basic"]}
         return {"type": "PAGE", "is_valid": True, "scopes": list(Instagram.REQUIRED_SCOPES)}
@@ -354,7 +357,7 @@ def test_healthy_siblings_produce_no_warning(store, monkeypatch):
     _connected(store, "genaicomicbook", "1")
     just_added = _connected(store, "emortezaei", "2")
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True, "scopes": list(Instagram.REQUIRED_SCOPES)}
 
     monkeypatch.setattr(Instagram, "inspect_token", inspect)
@@ -372,7 +375,7 @@ def test_missing_page_scopes_also_count_as_broken(store, monkeypatch):
     _connected(store, "genaicomicbook", "1")
     just_added = _connected(store, "emortezaei", "2")
 
-    async def inspect(_self, token):
+    async def inspect(_self, token, _account=None):
         if token == "token-genaicomicbook":
             return {"type": "PAGE", "is_valid": True,
                     "scopes": ["instagram_basic", "instagram_content_publish"]}
@@ -410,7 +413,7 @@ def test_other_platforms_are_not_dragged_in(store, monkeypatch):
 
     calls = []
 
-    async def inspect(_self, token):
+    async def inspect(_self, token, _account=None):
         calls.append(token)
         return {"type": "PAGE", "is_valid": True, "scopes": list(Instagram.REQUIRED_SCOPES)}
 
@@ -502,7 +505,7 @@ def test_the_callback_stores_every_account_from_one_login(store, monkeypatch):
                          meta={"access_token": p["access_token"], "page_name": p["name"]})
                 for p in THREE_PAGES["data"]]
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True, "scopes": list(Instagram.REQUIRED_SCOPES)}
 
     monkeypatch.setattr(Instagram, "exchange_code", exchange)
@@ -534,7 +537,7 @@ def test_connecting_all_at_once_warns_about_nobody(store, monkeypatch):
     accounts = [_connected(store, h, str(i))
                 for i, h in enumerate(["genaicomicbook", "apadana", "emortezaei"], start=1)]
 
-    async def inspect(_self, _token):
+    async def inspect(_self, _token, _account=None):
         return {"type": "USER", "is_valid": True, "scopes": []}   # would flag if checked
 
     monkeypatch.setattr(Instagram, "inspect_token", inspect)

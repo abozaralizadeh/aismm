@@ -427,7 +427,7 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
 
         try:
-            info = asyncio.run(platform.inspect_token(access_token))
+            info = asyncio.run(platform.inspect_token(access_token, account))
         except Exception as exc:  # noqa: BLE001
             flash(f"Could not inspect the token: {exc}", "error")
             return redirect(url_for("accounts"))
@@ -439,7 +439,12 @@ def create_app() -> Flask:
 
         granted = info.get("scopes", [])
         detail = (f"type={info.get('type') or '?'} · valid={info.get('is_valid')} · "
-                  f"scopes: {', '.join(sorted(granted)) or 'none'}")
+                  f"scopes: {', '.join(sorted(granted)) or 'not recorded'}")
+        if info.get("source") == "identity check":
+            # No introspection endpoint on this platform: the token was proved by
+            # using it, and the scopes are the ones recorded at connect time.
+            detail += " (scopes as granted at connect; "
+            detail += f"{account.platform.value} has no token-introspection endpoint)"
 
         # The decisive check. Publishing acts as the Page, so a USER token here
         # fails with "impersonating a user's page" no matter how good the scopes
@@ -452,15 +457,27 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
 
         if not info.get("is_valid", True):
-            flash(f"Instagram says this token is no longer valid — reconnect. {detail}", "error")
+            why = info.get("error", "")
+            flash(f"{account.platform.value} rejected this token — reconnect the account. "
+                  f"{why} {detail}".strip(), "error")
+            return redirect(url_for("accounts"))
+
+        if not granted:
+            # Nothing to compare against: the token works, and that is all this
+            # platform will tell us. Claiming it is "healthy" would overstate it.
+            flash(f"The token works — {account.platform.value} accepted it just now. "
+                  f"No scope list is available for this account (connected before scopes "
+                  f"were recorded, or the provider returned none). {detail}", "success")
             return redirect(url_for("accounts"))
 
         wanted = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
         missing = sorted(wanted - set(granted))
         if missing:
+            fix = ("Disconnect and reconnect, ticking this account's Page in the dialog."
+                   if account.platform is PlatformName.instagram
+                   else "Disconnect and reconnect to grant them.")
             flash(f"Token is MISSING {', '.join(missing)} — that is why publishing fails. "
-                  f"Disconnect and reconnect, ticking this account's Page in the dialog. "
-                  f"{detail}", "error")
+                  f"{fix} {detail}", "error")
         else:
             flash(f"Looks healthy — everything publishing needs is granted. {detail}", "success")
         return redirect(url_for("accounts"))
@@ -541,6 +558,13 @@ def create_app() -> Flask:
             meta = dict(identity.meta)
             if app_id:
                 meta["app_id"] = app_id
+            # What the provider actually GRANTED, which is not always what was
+            # asked for — a consent screen can drop scopes silently. Recorded
+            # here because most platforms offer no way to ask afterwards, so
+            # "Check permissions" would have nothing to report otherwise.
+            granted = (token.scope or "").replace(",", " ").split()
+            if granted:
+                meta["granted_scopes"] = granted
             # Platforms may override the token to store (Instagram: the PAGE token).
             access = meta.pop("access_token", token.access_token)
             refresh = meta.pop("refresh_token", token.refresh_token)

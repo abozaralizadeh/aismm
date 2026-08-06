@@ -597,9 +597,16 @@ both layers.
   ones returned code 190 under identical code — the newest-works/older-break asymmetry is the
   signature. `dashboard/app._warn_about_collateral_damage` re-checks the other accounts after every
   connect and flashes a warning, because the breakage is otherwise invisible until the next run.
-  **Accounts → Check permissions** (`Instagram.inspect_token` → Graph `/debug_token`) is the
-  per-account diagnostic: `type` is `PAGE` or `USER`, and a USER token is the direct cause however
-  complete `scopes` looks. Scope lists alone cannot diagnose this.
+  **Accounts → Check permissions** works on EVERY platform:
+  `SocialPlatform.inspect_token(access_token, account)` has a base implementation that proves the
+  token by calling `fetch_identity` and reports the scopes recorded at connect
+  (`meta["granted_scopes"]`, captured from the token response — most providers cannot be asked
+  afterwards). Instagram overrides it with Graph `/debug_token`, which is the only way to tell a
+  PAGE token from a USER one, and a USER token is the direct cause of code 190 however complete
+  `scopes` looks. It was Instagram-only before, so the button answered
+  `'Twitter' object has no attribute 'inspect_token'` on three of the four platforms it was offered
+  for. Keep the messages platform-neutral — "tick this account's Page in the dialog" is Meta advice,
+  and an account with NO recorded scopes must not be called healthy, only "the token works".
 - **One unavailable scope kills the WHOLE OAuth dialog** ("Invalid Scopes: …"), so a review-gated
   analytics permission blocks publishing too — that is what `Invalid Scopes:
   instagram_manage_insights` was. `Instagram.scopes` is a property splitting `REQUIRED_SCOPES` (what

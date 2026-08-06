@@ -339,7 +339,7 @@ class Instagram(SocialPlatform):
                 _raise_graph(exc)
             return resp.json().get("data", [])
 
-    async def inspect_token(self, access_token: str) -> dict:
+    async def inspect_token(self, access_token: str, account=None) -> dict:
         """What this stored token actually IS, straight from Graph.
 
         ``/debug_token`` answers the two questions logs cannot. **Is it a PAGE

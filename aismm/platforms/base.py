@@ -138,6 +138,29 @@ class SocialPlatform(ABC):
         """
         return [await self.fetch_identity(access_token)]
 
+    async def inspect_token(self, access_token: str, account: Account | None = None) -> dict:
+        """What this stored token actually is — the "Check permissions" button.
+
+        Every platform gets an answer. The default proves the token by making the
+        cheapest authenticated call there is (``fetch_identity``) and reports the
+        scopes recorded when the account was connected; a platform with real
+        token introspection overrides this with something better (Instagram asks
+        Graph ``/debug_token``, which is the only way to tell a PAGE token from a
+        USER one).
+
+        Returns ``{}`` only when it genuinely cannot tell. Never raises — it is a
+        diagnostic, and one that cannot answer must not also break the page.
+        """
+        granted = list((account.meta or {}).get("granted_scopes") or []) if account else []
+        try:
+            identity = await self.fetch_identity(access_token)
+        except Exception as exc:  # noqa: BLE001 - the failure IS the diagnosis
+            return {"is_valid": False, "type": "USER", "scopes": granted,
+                    "error": str(exc)[:300], "source": "identity check"}
+        return {"is_valid": True, "type": "USER", "scopes": granted,
+                "handle": identity.handle, "profile_id": identity.external_id,
+                "source": "identity check"}
+
     @abstractmethod
     async def publish(
         self,
