@@ -138,6 +138,14 @@ class SocialPlatform(ABC):
         """
         return [await self.fetch_identity(access_token)]
 
+    def after_publish(self, *, account: Account, store, result: "PublishResult") -> None:
+        """Per-platform bookkeeping once a live post has landed. Default: nothing.
+
+        An extension point rather than another branch in ``perform_publish``:
+        only X needs it today (advancing the community rotation), and the publish
+        tool should not grow a special case per platform.
+        """
+
     async def inspect_token(self, access_token: str, account: Account | None = None) -> dict:
         """What this stored token actually is — the "Check permissions" button.
 

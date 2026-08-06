@@ -125,6 +125,16 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
   is the generic "One or more parameters to your request was invalid" while `errors[].message` names
   the actual parameter.
+- **Several communities ROTATE, they do not fan out** (`twitter.next_community` +
+  `after_publish`). One post per run, to the next id in `meta["community_ids"]`; the cursor advances
+  only once the post is LIVE, so a failed attempt doesn't skip a community for a whole cycle.
+  Fan-out — the same content to every community at once — is several near-identical posts from one
+  account within seconds, which is what X's duplicate-content rule describes; it would also multiply
+  the cost of a pay-per-use API and force the publish ledger to be keyed per community, weakening the
+  guard that stops accidental repeats. A scheduler covers every community anyway, with different
+  content each run. The whole of a THREAD goes to one community, chosen once. `after_publish` is a
+  `SocialPlatform` hook (default no-op) rather than another platform branch in `perform_publish`, and
+  its failure is logged, never fatal — the post already went out.
 - **A community post is invisible to your followers unless you say otherwise** — `POST /2/tweets`
   takes `community_id` AND `share_with_followers` (boolean, default false), which is the switch X's
   own composer shows beside the community picker. Both live in `account.meta` and are set per

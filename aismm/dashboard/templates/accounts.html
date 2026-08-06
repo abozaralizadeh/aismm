@@ -73,8 +73,10 @@
     <tr class="community-row"><td colspan="5">
       <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}" class="community-form">
         <label>X destination
-          <input type="text" name="community_id" inputmode="numeric" pattern="[0-9]*"
-                 value="{{ a.meta.get('community_id', '') }}" placeholder="Blank = home timeline">
+          {% set ids = a.meta.get('community_ids') or ([a.meta.get('community_id')] if a.meta.get('community_id') else []) %}
+          <input type="text" name="community_id"
+                 value="{{ ids | join(', ') }}"
+                 placeholder="Blank = home timeline. Several = rotate, one per run">
         </label>
         <label class="check">
           <input type="checkbox" name="share_with_followers"
@@ -83,9 +85,17 @@
         </label>
         <button class="btn small">Save destination</button>
       </form>
-      <span class="muted small">One community per post. X does not provide this app access to list
-        joined communities. Copy the numeric ID from the community URL:
-        <code>x.com/i/communities/ID</code>.
+      <span class="muted small">X does not provide this app access to list joined communities. Copy
+        the numeric ID from the community URL: <code>x.com/i/communities/ID</code>.
+        {% if ids and ids | length > 1 %}
+          <br><strong>Rotating {{ ids | length }} communities</strong> — the next post goes to
+          <code>{{ ids[(a.meta.get('community_cursor') or 0) % (ids | length)] }}</code>, then the
+          one after it. <strong>One post per run, never the same post to several communities</strong>:
+          X's rules treat duplicate or near-identical posts from one account as spam, and a scheduled
+          instruction covers every community anyway with different content each time.
+        {% elif ids %}
+          <br>Add more IDs (comma-separated) to rotate through several communities, one per run.
+        {% endif %}
         <br><strong>Also share with followers</strong> is the same switch X shows in its composer: a
         community post is otherwise visible only inside that community, so leave it ticked if the
         point is to reach your own audience. It has no effect when the destination is the home

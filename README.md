@@ -1089,7 +1089,22 @@ pre-truncating or numbering by hand.
 
 An X account can post to a **Community** instead of the home timeline. On **Accounts**, set the
 numeric community ID (copy it from `x.com/i/communities/ID` — X gives this app no way to list the
-communities you have joined) and choose who sees the post:
+communities you have joined) and choose who sees the post.
+
+**Several communities rotate.** Enter them comma-separated and each run posts to the next one:
+
+```
+111, 222, 333   →  Mon → 111 · Wed → 222 · Fri → 333 · Mon → 111 …
+```
+
+One post per run, never the same post to several communities at once. That is deliberate: X's rules
+treat duplicate or near-identical posts from one account as spam, so fan-out risks the account — and
+on a pay-per-use API it multiplies the cost of every run. A scheduled instruction covers every
+community anyway, with genuinely different content each time. The page shows which community the
+next post will go to; the cursor only advances once a post actually lands, so a failed run doesn't
+skip a community.
+
+Who sees it:
 
 **Also share with followers** is the same switch X shows in its own composer. A community post is
 otherwise visible *only inside that community*, so leave it ticked whenever the point is to reach

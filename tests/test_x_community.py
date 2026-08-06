@@ -99,3 +99,148 @@ def test_it_cannot_be_set_on_another_platforms_account(dash, store):
                                  access_token="t")
     assert dash.test_client().post(f"/accounts/{other.id}/community",
                                    data={"community_id": "123"}).status_code == 404
+
+
+# --- rotating through several communities -------------------------------------------- #
+# Rotation, not fan-out. Posting the same content to every community at once is
+# several near-identical posts from one account within seconds, which is what X's
+# duplicate-content rule describes — and on a pay-per-use API it multiplies the
+# cost. A scheduler covers every community anyway, with different content each run.
+
+def _rotate(store, account, times):
+    """Publish `times` times, returning the community each post went to."""
+    from aismm.platforms.registry import get_platform
+    from aismm.platforms.twitter import next_community
+
+    platform = get_platform(PlatformName.twitter)
+    went_to = []
+    for _ in range(times):
+        current = store.get_account(account.id)
+        went_to.append(next_community(current))
+        platform.after_publish(account=current, store=store, result=None)
+    return went_to
+
+
+def test_several_communities_are_visited_in_turn(dash, store, account):
+    _save(dash, account, community_id="111, 222, 333")
+    assert _rotate(store, account, 6) == ["111", "222", "333", "111", "222", "333"]
+
+
+def test_one_community_never_moves(dash, store, account):
+    _save(dash, account, community_id="111")
+    assert _rotate(store, account, 3) == ["111", "111", "111"]
+
+
+def test_no_community_is_the_home_timeline(store, account):
+    assert _rotate(store, account, 2) == ["", ""]
+
+
+def test_the_whole_thread_goes_to_ONE_community(dash, store, account, monkeypatch):
+    """Its later posts belong to the same community as the first."""
+    from aismm.platforms import twitter as tw
+
+    posts = []
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"data": {"id": f"18{len(posts)}"}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            posts.append(kw.get("json") or {})
+            return _Resp()
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
+    _save(dash, account, community_id="111, 222")
+    import asyncio
+
+    from aismm.platforms.registry import get_platform
+
+    asyncio.run(get_platform(PlatformName.twitter).publish(
+        access_token="t", account=store.get_account(account.id), caption="x" * 700,
+        asset_path="", media_kind="text", asset_paths=None))
+    assert len(posts) > 1
+    assert {post["community_id"] for post in posts} == {"111"}
+
+
+def test_the_rotation_only_advances_on_a_LIVE_post(dash, store, account):
+    """after_publish runs once the post has landed; advancing on a failure would
+    silently skip a community for a whole cycle."""
+    from aismm.platforms.twitter import next_community
+
+    _save(dash, account, community_id="111, 222, 333")
+    assert next_community(store.get_account(account.id)) == "111"
+    assert next_community(store.get_account(account.id)) == "111"   # no publish, no move
+
+
+def test_changing_the_list_restarts_the_rotation(dash, store, account):
+    _save(dash, account, community_id="111, 222, 333")
+    _rotate(store, account, 2)                       # cursor now at 333
+    _save(dash, account, community_id="444, 555")
+    assert _rotate(store, account, 1) == ["444"]
+
+
+def test_resaving_the_same_list_does_not_restart_it(dash, store, account):
+    """Flipping the followers switch must not send the next post back to the first."""
+    _save(dash, account, community_id="111, 222, 333")
+    _rotate(store, account, 1)                       # next is 222
+    _save(dash, account, community_id="111, 222, 333", share_with_followers="on")
+    assert _rotate(store, account, 1) == ["222"]
+
+
+def test_the_list_survives_whitespace_and_separators(dash, store, account):
+    _save(dash, account, community_id=" 111,222 ;  333 ")
+    assert store.get_account(account.id).meta["community_ids"] == ["111", "222", "333"]
+
+
+def test_a_repeated_id_is_only_listed_once(dash, store, account):
+    _save(dash, account, community_id="111, 111, 222")
+    assert store.get_account(account.id).meta["community_ids"] == ["111", "222"]
+
+
+def test_one_bad_id_rejects_the_whole_list(dash, store, account):
+    page = _save(dash, account, community_id="111, nope, 222").get_data(as_text=True)
+    assert "nope" in page
+    assert "community_ids" not in store.get_account(account.id).meta
+
+
+def test_a_single_id_saved_by_an_older_version_still_works(store, account):
+    """Existing connections stored community_id, not a list."""
+    from aismm.platforms.twitter import community_ids, next_community
+
+    account.set_meta({"community_id": "999"})
+    store.upsert_account(account)
+    stored = store.get_account(account.id)
+    assert community_ids(stored) == ["999"]
+    assert next_community(stored) == "999"
+
+
+def test_clearing_the_list_clears_the_cursor(dash, store, account):
+    _save(dash, account, community_id="111, 222")
+    _rotate(store, account, 1)
+    _save(dash, account, community_id="")
+    meta = store.get_account(account.id).meta
+    assert not any(key in meta for key in ("community_ids", "community_id",
+                                           "community_cursor", "share_with_followers"))
+
+
+def test_the_page_says_where_the_next_post_goes(dash, store, account):
+    _save(dash, account, community_id="111, 222, 333")
+    _rotate(store, account, 1)
+    page = dash.test_client().get("/accounts").get_data(as_text=True)
+    assert "Rotating 3 communities" in page
+    assert "<code>222</code>" in page
+
+
+def test_saving_several_says_they_rotate(dash, store, account):
+    page = _save(dash, account, community_id="111, 222").get_data(as_text=True)
+    assert "rotate through 2 communities, one per run" in page

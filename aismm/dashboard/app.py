@@ -373,28 +373,47 @@ def create_app() -> Flask:
         _require_owner()
         if account.platform is not PlatformName.twitter:
             abort(404)
+        from ..platforms.twitter import parse_community_ids
+
         meta = dict(account.meta)
-        community_id = request.form.get("community_id", "").strip()
-        if community_id and not community_id.isdigit():
-            flash("An X Community ID contains digits only. Leave it blank for the home timeline.",
-                  "error")
+        ids = parse_community_ids(request.form.get("community_id", ""))
+        bad = [c for c in ids if not c.isdigit()]
+        if bad:
+            flash(f"An X Community ID contains digits only — {', '.join(bad)} does not. "
+                  f"Leave the box blank for the home timeline.", "error")
             return redirect(url_for("accounts"))
+
         share = request.form.get("share_with_followers") == "on"
-        if community_id:
-            meta["community_id"] = community_id
+        previous = meta.get("community_ids") or ([meta["community_id"]]
+                                                 if meta.get("community_id") else [])
+        if ids:
+            meta["community_ids"] = ids
+            meta["community_id"] = ids[0]        # the single-value form, still read by older code
             meta["share_with_followers"] = share
+            # Only reset the rotation when the LIST changed; re-saving the same
+            # communities to flip the followers switch should not send the next
+            # post back to the first one.
+            if list(previous) != ids:
+                meta["community_cursor"] = 0
         else:
             # No community, no choice to remember: the flag only exists to widen
             # a community post, and leaving it set would silently apply to a
             # community added later.
-            meta.pop("community_id", None)
-            meta.pop("share_with_followers", None)
+            for key in ("community_id", "community_ids", "share_with_followers",
+                        "community_cursor"):
+                meta.pop(key, None)
         account.set_meta(meta)
         store.upsert_account(account)
-        if community_id:
-            flash(f"X posts go to community {community_id}"
-                  + (" and to your followers." if share else " only — followers will not see them."),
-                  "success")
+
+        if len(ids) > 1:
+            flash(f"X posts rotate through {len(ids)} communities, one per run, starting with "
+                  f"{ids[0]}"
+                  + (" — and go to your followers too." if share
+                     else ". Followers will not see them."), "success")
+        elif ids:
+            flash(f"X posts go to community {ids[0]}"
+                  + (" and to your followers." if share
+                     else " only — followers will not see them."), "success")
         else:
             flash("X posts go to the home timeline.", "success")
         return redirect(url_for("accounts"))

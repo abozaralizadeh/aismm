@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 import httpx
 
@@ -128,6 +129,55 @@ def split_thread(text: str, limit: int, max_posts: int, pin_suffix: str = "") ->
     return [f"{part} {index}/{total}" for index, part in enumerate(parts, start=1)]
 
 
+def community_ids(account) -> list[str]:
+    """Every community this account posts to, in rotation order.
+
+    ``community_ids`` is the list; ``community_id`` is the single-value form
+    earlier versions stored, still honoured so an existing connection keeps
+    working untouched.
+    """
+    meta = account.meta or {}
+    listed = meta.get("community_ids")
+    if isinstance(listed, str):
+        listed = parse_community_ids(listed)
+    ids = [str(c).strip() for c in (listed or []) if str(c).strip()]
+    if not ids:
+        single = str(meta.get("community_id", "")).strip()
+        ids = [single] if single else []
+    return ids
+
+
+def parse_community_ids(raw: str) -> list[str]:
+    """Split what the operator typed into ids, keeping their order, no repeats."""
+    seen, ids = set(), []
+    for part in re.split(r"[\s,;]+", raw or ""):
+        part = part.strip()
+        if part and part not in seen:
+            seen.add(part)
+            ids.append(part)
+    return ids
+
+
+def next_community(account) -> str:
+    """The community THIS post goes to. Empty string means the home timeline.
+
+    Rotation, not fan-out: one post per run, to the next community in the list.
+    Posting the same content to every community at once is several near-identical
+    posts from one account within seconds, which is what X's duplicate-content
+    rule describes — and it would multiply the cost of a pay-per-use API. A
+    scheduler posting fresh content on a cadence covers every community anyway,
+    with a genuinely different post each time.
+    """
+    ids = community_ids(account)
+    if not ids:
+        return ""
+    try:
+        cursor = int((account.meta or {}).get("community_cursor", 0))
+    except (TypeError, ValueError):
+        cursor = 0
+    return ids[cursor % len(ids)]
+
+
 class Twitter(SocialPlatform):
     name = PlatformName.twitter
     capabilities = Capabilities(
@@ -152,6 +202,27 @@ class Twitter(SocialPlatform):
     scopes = ["tweet.read", "tweet.write", "users.read", "media.write", "offline.access"]
     use_pkce = True
     token_auth_style = "basic"
+
+    def after_publish(self, *, account, store, result) -> None:
+        """Move the community rotation on by one, once the post is live.
+
+        Here rather than inside ``publish`` because it must happen only when the
+        post actually landed: advancing on a failed attempt would silently skip a
+        community for a whole cycle.
+        """
+        ids = community_ids(account)
+        if len(ids) < 2:
+            return
+        meta = dict(account.meta or {})
+        try:
+            cursor = int(meta.get("community_cursor", 0))
+        except (TypeError, ValueError):
+            cursor = 0
+        meta["community_cursor"] = (cursor + 1) % len(ids)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        logger.info("X community rotation: posted to %s, next is %s",
+                    ids[cursor % len(ids)], ids[meta["community_cursor"]])
 
     async def fetch_identity(self, access_token: str) -> Identity:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -270,11 +341,13 @@ class Twitter(SocialPlatform):
                 media_ids = [await self._upload_media(client, access_token, path, media_kind)
                              for path in paths]
 
+            # Chosen ONCE for the whole thread: its later posts belong to the
+            # same community as the first.
+            community_id = next_community(account)
             first_id = ""
             reply_to = ""
             for index, text in enumerate(posts):
                 payload: dict = {"text": text}
-                community_id = str((account.meta or {}).get("community_id", "")).strip()
                 if community_id:
                     payload["community_id"] = community_id
                     # X's own composer shows this as "Also share with followers".

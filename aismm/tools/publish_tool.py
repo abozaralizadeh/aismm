@@ -405,6 +405,15 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     publish_ledger.record(account, store, digests, url=result.url,
                           external_id=result.external_id, instruction_id=instruction.id)
 
+    # Per-platform bookkeeping that only makes sense once the post is live (X
+    # advances its community rotation here). Never fatal: the post already went
+    # out, and losing the run over a counter would be absurd.
+    try:
+        platform.after_publish(account=account, store=store, result=result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("after_publish bookkeeping failed for %s: %s",
+                       account.platform.value, exc)
+
     # The post landed, but Instagram had answered media_publish with a rate-limit
     # error — the app IS being throttled even though this one got through. Back off
     # anyway, or the next scheduled run knocks again and Meta extends the block.
