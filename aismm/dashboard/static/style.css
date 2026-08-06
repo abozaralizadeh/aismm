@@ -50,6 +50,10 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; color: var(--text); }
 .login-btn { display: inline-block; width: 100%; padding: .7rem 1rem; }
 
 main { max-width: 960px; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
+/* Table pages get the room the rows actually need — 960px clipped the last
+   column and forced a horizontal scroll on a desktop with space to spare.
+   Prose stays at 960 (and .form at 680) so line length is still readable. */
+main.wide { max-width: 1440px; }
 
 .flashes { margin-bottom: 1rem; }
 .flash { padding: .6rem .9rem; border-radius: 8px; margin-bottom: .5rem; border: 1px solid var(--border); }
@@ -448,4 +452,12 @@ th .sort-active { color: var(--accent); }
 .account-actions {
   display: flex; flex-wrap: wrap; gap: .6rem;
   margin-top: .9rem; padding-top: .8rem; border-top: 1px solid var(--border);
+}
+
+/* A cron string is one token, not prose: wrapping it mid-expression
+   ("0 6 * *" / "*,0 16 *") is unreadable. Truncate with the full text on hover,
+   and show what it MEANS underneath — that is what you came to check. */
+.schedule-cell { max-width: 26ch; }
+.schedule-raw {
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

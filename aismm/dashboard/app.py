@@ -737,6 +737,11 @@ def create_app() -> Flask:
 
         return render_template(
             "instructions.html", instructions=rows, next_runs=next_runs,
+            # What the schedule text was understood to MEAN. A raw cron string
+            # wrapped across three lines in a narrow column is unreadable, and
+            # the reading is the thing you actually want to check.
+            readbacks={i.id: describe_schedule(i.schedule) if i.schedule else ""
+                       for i in rows},
             thumbnails=_latest_media(store, scope), total=len(rows),
             modes=list(PublishMode), sorts=INSTRUCTION_SORTS,
             filters={"q": search, "enabled": enabled, "mode": mode, "sort": sort,

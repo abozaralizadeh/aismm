@@ -253,3 +253,43 @@ def test_connecting_comes_after_what_is_already_connected(dash, store, account):
     """The common visit is to check an existing account, not to add one."""
     page = dash.test_client().get("/accounts").get_data(as_text=True)
     assert page.index("Connected") < page.index("Connect another")
+
+
+# --- the list must fit, and must show what a schedule MEANS ---------------------------- #
+
+def test_table_pages_get_a_wider_column():
+    """960px clipped the last column and forced a horizontal scroll on a desktop
+    with room to spare."""
+    assert "main.wide" in CSS
+    for template in ("instructions.html", "runs.html"):
+        page = (__import__("pathlib").Path(__file__).resolve().parents[1]
+                / "aismm/dashboard/templates" / template).read_text()
+        assert "{% block main_class %}wide{% endblock %}" in page
+
+
+def test_a_cron_string_is_not_wrapped_mid_expression():
+    """"0 6 * *" / "*,0 16 *" across three lines is unreadable."""
+    block = CSS.split(".schedule-raw {")[1].split("}")[0]
+    assert "nowrap" in block
+    assert "ellipsis" in block
+
+
+def test_the_schedule_is_shown_in_plain_english(dash, store):
+    _instruction(store, "Comicbook", schedule="0 16 * * *")
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "at 16:00 UTC" in page
+
+
+def test_a_schedule_that_never_fires_is_flagged(dash, store):
+    """Silent failure: the row looks configured and the instruction has simply
+    never run. Two raw crons joined by a comma do exactly this."""
+    _instruction(store, "Broken", schedule="0 6 * * *,0 16 * * *")
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "never fires" in page
+    assert "badge-failed" in page
+
+
+def test_a_working_schedule_is_not_flagged(dash, store):
+    _instruction(store, "Fine", schedule="09:00")
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "never fires" not in page
