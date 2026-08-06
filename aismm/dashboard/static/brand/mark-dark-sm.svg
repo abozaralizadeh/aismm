@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 100" role="img" aria-label="AISM²">
+  <title>AISM²</title>
+  <!-- Small mark: the badge is a plain square. The design drops the "2" below
+       ~48px, and next to the "AISM²" wordmark it would be saying it twice.
+       The badge border is #171a21 — the dashboard topbar it sits on. -->
+  <path fill="#faf9f6" fill-rule="evenodd"
+        d="M50 8 L84 92 L64 92 L58 74 L42 74 L36 92 L16 92 Z
+           M50 38 L55.33 62 L44.67 62 Z"/>
+  <rect x="72" y="2" width="30" height="30" rx="7"
+        fill="#E85C7A" stroke="#171a21" stroke-width="5"/>
+</svg>

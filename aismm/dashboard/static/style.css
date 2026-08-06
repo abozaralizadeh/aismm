@@ -3,8 +3,17 @@ html {
 }
 
 :root {
+  /* Brand — AISM², from the design system. The ink and paper are the mark's own
+     colours and are what the tile, the favicon and the theme-colour use. */
+  --brand-ink: #1c1e27; --brand-paper: #faf9f6; --brand-accent: #E85C7A;
+
   --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a2f3a;
-  --text: #e6e8ec; --muted: #9aa3b2; --accent: #6ea8fe; --accent-2: #7c5cff;
+  --text: #e6e8ec; --muted: #9aa3b2;
+  /* The brand accent IS the UI accent: #E85C7A is 5.6:1 on the page and 5.2:1
+     on a panel, so it passes AA for text as it is. (The design's earlier indigo
+     did not — 3.4:1 — and needed a lightened tint for links; the rose does not,
+     so the mark and the links are now literally the same colour.) */
+  --accent: var(--brand-accent); --accent-2: #7c5cff;
   --ok: #35c28a; --warn: #f0b429; --danger: #f0616d; --radius: 12px;
 }
 * { box-sizing: border-box; }
@@ -25,7 +34,14 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; color: var(--text); }
   padding: .8rem 1.5rem; background: var(--panel); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 10;
 }
-.brand { font-weight: 700; font-size: 1.1rem; }
+.brand { display: flex; align-items: center; gap: .55rem; font-weight: 700; font-size: 1.1rem; }
+.brand:hover { text-decoration: none; }
+.brand-mark { height: 22px; width: auto; display: block; }
+.brand-mark-lg { height: 40px; }
+.brand-word { color: var(--text); letter-spacing: -.01em; }
+/* The squared motif: the "2" is the accent, at every size it appears. */
+.brand-word sup { color: var(--brand-accent); font-size: .62em; top: -.5em; margin-left: 1px; }
+.login-brand { display: flex; align-items: center; justify-content: center; gap: .7rem; }
 /* The nav scrolls sideways rather than being clipped when it doesn't fit. */
 .topbar nav {
   display: flex; gap: 1.25rem; overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -352,6 +368,7 @@ th .sort-active { color: var(--accent); }
 @media (max-width: 420px) {
   main { padding: 1rem .75rem 3rem; }
   .brand { font-size: 1rem; }
+  .brand-mark { height: 19px; }
   .table-scroll table { min-width: 30rem; }
 }
 

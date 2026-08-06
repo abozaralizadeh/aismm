@@ -1,4 +1,9 @@
-# AI Social Media Manager (AISMM)
+<p align="center">
+  <img src="aismm/dashboard/static/brand/logo.svg" width="212"
+       alt="AISM² — AI Social Media Manager">
+</p>
+
+# AISM² — AI Social Media Manager
 
 An **autonomous, agent-driven framework** for publishing content to **Instagram, X (Twitter),
 YouTube, and TikTok**. You connect accounts and write *instructions* (a brief + schedule + publish
@@ -302,6 +307,43 @@ Every account's OAuth **redirect/callback URL** is:
 `<DASHBOARD_BASE_URL><REVERSE_PROXY_PREFIX>/oauth/<platform>/callback` (for example,
 `https://your-host/aismm/oauth/twitter/callback` when the prefix is `/aismm`). Omit the prefix when
 `REVERSE_PROXY_PREFIX` is empty. Register exactly this in each developer portal.
+
+---
+
+## Brand
+
+The mark is an **A** with a squared accent badge — AISM², *AI Social Media Manager*.
+
+| | |
+|---|---|
+| Ink | `#1c1e27` — the tile, the app background, `theme-color` |
+| Paper | `#faf9f6` — the letterform |
+| Accent | `#E85C7A` — the badge and the superscript ² |
+
+Assets live in [`aismm/dashboard/static/brand/`](aismm/dashboard/static/brand):
+
+| File | Use |
+|---|---|
+| `icon.svg` | app icon / favicon — rounded tile, plain badge |
+| `avatar.svg` | the circle variant, for profile pictures |
+| `mark-dark.svg` · `mark-light.svg` | the primary mark, with the ², for light or dark surfaces |
+| `mark-dark-sm.svg` | small sizes — the ² is dropped below ~48px, as the design specifies |
+| `logo.svg` | the wordmark lockup (this README, the login page) |
+
+Two implementation notes, both about not depending on things that vary per machine:
+
+- **The A is a path, not text.** A favicon rendered with a font falls back to whatever the viewer
+  happens to have, so the mark would differ per browser tab. See
+  [`brand/_glyph.txt`](aismm/dashboard/static/brand/_glyph.txt) for the geometry.
+- **The rasters are generated**, not committed as opaque binaries, so the mark has one definition:
+
+  ```bash
+  python scripts/make_brand_assets.py    # favicon.ico, favicon-32.png, apple-touch-icon.png
+  ```
+
+The accent doubles as the dashboard's UI accent: `#E85C7A` is 5.6:1 on the page background and
+5.2:1 on a panel, so it passes AA for text as it is, and the mark and the links are literally the
+same colour.
 
 ---
 

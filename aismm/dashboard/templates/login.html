@@ -4,11 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in · AI Social Media Manager</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/icon.svg') }}">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
+  <meta name="theme-color" content="#1c1e27">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="login-page">
   <main class="login-card">
-    <h1>🤖 AISMM</h1>
+    <h1 class="login-brand">
+      <img class="brand-mark brand-mark-lg"
+           src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
+      <span class="brand-word">AISM<sup>2</sup></span>
+    </h1>
     <p class="login-sub">This dashboard is private. Sign in to continue.</p>
 
     {% if signed_out %}

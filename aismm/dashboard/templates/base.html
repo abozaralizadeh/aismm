@@ -4,11 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AI Social Media Manager{% endblock %}</title>
+  {# SVG first for anything modern; .ico for the rest; PNG for iOS home screens. #}
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/icon.svg') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+  <meta name="theme-color" content="#1c1e27">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="{{ url_for('index') }}">🤖 AISMM</a>
+    <a class="brand" href="{{ url_for('index') }}" aria-label="AISM² home">
+      <img class="brand-mark" src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
+      <span class="brand-word">AISM<sup>2</sup></span>
+    </a>
     <nav>
       <a href="{{ url_for('accounts') }}">Accounts</a>
       <a href="{{ url_for('platform_apps_page') }}">Apps</a>

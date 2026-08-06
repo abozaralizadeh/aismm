@@ -1,0 +1,13 @@
+The "A" is drawn as PATHS, not text.
+
+A favicon rendered with <text font-family="Space Grotesk"> falls back to whatever
+the viewer happens to have, so the mark would differ per machine and per browser
+tab. These paths are a geometric A in the spirit of Space Grotesk 800 — pointed
+apex, straight sides, flat crossbar — and render identically everywhere with no
+font to load.
+
+Outer  M50 8 L84 92 L64 92 L58 74 L42 74 L36 92 L16 92 Z
+Counter M50 38 L55.33 62 L44.67 62 Z        (evenodd makes it a hole)
+
+The counter's edges are collinear with the legs' inner edges: the line through
+(50,38) and (44.67,62) meets y=74 at x=42, which is where the crossbar starts.

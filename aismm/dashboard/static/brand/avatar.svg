@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img"
+     aria-label="AISM² avatar">
+  <title>AISM²</title>
+  <!-- The design's circle variant, for profile pictures. -->
+  <circle cx="50" cy="50" r="50" fill="#1c1e27"/>
+  <g transform="translate(20.2 22.2) scale(0.595)">
+    <path fill="#faf9f6" fill-rule="evenodd"
+          d="M50 8 L84 92 L64 92 L58 74 L42 74 L36 92 L16 92 Z
+             M50 38 L55.33 62 L44.67 62 Z"/>
+  </g>
+  <rect x="62" y="14" width="23" height="23" rx="6"
+        fill="#E85C7A" stroke="#1c1e27" stroke-width="2.6"/>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 100" role="img"
+     aria-label="AISM²">
+  <title>AISM²</title>
+  <!-- Primary mark for DARK surfaces: no tile, so it sits on whatever panel it
+       is placed on. The badge's border is the SURFACE colour — that is what
+       separates it from the A behind — so this one is drawn for the design's
+       ink (#1c1e27). mark-dark-sm.svg uses the dashboard's --panel instead,
+       because that is the surface it actually sits on. -->
+  <path fill="#faf9f6" fill-rule="evenodd"
+        d="M50 8 L84 92 L64 92 L58 74 L42 74 L36 92 L16 92 Z
+           M50 38 L55.33 62 L44.67 62 Z"/>
+  <rect x="72" y="2" width="30" height="30" rx="7"
+        fill="#E85C7A" stroke="#1c1e27" stroke-width="5"/>
+  <text x="87" y="24" text-anchor="middle" fill="#ffffff"
+        font-family="'Space Grotesk', system-ui, -apple-system, sans-serif"
+        font-weight="700" font-size="17">2</text>
+</svg>

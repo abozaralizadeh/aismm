@@ -304,3 +304,105 @@ def test_a_working_schedule_is_not_flagged(dash, store):
     _instruction(store, "Fine", schedule="09:00")
     page = dash.test_client().get("/instructions").get_data(as_text=True)
     assert "never fires" not in page
+
+
+# --- brand ---------------------------------------------------------------------------- #
+# The AISM² mark from the design system. The A is a PATH, not text: a favicon
+# rendered with a font falls back to whatever the viewer has installed, so the
+# mark would differ per machine.
+
+BRAND = __import__("pathlib").Path(__file__).resolve().parents[1] / "aismm/dashboard/static"
+
+
+@pytest.mark.parametrize("name", [
+    "brand/icon.svg", "brand/avatar.svg", "brand/mark-dark.svg", "brand/mark-light.svg",
+    "brand/mark-dark-sm.svg", "brand/logo.svg",
+    "favicon.ico", "favicon-32.png", "apple-touch-icon.png",
+])
+def test_every_brand_asset_exists(name):
+    assert (BRAND / name).is_file()
+
+
+@pytest.mark.parametrize("name", ["brand/icon.svg", "brand/mark-dark.svg", "brand/logo.svg"])
+def test_the_letterform_is_a_path_not_a_font(name):
+    svg = (BRAND / name).read_text()
+    assert "M50 8 L84 92" in svg                  # the A outline
+    assert "M50 38 L55.33 62" in svg              # ...and its counter
+    assert "fill-rule=\"evenodd\"" in svg         # which makes the counter a hole
+
+
+@pytest.mark.parametrize("name", ["brand/icon.svg", "brand/mark-dark.svg", "brand/logo.svg"])
+def test_the_palette_is_the_design_system_one(name):
+    svg = (BRAND / name).read_text()
+    assert "#E85C7A" in svg                       # accent
+    assert "#1c1e27" in svg                       # ink
+
+
+def test_the_small_mark_drops_the_squared_motif():
+    """The design drops the "2" below ~48px, where it would be a smudge."""
+    assert "<text" not in (BRAND / "brand/mark-dark-sm.svg").read_text()
+    assert "<text" not in (BRAND / "brand/icon.svg").read_text()
+
+
+def test_the_large_mark_keeps_it():
+    assert ">2<" in (BRAND / "brand/mark-dark.svg").read_text()
+
+
+def test_the_wordmark_cannot_overflow_its_card():
+    """Laid out by hand it did: a fallback font of a different width pushed the
+    type out through the side. textLength pins it."""
+    svg = (BRAND / "brand/logo.svg").read_text()
+    assert svg.count("textLength=") == 2
+    assert 'lengthAdjust="spacingAndGlyphs"' in svg
+
+
+def test_the_page_declares_every_favicon_form(dash):
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert 'type="image/svg+xml"' in page         # modern browsers
+    assert "favicon.ico" in page                  # everything else
+    assert "apple-touch-icon" in page             # iOS home screen
+    assert 'name="theme-color" content="#1c1e27"' in page
+
+
+def test_the_header_carries_the_mark_and_wordmark(dash):
+    page = dash.test_client().get("/instructions").get_data(as_text=True)
+    assert "brand/mark-dark-sm.svg" in page
+    assert "AISM<sup>2</sup>" in page
+    assert "🤖" not in page                        # the placeholder emoji is gone
+
+
+def test_the_brand_tokens_are_defined():
+    css = (BRAND / "style.css").read_text()
+    for token in ("--brand-ink: #1c1e27", "--brand-paper: #faf9f6",
+                  "--brand-accent: #E85C7A"):
+        assert token in css
+
+
+def test_the_ui_accent_follows_the_brand():
+    """#E85C7A passes AA on the dark UI (5.6:1 / 5.2:1), so one colour serves the
+    mark and the text. The design's earlier indigo did not, and needed a split."""
+    css = (BRAND / "style.css").read_text()
+    assert "--accent: var(--brand-accent)" in css
+
+
+def test_the_accent_is_readable_on_the_dark_ui():
+    """A brand colour under 4.5:1 must not be used for links — measure, don't
+    assume, when the design's accent changes."""
+    def _luminance(value):
+        channels = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+                  for c in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    css = (BRAND / "style.css").read_text()
+    accent = css.split("--brand-accent: ")[1].split(";")[0].strip()
+    for background in ("#0f1115", "#171a21"):
+        lighter, darker = sorted((_luminance(accent), _luminance(background)), reverse=True)
+        assert (lighter + 0.05) / (darker + 0.05) >= 4.5, f"{accent} on {background}"
+
+
+def test_the_rasters_can_be_regenerated():
+    """One definition of the mark, not a binary someone hand-edited."""
+    script = (BRAND.parents[2] / "scripts/make_brand_assets.py").read_text()
+    assert "M50 8" not in script or "A_OUTER" in script
+    assert "(50, 8)" in script                    # the same geometry as the SVGs
