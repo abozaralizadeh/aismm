@@ -140,6 +140,12 @@ class DisclosureSettings:
     enabled: bool = True
     text: str = "🤖 AI-generated"
     separator: str = "\n\n"
+    # Append the label to the caption as well as setting the platform's own flag.
+    # OFF by default: all four platforms render a native label from the
+    # publishing API, and that label is stronger than a sentence of prose — it is
+    # what the platform shows and what its policies key on. Set
+    # AI_DISCLOSURE_CAPTION=1 to add the line too.
+    in_caption: bool = False
 
 
 @dataclass(frozen=True)
@@ -387,6 +393,7 @@ def load_settings() -> Settings:
             enabled=_bool(os.getenv("AI_DISCLOSURE_ENABLED"), True),
             text=os.getenv("AI_DISCLOSURE_TEXT", "🤖 AI-generated"),
             separator=os.getenv("AI_DISCLOSURE_SEPARATOR", "\n\n").replace("\\n", "\n"),
+            in_caption=_bool(os.getenv("AI_DISCLOSURE_CAPTION"), False),
         ),
         store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),

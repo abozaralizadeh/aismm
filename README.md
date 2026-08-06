@@ -715,16 +715,30 @@ A run that ends without calling either tool is also recorded as failed, rather t
 publish-mode gate, not requested of the model — a disclosure the agent can forget is not a
 disclosure.
 
-Two layers, because a caption line is not what the platforms key on:
+**The label is the platform's own**, set through its publishing API — the same switch each app
+offers a human composing a post by hand:
 
-| Platform | Native API flag | What AISMM does |
+| Platform | Native API flag | Renders as |
 |---|---|---|
-| TikTok | `post_info.is_aigc` | sets it → *"Creator labeled as AI-generated"* |
-| YouTube | `status.containsSyntheticMedia` | sets it → altered/synthetic disclosure |
-| Instagram | none per-post (Meta infers from C2PA/IPTC metadata → its *"AI info"* label) | caption line |
-| X | none per-post (its *"Made with AI"* toggle is UI-only) | caption line |
+| Instagram | `is_ai_generated` | Meta's *"AI info"* label — the composer's **Add AI Label** switch |
+| X | `made_with_ai` | X's **Made with AI** content disclosure |
+| TikTok | `post_info.is_aigc` | *"Creator labeled as AI-generated"* |
+| YouTube | `status.containsSyntheticMedia` | altered/synthetic content disclosure |
 
-The caption suffix is appended within the platform's limit — the **caption** is trimmed to make
+On an Instagram **carousel** the flag goes on the post, not on each item. On an X **thread** it goes
+on every post, since each one stands alone in someone's timeline.
+
+**A caption sentence is not added by default.** Earlier versions appended `🤖 AI-generated` to the
+text on Instagram and X, because those two were believed to have no API flag. They do. A
+platform-rendered badge is the stronger disclosure — it is what the platform's policies key on, and
+it cannot be mistaken for something the author wrote. If you want the words in the post text as
+well:
+
+```ini
+AI_DISCLOSURE_CAPTION=1                 # append the label to the caption too
+```
+
+With it on, the suffix is appended within the platform's limit — the **caption** is trimmed to make
 room, never the label:
 
 ```
@@ -738,7 +752,8 @@ would be posted. A caption that already discloses ("made with AI", "#ai", …) i
 than double-labelled.
 
 ```ini
-AI_DISCLOSURE_ENABLED=1                 # global master switch
+AI_DISCLOSURE_ENABLED=1                 # global master switch (both layers)
+AI_DISCLOSURE_CAPTION=0                 # also write the label into the caption
 AI_DISCLOSURE_TEXT=🤖 AI-generated      # e.g. "Contenuto generato dall'IA"
 AI_DISCLOSURE_SEPARATOR=\n\n
 ```

@@ -13,6 +13,7 @@ from aismm import config as config_module
 from aismm import disclosure
 from aismm.config import DisclosureSettings
 from aismm.models import Account, Instruction, PlatformName, PublishMode, Run
+from aismm.platforms.registry import get_platform
 from aismm.tools.publish_tool import perform_publish
 
 
@@ -30,9 +31,34 @@ def _off(monkeypatch):
                                             disclosure=DisclosureSettings(enabled=False)))
 
 
-# --- caption labelling ------------------------------------------------------------ #
+@pytest.fixture()
+def in_caption(monkeypatch):
+    """AI_DISCLOSURE_CAPTION=1 — the label in the post text as well.
 
-def test_label_is_appended():
+    Opt-in since every platform gained a native label; the caption path still
+    exists and still has to fit inside each platform's limit.
+    """
+    monkeypatch.setattr(disclosure, "settings",
+                        dataclasses.replace(config_module.settings,
+                                            disclosure=DisclosureSettings(in_caption=True)))
+
+
+# --- the caption line is OFF by default ------------------------------------------- #
+
+def test_the_caption_is_not_touched_by_default():
+    """Reported: the feature was meant to set the platform's AI flag, not to
+    write a sentence at the end of every post."""
+    assert disclosure.apply_to_caption("A post about the news") == "A post about the news"
+
+
+def test_the_native_flag_is_still_set_by_default():
+    """Turning the sentence off must not turn the disclosure off."""
+    assert disclosure.native_flags("instagram") == {"is_ai_generated": True}
+
+
+# --- caption labelling, when opted in --------------------------------------------- #
+
+def test_label_is_appended(in_caption):
     out = disclosure.apply_to_caption("A post about the news")
     assert out.startswith("A post about the news")
     assert out.endswith("🤖 AI-generated")
@@ -55,34 +81,35 @@ def test_existing_disclosure_is_not_duplicated(caption):
     assert disclosure.apply_to_caption(caption) == caption
 
 
-def test_a_caption_without_disclosure_is_still_labelled():
+def test_a_caption_without_disclosure_is_still_labelled(in_caption):
     assert "AI-generated" in disclosure.apply_to_caption("Rainfall hit a record today")
 
 
-def test_custom_label_text(monkeypatch):
+def test_custom_label_text(monkeypatch, in_caption):
     monkeypatch.setattr(disclosure, "settings",
                         dataclasses.replace(
                             config_module.settings,
                             disclosure=DisclosureSettings(text="Contenuto generato dall'IA",
-                                                          separator=" — ")))
+                                                          separator=" — ",
+                                                          in_caption=True)))
     assert disclosure.apply_to_caption("Notizie") == "Notizie — Contenuto generato dall'IA"
 
 
 # --- caption limits (the label must never be the thing that gets cut) -------------- #
 
-def test_caption_is_trimmed_to_make_room_for_the_label():
+def test_caption_is_trimmed_to_make_room_for_the_label(in_caption):
     caption = "x" * 300
     out = disclosure.apply_to_caption(caption, caption_limit=280)
     assert len(out) <= 280
     assert out.endswith("🤖 AI-generated")
 
 
-def test_short_caption_within_limit_is_untouched_except_the_label():
+def test_short_caption_within_limit_is_untouched_except_the_label(in_caption):
     out = disclosure.apply_to_caption("Hello", caption_limit=280)
     assert out.startswith("Hello") and out.endswith("🤖 AI-generated")
 
 
-def test_absurdly_small_limit_keeps_the_label_not_the_caption():
+def test_absurdly_small_limit_keeps_the_label_not_the_caption(in_caption):
     out = disclosure.apply_to_caption("some text", caption_limit=10)
     assert len(out) <= 10
     assert "AI" in out
@@ -99,10 +126,29 @@ def test_youtube_uses_contains_synthetic_media():
     assert disclosure.native_flags("youtube") == {"containsSyntheticMedia": True}
 
 
-@pytest.mark.parametrize("platform", ["instagram", "twitter"])
-def test_platforms_without_an_api_field_get_no_flags(platform):
-    """Meta and X have no per-post field today — the caption line is the disclosure."""
+def test_instagram_uses_is_ai_generated():
+    """Meta's "AI info" label — the composer's "Add AI Label" switch."""
+    assert disclosure.native_flags("instagram") == {"is_ai_generated": True}
+
+
+def test_x_uses_made_with_ai():
+    """X's "Made with AI" content disclosure."""
+    assert disclosure.native_flags("twitter") == {"made_with_ai": True}
+
+
+@pytest.mark.parametrize("platform", ["", "linkedin", "unknown"])
+def test_an_unknown_platform_gets_no_flags(platform):
     assert disclosure.native_flags(platform) == {}
+
+
+def test_every_platform_we_publish_to_has_a_native_label():
+    """All four expose one. An earlier version claimed Instagram and X did not,
+    so those two were labelled in the caption only — a sentence of prose where
+    the platform offers a real, rendered label."""
+    from aismm.models import PlatformName
+
+    for platform in PlatformName:
+        assert disclosure.native_flags(platform.value), platform.value
 
 
 def test_no_flags_when_disabled(monkeypatch):
@@ -115,6 +161,159 @@ def test_tiktok_request_body_carries_the_flag():
 
     body_flags = disclosure.native_flags("tiktok")
     assert TikTok.capabilities.supports_video and body_flags["is_aigc"] is True
+
+
+# --- the flag must reach the real request body ------------------------------------- #
+# A native label is only a label if the API call carries it. These drive the real
+# publish() with a stubbed HTTP layer and read what was actually sent.
+
+def _instagram_calls(monkeypatch, *, instruction=None, placement="feed", paths=None):
+    """Publish to Instagram against a fake Graph; return every container body."""
+    from aismm.platforms import instagram as ig
+
+    bodies = []
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            body = kw.get("data") or kw.get("json") or {}
+            if url.endswith("/media"):
+                bodies.append(dict(body))
+                return _Resp({"id": f"container{len(bodies)}"})
+            return _Resp({"id": "17999"})           # media_publish
+
+        async def get(self, url, **kw):
+            return _Resp({"status_code": "FINISHED", "permalink": "https://instagr.am/p/x"})
+
+    monkeypatch.setattr(ig.httpx, "AsyncClient", lambda **kw: _Client())
+    monkeypatch.setattr(ig.Instagram, "_public_media_url", lambda self, p: "https://host/a.jpg")
+    monkeypatch.setattr(ig.Instagram, "_log_media_preflight",
+                        _noop_preflight())
+    account = Account(platform=PlatformName.instagram, handle="ig", external_id="42")
+    asyncio.run(get_platform(PlatformName.instagram).publish(
+        access_token="t", account=account, caption="hello",
+        asset_path=(paths or ["/a.jpg"])[0], media_kind="image",
+        asset_paths=paths, placement=placement, instruction=instruction))
+    return bodies
+
+
+def _noop_preflight():
+    async def _preflight(self, client, url, path, kind):
+        return None
+    return _preflight
+
+
+def test_instagram_sets_the_ai_label_on_a_feed_post(monkeypatch):
+    bodies = _instagram_calls(monkeypatch)
+    assert bodies[0]["is_ai_generated"] == "true"
+
+
+def test_instagram_sets_it_on_a_reel(monkeypatch):
+    from aismm.platforms import instagram as ig
+
+    monkeypatch.setattr(ig, "kind_from_path", lambda p: "video")
+    bodies = _instagram_calls(monkeypatch, paths=["/a.mp4"])
+    assert bodies[0]["media_type"] == "REELS"
+    assert bodies[0]["is_ai_generated"] == "true"
+
+
+def test_instagram_sets_it_on_a_story(monkeypatch):
+    bodies = _instagram_calls(monkeypatch, placement="story")
+    assert bodies[0]["media_type"] == "STORIES"
+    assert bodies[0]["is_ai_generated"] == "true"
+
+
+def test_a_carousel_labels_the_POST_not_each_item(monkeypatch):
+    """Meta documents is_ai_generated as a property of the post; the children
+    are not posts."""
+    bodies = _instagram_calls(monkeypatch, paths=["/a.jpg", "/b.jpg"])
+    children, parent = bodies[:-1], bodies[-1]
+    assert parent["media_type"] == "CAROUSEL"
+    assert parent["is_ai_generated"] == "true"
+    assert all("is_ai_generated" not in child for child in children)
+
+
+def test_instagram_omits_it_when_disclosure_is_off(monkeypatch, store):
+    _off(monkeypatch)
+    bodies = _instagram_calls(monkeypatch)
+    assert "is_ai_generated" not in bodies[0]
+
+
+def test_instagram_omits_it_when_the_instruction_opted_out(monkeypatch):
+    bodies = _instagram_calls(monkeypatch,
+                              instruction=Instruction(name="i", disclose_ai=False))
+    assert "is_ai_generated" not in bodies[0]
+
+
+def _x_posts(monkeypatch, *, instruction=None, caption="hello"):
+    from aismm.platforms import twitter as tw
+
+    posts = []
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"data": {"id": f"18{len(posts)}"}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, **kw):
+            posts.append(kw.get("json") or {})
+            return _Resp()
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
+    account = Account(platform=PlatformName.twitter, handle="x", external_id="9")
+    asyncio.run(get_platform(PlatformName.twitter).publish(
+        access_token="t", account=account, caption=caption, asset_path="",
+        media_kind="text", asset_paths=None, instruction=instruction))
+    return posts
+
+
+def test_x_sets_made_with_ai(monkeypatch):
+    assert _x_posts(monkeypatch)[0]["made_with_ai"] is True
+
+
+def test_every_post_of_a_thread_is_labelled(monkeypatch):
+    """The caption suffix is pinned to post 1, so the later posts would
+    otherwise carry no disclosure at all — and each stands alone in a timeline."""
+    posts = _x_posts(monkeypatch, caption="x" * 700)
+    assert len(posts) > 1
+    assert all(post["made_with_ai"] is True for post in posts)
+
+
+def test_x_omits_it_when_disclosure_is_off(monkeypatch):
+    _off(monkeypatch)
+    assert "made_with_ai" not in _x_posts(monkeypatch)[0]
+
+
+def test_x_omits_it_when_the_instruction_opted_out(monkeypatch):
+    posts = _x_posts(monkeypatch, instruction=Instruction(name="i", disclose_ai=False))
+    assert "made_with_ai" not in posts[0]
 
 
 # --- enforcement through the publish gate ------------------------------------------ #
@@ -130,18 +329,18 @@ def _publish(store, mode, caption, platform=PlatformName.twitter):
     return store.list_staged()[0]
 
 
-def test_dry_run_preview_shows_the_disclosure(store):
+def test_dry_run_preview_shows_the_disclosure(store, in_caption):
     """The preview must show exactly what would be posted."""
     staged = _publish(store, PublishMode.dry_run, "Breaking: something happened")
     assert staged.caption.endswith("🤖 AI-generated")
 
 
-def test_approval_queue_carries_the_disclosure(store):
+def test_approval_queue_carries_the_disclosure(store, in_caption):
     staged = _publish(store, PublishMode.approval, "Breaking: something happened")
     assert "AI-generated" in staged.caption
 
 
-def test_disclosure_respects_the_platform_caption_limit(store):
+def test_disclosure_respects_the_platform_caption_limit(store, in_caption):
     """The label always survives; the CAPTION is what gets trimmed.
 
     On X the budget is the whole thread (280 x 25), not one post — trimming to
@@ -158,7 +357,7 @@ def test_disclosure_respects_the_platform_caption_limit(store):
     assert staged.caption.endswith("🤖 AI-generated")
 
 
-def test_a_caption_past_even_the_thread_budget_still_keeps_the_label(store):
+def test_a_caption_past_even_the_thread_budget_still_keeps_the_label(store, in_caption):
     from aismm.platforms.registry import get_platform
 
     caps = get_platform(PlatformName.twitter).capabilities
@@ -179,7 +378,7 @@ def test_instruction_can_opt_out(store):
     assert disclosure.native_flags("tiktok", off) == {}
 
 
-def test_instruction_opted_in_still_gets_the_label():
+def test_instruction_opted_in_still_gets_the_label(in_caption):
     on = Instruction(name="labelled", disclose_ai=True)
     assert disclosure.enabled(on) is True
     assert "AI-generated" in disclosure.apply_to_caption("A post", instruction=on)

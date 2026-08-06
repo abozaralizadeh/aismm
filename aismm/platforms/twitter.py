@@ -19,6 +19,7 @@ import os
 
 import httpx
 
+from .. import disclosure
 from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
@@ -283,6 +284,11 @@ class Twitter(SocialPlatform):
                     # the field means nothing on a normal post.
                     if (account.meta or {}).get("share_with_followers"):
                         payload["share_with_followers"] = True
+                # X's own "Made with AI" label — the switch its app shows under
+                # Content disclosures. Set on EVERY post of a thread: each post
+                # stands alone in a timeline, and the caption suffix is pinned to
+                # post 1 precisely because a reader may only ever see one of them.
+                payload.update(disclosure.native_flags("twitter", instruction))
                 # Media rides on the FIRST post: that is the one shown in a
                 # timeline, and X would otherwise repeat the image down the thread.
                 if media_ids and index == 0:

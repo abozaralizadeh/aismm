@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from .. import disclosure
 from ..assets import kind_from_path, public_url
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
@@ -536,12 +537,16 @@ class Instagram(SocialPlatform):
         return r.json()["id"]
 
     async def _create_carousel_container(self, client, ig_user_id, token, caption,
-                                         asset_paths, media_kinds) -> str:
+                                         asset_paths, media_kinds, extra=None) -> str:
         """Child container per item, then one CAROUSEL parent listing their ids.
 
         Children carry ``is_carousel_item=true`` and NO caption — the caption
         belongs to the parent. Video children use ``media_type=VIDEO`` (not
         ``REELS``, which is a standalone placement).
+
+        ``extra`` (the AI-generated flag) goes on the PARENT only: Meta documents
+        ``is_ai_generated`` as a property of the post, and the children are not
+        posts.
         """
         children = []
         for path, kind in zip(asset_paths, media_kinds):
@@ -560,7 +565,8 @@ class Instagram(SocialPlatform):
                         len(children), len(asset_paths), child_id)
 
         return await self._create_container(client, ig_user_id, token, {
-            "media_type": "CAROUSEL", "children": ",".join(children), "caption": caption})
+            "media_type": "CAROUSEL", "children": ",".join(children), "caption": caption,
+            **(extra or {})})
 
     async def publish(self, *, access_token, account: Account, caption, asset_path, media_kind,
                       instruction=None, asset_paths=None, placement="feed") -> PublishResult:
@@ -571,13 +577,19 @@ class Instagram(SocialPlatform):
         kinds = [kind_from_path(p) for p in paths]
         placement = (placement or "feed").lower()
 
+        # Meta's own "AI info" label — the same switch the app shows as "Add AI
+        # Label" in the composer. A rendered platform label, not a line of prose
+        # at the end of the caption. Graph wants the string "true".
+        ai_flags = {key: "true" for key in disclosure.native_flags("instagram", instruction)}
+
         async with httpx.AsyncClient(timeout=120) as client:
             # Meta's processing failures (e.g. the undocumented 2207076) are
             # widely reported as intermittent, so rebuild the container once.
             for attempt in range(_CONTAINER_RETRIES):
                 if len(paths) > 1:
                     creation_id = await self._create_carousel_container(
-                        client, ig_user_id, access_token, caption, paths, kinds)
+                        client, ig_user_id, access_token, caption, paths, kinds,
+                        extra=ai_flags)
                     media_kind, tries = "carousel", 15
                 else:
                     media_url = self._public_media_url(paths[0])
@@ -587,13 +599,13 @@ class Instagram(SocialPlatform):
                     await self._log_media_preflight(client, media_url, paths[0], kinds[0])
                     if placement == "story":
                         # Stories take no caption — Graph ignores/rejects it.
-                        data = {"media_type": "STORIES"}
+                        data = {"media_type": "STORIES", **ai_flags}
                         data["video_url" if kinds[0] == "video" else "image_url"] = media_url
                     elif kinds[0] == "video":
                         data = {"caption": caption, "media_type": "REELS",
-                                "video_url": media_url}
+                                "video_url": media_url, **ai_flags}
                     else:
-                        data = {"caption": caption, "image_url": media_url}
+                        data = {"caption": caption, "image_url": media_url, **ai_flags}
                     creation_id = await self._create_container(
                         client, ig_user_id, access_token, data)
                     tries = 30 if kinds[0] == "video" else 10

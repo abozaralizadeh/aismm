@@ -260,12 +260,23 @@ the memory untouched — losing the cursor would break continuity entirely).
 
 [disclosure.py](aismm/disclosure.py) labels every post as AI-generated, applied in
 `perform_publish` **beside the publish-mode gate** — deterministic, on every path (preview, approval
-queue, live), never left to the model (the prompt tells it not to write its own). Two layers: the
-caption suffix, and the platform's native flag where its API has one — TikTok `post_info.is_aigc`
-(**not** `is_ai_generated`, which the API silently ignores) and YouTube
-`status.containsSyntheticMedia`. Instagram and X have no per-post field, so the caption line is the
-disclosure there. When trimming to a caption limit, cut the caption, never the label. Driven by EU AI
-Act Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_ENABLED=0` opts out.
+queue, live), never left to the model.
+
+**All four platforms expose a NATIVE flag in their publishing API, and that is the real label** —
+the same switch their apps show a human ("Add AI Label" in Instagram's composer, "Made with AI"
+under X's content disclosures): Instagram `is_ai_generated` (on the container; on a carousel it goes
+on the PARENT only, since the children are not posts), X `made_with_ai` (on EVERY post of a thread —
+each stands alone in a timeline), TikTok `post_info.is_aigc` (**not** `is_ai_generated`, which the
+API silently ignores), YouTube `status.containsSyntheticMedia`. An earlier version of this file
+asserted Instagram and X had no such field, so those two were labelled with a caption sentence
+instead — prose where the platform offered a rendered badge. Check the API before concluding a
+platform has no flag.
+
+**The caption suffix is now opt-in** (`AI_DISCLOSURE_CAPTION=1`, default off): with a native label
+everywhere it is redundant, and a platform-rendered badge cannot be mistaken for the author's own
+words. When on, trimming to a caption limit cuts the caption, never the label. Driven by EU AI Act
+Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_ENABLED=0` opts out of
+both layers.
 
 ## Gotchas
 
