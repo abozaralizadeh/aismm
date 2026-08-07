@@ -79,6 +79,21 @@ main.wide { max-width: 1440px; }
 .flash-success { background: rgba(53,194,138,.12); border-color: var(--ok); }
 .flash-error { background: rgba(240,97,109,.12); border-color: var(--danger); }
 
+/* Overview hero banner. Full content width, letterboxed corners to match the
+   card chrome; it IS the page title, so the <h1> is kept for screen readers. */
+.hero-banner {
+  display: block; width: 100%; height: auto; margin: 0 0 1.6rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0,0,0,.4);
+}
+
+/* Off-screen but still read aloud / indexed — for a heading a visible banner
+   already conveys. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem; }
 .card-num { font-size: 2rem; font-weight: 700; }
@@ -174,6 +189,62 @@ tr:hover .platform-icon { opacity: 1; }
              border: 1px solid var(--border); border-radius: 8px; padding: .6rem .7rem; font-weight: 400; }
 .check { flex-direction: row !important; align-items: center; gap: .5rem; font-weight: 400; }
 .check.inline { align-self: end; }
+
+/* --- instruction form: wider column + grouped sections --- */
+/* The instruction form has paired grids and a tool picker, so the 680px prose
+   cap left it cramped and empty on a desktop. This one form gets more room. */
+.form.form-wide { max-width: 900px; }
+
+/* Each logical group is a bordered fieldset. `min-width: 0` stops a wide child
+   (tool picker, a table) from forcing the fieldset past the form width. */
+.form .form-section {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: .5rem 1.15rem 1.15rem; margin: 0; min-width: 0;
+  background: var(--panel);
+}
+.form .form-section > legend {
+  padding: 0 .45rem; font-weight: 700; font-size: .82rem;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+}
+/* The fieldset itself isn't the flex container (legend + flex is quirky across
+   browsers); an inner wrapper stacks the fields with the form's own rhythm. */
+.form-section .section-body { display: flex; flex-direction: column; gap: 1.1rem; }
+
+/* Required marker beside a label. */
+.req { color: var(--danger); font-weight: 700; margin-left: .1rem; }
+
+/* A checkbox row that also carries its own hint underneath. */
+.check-group { display: flex; flex-direction: column; gap: .3rem; }
+
+/* Select with an inline info-tip trigger sitting beside it. */
+.label-row { display: flex; align-items: center; gap: .5rem; }
+.label-row select { flex: 1 1 auto; min-width: 0; }
+
+/* Hover/focus info-tip — replaces a permanent block of warning text. */
+.info-tip { position: relative; display: inline-flex; flex: 0 0 auto; }
+.info-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.3rem; height: 1.3rem; border-radius: 50%;
+  border: 1px solid var(--warn); color: var(--warn);
+  font-size: .8rem; font-weight: 700; font-style: normal; line-height: 1;
+  cursor: help; user-select: none;
+}
+.info-icon:hover, .info-icon:focus-visible { background: rgba(240,180,41,.15); outline: none; }
+.info-tip-body {
+  position: absolute; z-index: 30; top: calc(100% + .45rem); right: 0;
+  width: max(240px, 24rem); max-width: 78vw;
+  background: var(--panel); border: 1px solid var(--warn); border-radius: 8px;
+  padding: .6rem .7rem; box-shadow: 0 12px 28px rgba(0,0,0,.45);
+  font-size: .82rem; font-weight: 400; line-height: 1.45;
+  display: none;                      /* wins over .hint-warn's block; source order */
+}
+.info-tip:hover .info-tip-body,
+.info-tip:focus-within .info-tip-body { display: block; }
+
+/* The edit-page attachments, folded above the settings form. */
+.attachments-block { margin: 0 0 1.4rem; }
+.attachments-block > summary { cursor: pointer; font-weight: 600; }
+.attachments-block .add-file-form { margin-top: 1rem; max-width: 100%; }
 
 /* --- checkbox dropdown (tool picker) --- */
 /* A <div class="field"> is a form row that isn't a single <label>, so the

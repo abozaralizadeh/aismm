@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="aismm/dashboard/static/brand/logo.svg" width="212"
-       alt="AISM² — AI Social Media Manager">
+  <img src="aismm/dashboard/static/brand/banner.jpg" width="900"
+       alt="AISM² — AI Social Media Manager. Smarter content, stronger connections: plan, create, schedule and analyze across Instagram, X, YouTube, TikTok and more.">
 </p>
 
 # AISM² — AI Social Media Manager
@@ -329,7 +329,8 @@ Assets live in [`aismm/dashboard/static/brand/`](aismm/dashboard/static/brand):
 | `avatar.svg` | the circle variant, for profile pictures |
 | `mark-dark.svg` · `mark-light.svg` | the primary mark, with the ², for light or dark surfaces |
 | `mark-dark-sm.svg` | small sizes — the ² is dropped below ~48px, as the design specifies |
-| `logo.svg` | the wordmark lockup (this README, the login page) |
+| `logo.svg` | the wordmark lockup (the login page) |
+| `banner.jpg` | the marketing hero banner (this README, the dashboard overview page) |
 
 Two implementation notes, both about not depending on things that vary per machine:
 

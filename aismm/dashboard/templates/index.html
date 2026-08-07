@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Overview</h1>
+<img class="hero-banner" src="{{ url_for('static', filename='brand/banner.jpg') }}"
+     alt="AISM² — AI Social Media Manager. Smarter content, stronger connections: plan, create, schedule and analyze across Instagram, X, YouTube, TikTok and more."
+     width="1600" height="678">
+
+<h1 class="visually-hidden">Overview</h1>
 
 <div class="cards">
   <div class="card">

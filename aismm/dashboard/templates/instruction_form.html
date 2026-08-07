@@ -3,326 +3,56 @@
 {% block content %}
 <h1>{{ "Edit" if instruction else "New" }} instruction</h1>
 
-<form method="post" action="{{ url_for('save_instruction') }}" class="form"
-      enctype="multipart/form-data">
-  {% if instruction %}<input type="hidden" name="id" value="{{ instruction.id }}">{% endif %}
+{# On an EDIT page the attachments are managed with their own POST routes, so they
+   can't live inside the settings form. Folded away at the top keeps them BEFORE
+   the Save button (not orphaned after it) without pushing Name/Task/Brief down. #}
+{% if instruction %}
+<details class="attachments-block"{% if files %} open{% endif %}>
+  <summary>Attached files <span class="muted small">({{ files|length }})</span></summary>
+  <p class="hint">
+    Files every run of this instruction can use. A <strong>context</strong> PDF or image is sent to the
+    model directly as a file — it reads the real layout and pixels, not our own extraction. Plain text
+    (txt, md, csv, json) is inlined instead. A file too large to attach falls back to the text extracted
+    on upload, with <code>read_attachment</code> for the rest. A <strong>reference</strong> image is
+    handed to the image or video generator to hold a look, and is never sent to the text model. Max
+    25MB per file.
+  </p>
 
-  <label>Name
-    <input type="text" name="name" required value="{{ instruction.name if instruction else '' }}"
-           placeholder="e.g. Daily AI news reel">
-  </label>
-
-  <label>Brief / persona / directive
-    <textarea name="brief" rows="7"
-      placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
-    <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
-  </label>
-
-  <label>Operator note <span class="muted small">— a standing correction, applied from the next run</span>
-    <textarea name="note" rows="3"
-      placeholder="e.g. 'Search for more up-to-date content — the last few posts were stale.' or 'Skip opinion pieces; stick to reported news.'">{{ state.note if state else '' }}</textarea>
-    <span class="hint">
-      Steer a running instruction without rewriting the brief or losing its memory. The agent is
-      told to treat this as an override of its own judgement. Clear the box to withdraw it.
-      {% if state and state.note_updated_at %}<br>Last changed {{ state.note_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
-    </span>
-  </label>
-
-  {% if state and state.memory %}
-  <label>Agent memory <span class="muted small">— written by the agent, carried into the next run</span>
-    <textarea name="memory" rows="8" class="mono small">{{ state.memory }}</textarea>
-    <span class="hint">
-      Where the agent got to and what it plans next. Edit to correct a wrong position, or empty it
-      to make the instruction start over.
-      {{ state.memory|length }} characters{% if state.compactions %}, summarized {{ state.compactions }}×{% endif %}.
-      {% if state.memory_updated_at %}Updated {{ state.memory_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
-    </span>
-  </label>
+  {% if files %}
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>File</th><th>Purpose</th><th>Size</th><th>Extracted</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+    {% for f in files %}
+      <tr>
+        <td class="small">
+          <a href="{{ media_url(f.asset_path) }}" target="_blank">{{ f.filename }}</a>
+          <div class="muted">{{ f.content_type or "unknown type" }}</div>
+        </td>
+        <td><span class="badge">{{ f.purpose.value }}</span></td>
+        <td class="small nowrap">{{ "{:,}".format(f.size_bytes) }} B</td>
+        <td class="small">{% if f.text %}{{ "{:,}".format(f.text|length) }} chars{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="small">{{ f.note or "" }}</td>
+        <td>
+          <form method="post" action="{{ url_for('delete_instruction_file', file_id=f.id) }}"
+                onsubmit="return confirm('Remove {{ f.filename }}?')">
+            <button class="btn btn-danger small">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No files attached yet.</p>
   {% endif %}
 
-  <label>Target accounts
-    <div class="checklist">
-      {% for a in accounts %}
-        <label class="check">
-          <input type="checkbox" name="account_ids" value="{{ a.id }}"
-                 {% if instruction and a.id in instruction.account_ids %}checked{% endif %}>
-          {{ a.platform.value }} · {{ a.handle or a.external_id or a.id[:8] }}
-        </label>
-      {% else %}
-        <span class="muted">No accounts connected. <a href="{{ url_for('accounts') }}">Connect one first.</a></span>
-      {% endfor %}
-    </div>
-  </label>
-
-  {% set total = tool_groups | map(attribute='tools') | map('length') | sum %}
-  {% set picked = tool_groups | map(attribute='tools') | map('selectattr', 'checked')
-                              | map('list') | map('length') | sum %}
-  <div class="field">
-    <span class="field-label">Tools the agent may use</span>
-    <div class="multiselect" data-multiselect data-total="{{ total }}">
-      {# Lets the save route tell "picker submitted, nothing ticked" from
-         "picker wasn't on this form at all". #}
-      <input type="hidden" name="tools_present" value="1">
-      <button type="button" class="multiselect-toggle" data-ms-toggle aria-expanded="false">
-        <span data-ms-summary>{{ "All tools" if picked == total else picked ~ " of " ~ total ~ " tools" }}</span>
-        <span class="multiselect-caret" aria-hidden="true">▾</span>
-      </button>
-
-      <div class="multiselect-panel" data-ms-panel hidden>
-        <div class="multiselect-head">
-          <input type="search" class="multiselect-filter" data-ms-filter
-                 placeholder="Filter tools…" autocomplete="off">
-          <div class="multiselect-bulk">
-            <button type="button" class="linkish" data-ms-all>Select all</button>
-            <button type="button" class="linkish" data-ms-none>Clear</button>
-          </div>
-        </div>
-
-        <div class="multiselect-list" data-ms-list>
-          {% for group in tool_groups %}
-            <div class="multiselect-group" data-ms-group>
-              <div class="multiselect-group-title" data-ms-group-title>
-                {{ group.title }}
-                {% if group.blurb %}<span class="muted small">— {{ group.blurb }}</span>{% endif %}
-              </div>
-              {% for tool in group.tools %}
-                <label class="multiselect-option" data-ms-option data-name="{{ tool.name }}">
-                  <input type="checkbox" name="tools" value="{{ tool.name }}"
-                         {% if tool.checked or tool.always_on %}checked{% endif %}
-                         {% if tool.always_on %}data-ms-locked onclick="return false;"{% endif %}>
-                  <code>{{ tool.name }}</code>
-                  {% if tool.always_on %}<span class="muted small">always on</span>{% endif %}
-                </label>
-              {% endfor %}
-            </div>
-          {% endfor %}
-          <p class="muted small" data-ms-empty hidden>No tool matches that filter.</p>
-        </div>
-      </div>
-    </div>
-    <span class="hint">
-      Everything is on by default. Narrowing it keeps an instruction on task and gives a smaller
-      model fewer choices to weigh — a text-only account has no use for the video tools.
-      <code>publish</code> and <code>report_failure</code> stay on whatever you pick, since a run
-      has to be able to end. Leave all ticked and tools added in future are included automatically.
-    </span>
-  </div>
-
-  <div class="grid-2">
-    <label>Schedule
-      <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
-             placeholder="09:00,18:00 mon-fri">
-      <span class="hint">
-        Times of day, weekdays, intervals or cron. <strong>All times UTC.</strong><br>
-        <code>09:00</code> · <code>9am, 6pm</code> · <code>09:00 mon-fri</code> ·
-        <code>every 6h</code> · <code>daily</code> · <code>0 9 * * *</code>
-
-        <details class="schedule-help">
-          <summary>All the forms, with examples</summary>
-
-          <p><strong><code>,</code> combines · <code>;</code> separates.</strong> This is the one
-          that catches people out. A comma builds <em>one</em> schedule from every time and every
-          day you list — each time on each day:</p>
-          <div class="table-scroll">
-          <table>
-            <thead><tr><th>You write</th><th>It fires</th></tr></thead>
-            <tbody>
-              <tr>
-                <td><code>03:00 thu, 03:00 tue, 15:00 sun</code></td>
-                <td>03:00 <em>and</em> 15:00, on Tue, Thu <em>and</em> Sun — <strong>6× a week</strong></td>
-              </tr>
-              <tr>
-                <td><code>03:00 thu; 03:00 tue; 15:00 sun</code></td>
-                <td>03:00 Thu, 03:00 Tue, 15:00 Sun — <strong>3× a week</strong></td>
-              </tr>
-            </tbody>
-          </table>
-          </div>
-          <p>So: use <code>,</code> when the times really do apply to all those days
-          (<code>09:00, 18:00 mon-fri</code> = twice a day on weekdays), and <code>;</code> when
-          each entry is its own separate schedule. <code>and</code> and a newline work like
-          <code>,</code>. The <strong>Reads as</strong> line below always shows what your text was
-          understood to mean — check it.</p>
-
-          <h4>Times of day</h4>
-          <div class="table-scroll">
-          <table>
-            <tbody>
-              <tr><td><code>09:00</code></td><td>every day at 09:00</td></tr>
-              <tr><td><code>9am, 6pm</code></td><td>twice every day</td></tr>
-              <tr><td><code>09:30</code></td><td>minutes work too</td></tr>
-              <tr><td><code>midnight</code> · <code>noon</code></td><td>named times</td></tr>
-            </tbody>
-          </table>
-          </div>
-
-          <h4>Days</h4>
-          <div class="table-scroll">
-          <table>
-            <tbody>
-              <tr><td><code>09:00 mon</code></td><td>one day a week</td></tr>
-              <tr><td><code>09:00 mon,wed,fri</code></td><td>three days a week</td></tr>
-              <tr><td><code>09:00 mon-fri</code></td><td>a range</td></tr>
-              <tr><td><code>09:00 weekdays</code> · <code>weekends</code></td><td>shorthand for mon-fri / sat,sun</td></tr>
-              <tr><td><code>09:00 and 18:00 weekends</code></td><td>two times, Sat and Sun — 4× a week</td></tr>
-            </tbody>
-          </table>
-          </div>
-
-          <h4>Intervals</h4>
-          <div class="table-scroll">
-          <table>
-            <tbody>
-              <tr><td><code>every 6h</code></td><td>every six hours</td></tr>
-              <tr><td><code>every 90m</code> · <code>every 30s</code> · <code>every 2 days</code></td><td>any unit</td></tr>
-              <tr><td><code>hourly</code> · <code>daily</code> · <code>weekly</code> · <code>monthly</code></td><td>named</td></tr>
-            </tbody>
-          </table>
-          </div>
-          <p>An interval counts from the <strong>Starts</strong> field below, or from when the
-          instruction was created if you leave it empty — not from the moment you press Save.</p>
-
-          <h4>Raw cron, if you prefer it</h4>
-          <div class="table-scroll">
-          <table>
-            <tbody>
-              <tr><td><code>0 9 * * *</code></td><td>09:00 every day (min hour dom month dow)</td></tr>
-              <tr><td><code>30 8 * * 1-5</code></td><td>08:30 on weekdays</td></tr>
-              <tr><td><code>0 */4 * * *</code></td><td>every 4 hours, on the hour</td></tr>
-              <tr><td><code>@daily</code> · <code>@weekly</code> · <code>@hourly</code></td><td>nicknames</td></tr>
-            </tbody>
-          </table>
-          </div>
-
-          <h4>Mixing</h4>
-          <p><code>every 6h; 08:00 mon</code> — an interval <em>plus</em> a fixed weekly time. Each
-          part separated by <code>;</code> becomes its own schedule, so you can combine any of the
-          forms above.</p>
-
-          <p class="muted">Ambiguous input is refused rather than guessed: a bare <code>6</code>
-          could mean 06:00 or every 6 hours, so write <code>06:00</code> or <code>every 6h</code>.
-          If the readback says <em>not understood</em>, the instruction will never fire.</p>
-        </details>
-        {% if instruction and instruction.schedule %}
-          <br><strong>Reads as:</strong> {{ schedule_readback }}
-          {% if instruction and next_run and next_run.at %}
-            <br><strong>Next run:</strong> {{ next_run.at.strftime('%Y-%m-%d %H:%M') }} UTC
-            {% if next_run.skipped %}
-              <br><span class="muted">Publishing is paused for this account until
-              {{ next_run.blocked_until.strftime('%Y-%m-%d %H:%M') }} UTC (platform rate
-              limit), so any scheduled fire before then is skipped without posting.</span>
-            {% endif %}
-          {% endif %}
-        {% endif %}
-      </span>
-    </label>
-
-    <label>Starts <span class="muted small">— optional</span>
-      <input type="datetime-local" name="schedule_start_at"
-             value="{{ instruction.schedule_start_at.strftime('%Y-%m-%dT%H:%M') if instruction and instruction.schedule_start_at else '' }}">
-      <span class="hint">
-        UTC. For <code>every Nh</code>/<code>Nm</code> schedules this fixes WHEN the interval is
-        counted from, so it survives an edit or a restart instead of quietly re-basing to that
-        moment — leave empty and it anchors to when this instruction was created instead. For a
-        time-of-day or cron schedule it simply delays the first fire until this moment. Clear it to
-        remove the delay (interval schedules keep their created-at anchor either way).
-      </span>
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>Task
-      <select name="task_type">
-        {% for t in tasks %}
-          <option value="{{ t.value }}"
-            {% if (instruction and instruction.task_type == t) or (not instruction and t.value == 'publish') %}selected{% endif %}>
-            {% if t.value == 'engage' %}Respond to comments
-            {% elif t.value == 'auto' %}Auto (agent decides)
-            {% else %}Publish a post{% endif %}
-          </option>
-        {% endfor %}
-      </select>
-      <span class="hint">
-        <strong>Publish a post</strong> researches and posts on the schedule.
-        <strong>Respond to comments</strong> reads new comments/mentions on the target account
-        and replies in its voice — no new post. <strong>Auto</strong> lets the agent decide each
-        run whether to publish or to answer comments, based on the brief and whether anything new
-        is waiting. Comments work on Instagram, X and YouTube (TikTok has no comment API).
-      </span>
-      <span class="hint hint-warn">
-        ⚠️ <strong>Auto is less predictable</strong> — the agent guesses your intent each run, so it
-        may post when you wanted a reply, or reply when you wanted a post. If you know the job,
-        pick <strong>Publish a post</strong> or <strong>Respond to comments</strong> for reliable
-        results, and keep Auto for accounts where either is genuinely fine.
-      </span>
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>Publish mode
-      <select name="publish_mode">
-        {% for m in modes %}
-          <option value="{{ m.value }}"
-            {% if instruction and instruction.publish_mode == m %}selected{% endif %}>
-            {{ m.value }}
-          </option>
-        {% endfor %}
-      </select>
-      <span class="hint">How posts <em>and replies</em> go out: dry_run = preview only ·
-        approval = queue for your OK · live = post/send immediately.</span>
-    </label>
-  </div>
-
-  <div class="grid-2">
-    <label>Media preference
-      <select name="media_pref">
-        {% for mp in media_prefs %}
-          <option value="{{ mp.value }}"
-            {% if instruction and instruction.media_pref == mp %}selected{% endif %}>
-            {{ mp.value }}
-          </option>
-        {% endfor %}
-      </select>
-    </label>
-
-    <label class="check inline">
-      <input type="checkbox" name="disclose_ai"
-             {% if not instruction or instruction.disclose_ai %}checked{% endif %}>
-      Add the AI-generated label
-    </label>
-    <span class="hint">
-      Sets the platform's own AI label on every post — the same switch their apps show a human
-      (Instagram's <em>Add AI Label</em>, X's <em>Made with AI</em>, TikTok's AIGC label, YouTube's
-      synthetic-media disclosure). Required in the EU from 2 Aug 2026 and by every major platform's
-      own rules — untick only if you have a specific reason.
-      {% if settings.disclosure.in_caption %}
-        <br>“{{ settings.disclosure.text }}” is also appended to the caption
-        (<code>AI_DISCLOSURE_CAPTION=1</code>).
-      {% else %}
-        <br>Nothing is added to the caption text; the label is the platform's own, rendered by them.
-      {% endif %}
-      {% if not settings.disclosure.enabled %}
-        <br><strong>Disabled globally</strong> by AI_DISCLOSURE_ENABLED=0, so this box has no effect.
-      {% endif %}
-    </span>
-
-    <label class="check inline">
-      <input type="checkbox" name="enabled" {% if not instruction or instruction.enabled %}checked{% endif %}>
-      Enabled (scheduler will run it)
-    </label>
-  </div>
-
-  {% if not instruction %}
-  <fieldset class="subform">
-    <legend>Attach a file <span class="muted small">— optional</span></legend>
-    <p class="hint">
-      Files every run of this instruction can use. A <strong>context</strong> PDF or image goes to
-      the model as a file, so it reads the real layout and pixels; a <strong>reference</strong>
-      image is handed to the image and video generators to hold a look. Max 25MB.
-      It is attached when you save, and you can add more afterwards.
-    </p>
-    <label>File
-      <input type="file" name="file">
+  {# An existing instruction has an id, so a file can be attached on its own. #}
+  <form method="post" enctype="multipart/form-data" class="form card add-file-form"
+        action="{{ url_for('upload_instruction_file', instruction_id=instruction.id) }}">
+    <label>Add a file
+      <input type="file" name="file" required>
     </label>
     <div class="grid-2">
       <label>Purpose
@@ -334,81 +64,415 @@
         <input type="text" name="note" placeholder="e.g. brand voice guide; use this palette">
       </label>
     </div>
+    <button class="btn btn-primary">Upload</button>
+  </form>
+</details>
+{% endif %}
+
+<form method="post" action="{{ url_for('save_instruction') }}" class="form form-wide"
+      enctype="multipart/form-data" data-instruction-form>
+  {% if instruction %}<input type="hidden" name="id" value="{{ instruction.id }}">{% endif %}
+
+  <!-- ── Basics ─────────────────────────────────────────────────────────── -->
+  <fieldset class="form-section">
+    <legend>Basics</legend>
+    <div class="section-body">
+      <div class="grid-2">
+        <label>Name <span class="req" title="Required">*</span>
+          <input type="text" name="name" required value="{{ instruction.name if instruction else '' }}"
+                 placeholder="e.g. Daily AI news reel">
+        </label>
+
+        <label>Task <span class="req" title="Required">*</span>
+          <span class="label-row">
+            <select name="task_type" data-task>
+              {% for t in tasks %}
+                <option value="{{ t.value }}"
+                  {% if (instruction and instruction.task_type == t) or (not instruction and t.value == 'publish') %}selected{% endif %}>
+                  {% if t.value == 'engage' %}Respond to comments
+                  {% elif t.value == 'auto' %}Auto (agent decides)
+                  {% else %}Publish a post{% endif %}
+                </option>
+              {% endfor %}
+            </select>
+            {# Shown only when Auto is selected (see the script below). The caution
+               is a hover/focus info-tip instead of a wall of yellow text. #}
+            <span class="info-tip" data-auto-warn hidden>
+              <span class="info-icon" tabindex="0" role="button"
+                    aria-label="Why Auto is less predictable">i</span>
+              <span class="info-tip-body hint-warn" role="tooltip">
+                <strong>Auto is less predictable.</strong> The agent guesses your intent each run, so
+                it may post when you wanted a reply, or reply when you wanted a post. If you know the
+                job, pick <strong>Publish a post</strong> or <strong>Respond to comments</strong> for
+                reliable results, and keep Auto for accounts where either is genuinely fine.
+              </span>
+            </span>
+          </span>
+          <span class="hint">
+            <strong>Publish a post</strong> researches and posts on the schedule.
+            <strong>Respond to comments</strong> reads new comments/mentions and replies in the
+            account's voice — no new post. <strong>Auto</strong> lets the agent decide each run.
+            Comments work on Instagram, X and YouTube (TikTok has no comment API).
+          </span>
+        </label>
+      </div>
+
+      <label>Brief / persona / directive <span class="req" title="Required">*</span>
+        <textarea name="brief" rows="6"
+          placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
+        <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
+      </label>
+    </div>
+  </fieldset>
+
+  <!-- ── Accounts & schedule ───────────────────────────────────────────── -->
+  <fieldset class="form-section">
+    <legend>Accounts &amp; schedule</legend>
+    <div class="section-body">
+      <label>Target accounts <span class="req" title="At least one is required to post">*</span>
+        <div class="checklist">
+          {% for a in accounts %}
+            <label class="check">
+              <input type="checkbox" name="account_ids" value="{{ a.id }}"
+                     {% if instruction and a.id in instruction.account_ids %}checked{% endif %}>
+              {{ a.platform.value }} · {{ a.handle or a.external_id or a.id[:8] }}
+            </label>
+          {% else %}
+            <span class="muted">No accounts connected. <a href="{{ url_for('accounts') }}">Connect one first.</a></span>
+          {% endfor %}
+        </div>
+      </label>
+
+      <div class="grid-2">
+        <label>Schedule
+          <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"
+                 placeholder="09:00,18:00 mon-fri">
+          <span class="hint">
+            Times of day, weekdays, intervals or cron. <strong>All times UTC.</strong><br>
+            <code>09:00</code> · <code>9am, 6pm</code> · <code>09:00 mon-fri</code> ·
+            <code>every 6h</code> · <code>daily</code> · <code>0 9 * * *</code>
+
+            <details class="schedule-help">
+              <summary>All the forms, with examples</summary>
+
+              <p><strong><code>,</code> combines · <code>;</code> separates.</strong> This is the one
+              that catches people out. A comma builds <em>one</em> schedule from every time and every
+              day you list — each time on each day:</p>
+              <div class="table-scroll">
+              <table>
+                <thead><tr><th>You write</th><th>It fires</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code>03:00 thu, 03:00 tue, 15:00 sun</code></td>
+                    <td>03:00 <em>and</em> 15:00, on Tue, Thu <em>and</em> Sun — <strong>6× a week</strong></td>
+                  </tr>
+                  <tr>
+                    <td><code>03:00 thu; 03:00 tue; 15:00 sun</code></td>
+                    <td>03:00 Thu, 03:00 Tue, 15:00 Sun — <strong>3× a week</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+              </div>
+              <p>So: use <code>,</code> when the times really do apply to all those days
+              (<code>09:00, 18:00 mon-fri</code> = twice a day on weekdays), and <code>;</code> when
+              each entry is its own separate schedule. <code>and</code> and a newline work like
+              <code>,</code>. The <strong>Reads as</strong> line below always shows what your text was
+              understood to mean — check it.</p>
+
+              <h4>Times of day</h4>
+              <div class="table-scroll">
+              <table>
+                <tbody>
+                  <tr><td><code>09:00</code></td><td>every day at 09:00</td></tr>
+                  <tr><td><code>9am, 6pm</code></td><td>twice every day</td></tr>
+                  <tr><td><code>09:30</code></td><td>minutes work too</td></tr>
+                  <tr><td><code>midnight</code> · <code>noon</code></td><td>named times</td></tr>
+                </tbody>
+              </table>
+              </div>
+
+              <h4>Days</h4>
+              <div class="table-scroll">
+              <table>
+                <tbody>
+                  <tr><td><code>09:00 mon</code></td><td>one day a week</td></tr>
+                  <tr><td><code>09:00 mon,wed,fri</code></td><td>three days a week</td></tr>
+                  <tr><td><code>09:00 mon-fri</code></td><td>a range</td></tr>
+                  <tr><td><code>09:00 weekdays</code> · <code>weekends</code></td><td>shorthand for mon-fri / sat,sun</td></tr>
+                  <tr><td><code>09:00 and 18:00 weekends</code></td><td>two times, Sat and Sun — 4× a week</td></tr>
+                </tbody>
+              </table>
+              </div>
+
+              <h4>Intervals</h4>
+              <div class="table-scroll">
+              <table>
+                <tbody>
+                  <tr><td><code>every 6h</code></td><td>every six hours</td></tr>
+                  <tr><td><code>every 90m</code> · <code>every 30s</code> · <code>every 2 days</code></td><td>any unit</td></tr>
+                  <tr><td><code>hourly</code> · <code>daily</code> · <code>weekly</code> · <code>monthly</code></td><td>named</td></tr>
+                </tbody>
+              </table>
+              </div>
+              <p>An interval counts from the <strong>Starts</strong> field beside this, or from when the
+              instruction was created if you leave it empty — not from the moment you press Save.</p>
+
+              <h4>Raw cron, if you prefer it</h4>
+              <div class="table-scroll">
+              <table>
+                <tbody>
+                  <tr><td><code>0 9 * * *</code></td><td>09:00 every day (min hour dom month dow)</td></tr>
+                  <tr><td><code>30 8 * * 1-5</code></td><td>08:30 on weekdays</td></tr>
+                  <tr><td><code>0 */4 * * *</code></td><td>every 4 hours, on the hour</td></tr>
+                  <tr><td><code>@daily</code> · <code>@weekly</code> · <code>@hourly</code></td><td>nicknames</td></tr>
+                </tbody>
+              </table>
+              </div>
+
+              <h4>Mixing</h4>
+              <p><code>every 6h; 08:00 mon</code> — an interval <em>plus</em> a fixed weekly time. Each
+              part separated by <code>;</code> becomes its own schedule, so you can combine any of the
+              forms above.</p>
+
+              <p class="muted">Ambiguous input is refused rather than guessed: a bare <code>6</code>
+              could mean 06:00 or every 6 hours, so write <code>06:00</code> or <code>every 6h</code>.
+              If the readback says <em>not understood</em>, the instruction will never fire.</p>
+            </details>
+            {% if instruction and instruction.schedule %}
+              <br><strong>Reads as:</strong> {{ schedule_readback }}
+              {% if instruction and next_run and next_run.at %}
+                <br><strong>Next run:</strong> {{ next_run.at.strftime('%Y-%m-%d %H:%M') }} UTC
+                {% if next_run.skipped %}
+                  <br><span class="muted">Publishing is paused for this account until
+                  {{ next_run.blocked_until.strftime('%Y-%m-%d %H:%M') }} UTC (platform rate
+                  limit), so any scheduled fire before then is skipped without posting.</span>
+                {% endif %}
+              {% endif %}
+            {% endif %}
+          </span>
+        </label>
+
+        <label>Starts <span class="muted small">— optional</span>
+          <input type="datetime-local" name="schedule_start_at"
+                 value="{{ instruction.schedule_start_at.strftime('%Y-%m-%dT%H:%M') if instruction and instruction.schedule_start_at else '' }}">
+          <span class="hint">
+            UTC. For <code>every Nh</code>/<code>Nm</code> schedules this fixes WHEN the interval is
+            counted from, so it survives an edit or a restart instead of quietly re-basing to that
+            moment — leave empty and it anchors to when this instruction was created instead. For a
+            time-of-day or cron schedule it simply delays the first fire until this moment. Clear it to
+            remove the delay (interval schedules keep their created-at anchor either way).
+          </span>
+        </label>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- ── Publishing & delivery ─────────────────────────────────────────── -->
+  <fieldset class="form-section">
+    <legend>Publishing &amp; delivery</legend>
+    <div class="section-body">
+      <div class="grid-2">
+        <label>Publish mode
+          <select name="publish_mode">
+            {% for m in modes %}
+              <option value="{{ m.value }}"
+                {% if instruction and instruction.publish_mode == m %}selected{% endif %}>
+                {{ m.value }}
+              </option>
+            {% endfor %}
+          </select>
+          <span class="hint">How posts <em>and replies</em> go out: dry_run = preview only ·
+            approval = queue for your OK · live = post/send immediately.</span>
+        </label>
+
+        <label data-publish-only>Media preference
+          <select name="media_pref">
+            {% for mp in media_prefs %}
+              <option value="{{ mp.value }}"
+                {% if instruction and instruction.media_pref == mp %}selected{% endif %}>
+                {{ mp.value }}
+              </option>
+            {% endfor %}
+          </select>
+          <span class="hint">Whether a post prefers a video, an image, or lets the agent choose.</span>
+        </label>
+      </div>
+
+      <div class="check-group" data-publish-only>
+        <label class="check">
+          <input type="checkbox" name="disclose_ai"
+                 {% if not instruction or instruction.disclose_ai %}checked{% endif %}>
+          Add the AI-generated label
+        </label>
+        <span class="hint">
+          Sets the platform's own AI label on every post — the same switch their apps show a human
+          (Instagram's <em>Add AI Label</em>, X's <em>Made with AI</em>, TikTok's AIGC label, YouTube's
+          synthetic-media disclosure). Required in the EU from 2 Aug 2026 and by every major platform's
+          own rules — untick only if you have a specific reason.
+          {% if settings.disclosure.in_caption %}
+            <br>“{{ settings.disclosure.text }}” is also appended to the caption
+            (<code>AI_DISCLOSURE_CAPTION=1</code>).
+          {% else %}
+            <br>Nothing is added to the caption text; the label is the platform's own, rendered by them.
+          {% endif %}
+          {% if not settings.disclosure.enabled %}
+            <br><strong>Disabled globally</strong> by AI_DISCLOSURE_ENABLED=0, so this box has no effect.
+          {% endif %}
+        </span>
+      </div>
+
+      <div class="check-group">
+        <label class="check">
+          <input type="checkbox" name="enabled" {% if not instruction or instruction.enabled %}checked{% endif %}>
+          Enabled <span class="muted small">— the scheduler will run it</span>
+        </label>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- ── Tools ─────────────────────────────────────────────────────────── -->
+  {% set total = tool_groups | map(attribute='tools') | map('length') | sum %}
+  {% set picked = tool_groups | map(attribute='tools') | map('selectattr', 'checked')
+                              | map('list') | map('length') | sum %}
+  <fieldset class="form-section">
+    <legend>Tools the agent may use</legend>
+    <div class="section-body">
+      <div class="field">
+        <div class="multiselect" data-multiselect data-total="{{ total }}">
+          {# Lets the save route tell "picker submitted, nothing ticked" from
+             "picker wasn't on this form at all". #}
+          <input type="hidden" name="tools_present" value="1">
+          <button type="button" class="multiselect-toggle" data-ms-toggle aria-expanded="false">
+            <span data-ms-summary>{{ "All tools" if picked == total else picked ~ " of " ~ total ~ " tools" }}</span>
+            <span class="multiselect-caret" aria-hidden="true">▾</span>
+          </button>
+
+          <div class="multiselect-panel" data-ms-panel hidden>
+            <div class="multiselect-head">
+              <input type="search" class="multiselect-filter" data-ms-filter
+                     placeholder="Filter tools…" autocomplete="off">
+              <div class="multiselect-bulk">
+                <button type="button" class="linkish" data-ms-all>Select all</button>
+                <button type="button" class="linkish" data-ms-none>Clear</button>
+              </div>
+            </div>
+
+            <div class="multiselect-list" data-ms-list>
+              {% for group in tool_groups %}
+                <div class="multiselect-group" data-ms-group>
+                  <div class="multiselect-group-title" data-ms-group-title>
+                    {{ group.title }}
+                    {% if group.blurb %}<span class="muted small">— {{ group.blurb }}</span>{% endif %}
+                  </div>
+                  {% for tool in group.tools %}
+                    <label class="multiselect-option" data-ms-option data-name="{{ tool.name }}">
+                      <input type="checkbox" name="tools" value="{{ tool.name }}"
+                             {% if tool.checked or tool.always_on %}checked{% endif %}
+                             {% if tool.always_on %}data-ms-locked onclick="return false;"{% endif %}>
+                      <code>{{ tool.name }}</code>
+                      {% if tool.always_on %}<span class="muted small">always on</span>{% endif %}
+                    </label>
+                  {% endfor %}
+                </div>
+              {% endfor %}
+              <p class="muted small" data-ms-empty hidden>No tool matches that filter.</p>
+            </div>
+          </div>
+        </div>
+        <span class="hint">
+          Everything is on by default. Narrowing it keeps an instruction on task and gives a smaller
+          model fewer choices to weigh — a text-only account has no use for the video tools.
+          <code>publish</code> and <code>report_failure</code> stay on whatever you pick, since a run
+          has to be able to end. Leave all ticked and tools added in future are included automatically.
+        </span>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- ── Continuity ────────────────────────────────────────────────────── -->
+  <fieldset class="form-section">
+    <legend>Continuity</legend>
+    <div class="section-body">
+      <label>Operator note <span class="muted small">— a standing correction, applied from the next run</span>
+        <textarea name="note" rows="3"
+          placeholder="e.g. 'Search for more up-to-date content — the last few posts were stale.' or 'Skip opinion pieces; stick to reported news.'">{{ state.note if state else '' }}</textarea>
+        <span class="hint">
+          Steer a running instruction without rewriting the brief or losing its memory. The agent is
+          told to treat this as an override of its own judgement. Clear the box to withdraw it.
+          {% if state and state.note_updated_at %}<br>Last changed {{ state.note_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
+        </span>
+      </label>
+
+      {% if state and state.memory %}
+      <label>Agent memory <span class="muted small">— written by the agent, carried into the next run</span>
+        <textarea name="memory" rows="8" class="mono small">{{ state.memory }}</textarea>
+        <span class="hint">
+          Where the agent got to and what it plans next. Edit to correct a wrong position, or empty it
+          to make the instruction start over.
+          {{ state.memory|length }} characters{% if state.compactions %}, summarized {{ state.compactions }}×{% endif %}.
+          {% if state.memory_updated_at %}Updated {{ state.memory_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
+        </span>
+      </label>
+      {% endif %}
+    </div>
+  </fieldset>
+
+  {% if not instruction %}
+  <!-- ── Attach a file (create only; rides along with the save) ─────────── -->
+  <fieldset class="form-section">
+    <legend>Attach a file <span class="muted small">— optional</span></legend>
+    <div class="section-body">
+      <p class="hint">
+        Files every run of this instruction can use. A <strong>context</strong> PDF or image goes to
+        the model as a file, so it reads the real layout and pixels; a <strong>reference</strong>
+        image is handed to the image and video generators to hold a look. Max 25MB.
+        It is attached when you save, and you can add more afterwards.
+      </p>
+      <label>File
+        <input type="file" name="file">
+      </label>
+      <div class="grid-2">
+        <label>Purpose
+          <select name="purpose">
+            {% for p in purposes %}<option value="{{ p.value }}">{{ p.value }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Note <span class="muted small">— what it is for</span>
+          <input type="text" name="note" placeholder="e.g. brand voice guide; use this palette">
+        </label>
+      </div>
+    </div>
   </fieldset>
   {% endif %}
 
-  <div class="row">
+  <div class="row form-actions">
     <button class="btn btn-primary" type="submit">Save</button>
     <a class="btn" href="{{ url_for('instructions') }}">Cancel</a>
   </div>
 </form>
-
-{% if instruction %}<h2>Attached files</h2>{% endif %}
-{% if instruction %}
-<p class="muted small">
-  Files every run of this instruction can use. A <strong>context</strong> PDF or image is sent to the
-  model directly as a file — it reads the real layout and pixels, not our own extraction. Plain text
-  (txt, md, csv, json) is inlined instead. A file too large to attach falls back to the text extracted
-  on upload, with <code>read_attachment</code> for the rest. A <strong>reference</strong> image is
-  handed to the image or video generator to hold a look, and is never sent to the text model. Max
-  25MB per file.
-</p>
-{% endif %}
-
-{% if instruction and files %}
-<div class="table-scroll">
-<table>
-  <thead><tr><th>File</th><th>Purpose</th><th>Size</th><th>Extracted</th><th>Note</th><th></th></tr></thead>
-  <tbody>
-  {% for f in files %}
-    <tr>
-      <td class="small">
-        <a href="{{ media_url(f.asset_path) }}" target="_blank">{{ f.filename }}</a>
-        <div class="muted">{{ f.content_type or "unknown type" }}</div>
-      </td>
-      <td><span class="badge">{{ f.purpose.value }}</span></td>
-      <td class="small nowrap">{{ "{:,}".format(f.size_bytes) }} B</td>
-      <td class="small">{% if f.text %}{{ "{:,}".format(f.text|length) }} chars{% else %}<span class="muted">—</span>{% endif %}</td>
-      <td class="small">{{ f.note or "" }}</td>
-      <td>
-        <form method="post" action="{{ url_for('delete_instruction_file', file_id=f.id) }}"
-              onsubmit="return confirm('Remove {{ f.filename }}?')">
-          <button class="btn btn-danger small">Remove</button>
-        </form>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% elif instruction %}
-<p class="muted">No files attached yet.</p>
-{% endif %}
-
-{% if instruction %}
-{# An existing instruction has an id, so a file can be attached on its own. #}
-<form method="post" enctype="multipart/form-data" class="form card"
-      action="{{ url_for('upload_instruction_file', instruction_id=instruction.id) }}">
-  <label>Add a file
-    <input type="file" name="file" required>
-  </label>
-  <div class="grid-2">
-    <label>Purpose
-      <select name="purpose">
-        {% for p in purposes %}<option value="{{ p.value }}">{{ p.value }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Note <span class="muted small">— what it is for</span>
-      <input type="text" name="note" placeholder="e.g. brand voice guide; use this palette">
-    </label>
-  </div>
-  <button class="btn btn-primary">Upload</button>
-</form>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
+// Task-driven conditional UI: the Auto caution appears only for Auto, and the
+// post-only fields (media preference, AI label) hide when the task is just
+// answering comments. Hidden controls still submit, so nothing is lost.
+(function () {
+  var form = document.querySelector('[data-instruction-form]');
+  if (!form) { return; }
+  var task = form.querySelector('[data-task]');
+  var autoWarn = form.querySelector('[data-auto-warn]');
+  var postOnly = Array.prototype.slice.call(form.querySelectorAll('[data-publish-only]'));
+
+  function sync() {
+    var v = task.value;
+    if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
+    postOnly.forEach(function (el) { el.hidden = v === 'engage'; });
+  }
+  task.addEventListener('change', sync);
+  sync();
+})();
+
 // Checkbox dropdown with a filter. Plain checkboxes underneath, so the form
 // submits normally and the page still works with scripting unavailable — the
 // panel is just always open in that case.
