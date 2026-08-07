@@ -135,6 +135,27 @@ def test_empty_reply_and_missing_target_are_refused(env):
     assert _reply(env, target_id="")["error"] == "no_target"
 
 
+# --- auto mode: the agent decides publish vs engage --------------------------------- #
+
+def test_auto_kickoff_asks_the_agent_to_decide():
+    from types import SimpleNamespace
+
+    from aismm.agent.prompts import AUTO_INSTRUCTIONS, build_auto_kickoff
+
+    caps = SimpleNamespace(supports_text=True, supports_image=True, supports_video=False,
+                           default_orientation="portrait", caption_limit=2200)
+    account = Account(platform=PlatformName.instagram, handle="me", external_id="1")
+    instruction = Instruction(name="Mixed", brief="Post daily and answer questions",
+                              task_type=InstructionTask.auto)
+    kickoff = build_auto_kickoff(account=account, instruction=instruction, platform_caps=caps)
+    assert "Post daily and answer questions" in kickoff       # the brief is inlined
+    assert "decide" in kickoff.lower()                        # it must choose
+    # The prompt offers all three terminals, none of the single-mode denials.
+    for terminal in ("publish", "finish_engagement", "report_failure"):
+        assert terminal in AUTO_INSTRUCTIONS
+    assert "there is no publish tool" not in AUTO_INSTRUCTIONS
+
+
 # --- helpers ------------------------------------------------------------------------- #
 
 def _async(value):

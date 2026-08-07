@@ -10,7 +10,7 @@ import pytest
 from aismm.dashboard import app as app_module
 from aismm.models import Account, Instruction, InstructionTask, PlatformName, PublishMode
 from aismm.tools.registry import (
-    ALWAYS_ON, ALWAYS_ON_ENGAGE, ALWAYS_ON_PUBLISH, always_on_for,
+    ALWAYS_ON, ALWAYS_ON_AUTO, ALWAYS_ON_ENGAGE, ALWAYS_ON_PUBLISH, always_on_for,
     build_tools, registered_tool_names,
 )
 
@@ -64,16 +64,29 @@ def test_an_engage_run_gets_its_own_terminal_not_publish(state):
     assert "publish" not in built, "an engage run must never be offered publish"
 
 
+def test_an_auto_run_keeps_both_terminals(state):
+    """Auto lets the agent choose, so it must be able to end EITHER way."""
+    state["instruction"].task_type = InstructionTask.auto
+    built = _names(build_tools(state, ["web_search"]))
+    for name in ALWAYS_ON_AUTO:
+        assert name in built, f"{name} was withheld from an auto run"
+    assert "publish" in built and "finish_engagement" in built
+
+
 def test_selecting_nothing_still_leaves_a_way_to_finish(state):
     assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON_PUBLISH)
     state["instruction"].task_type = InstructionTask.engage
     assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON_ENGAGE)
+    state["instruction"].task_type = InstructionTask.auto
+    assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON_AUTO)
 
 
 def test_always_on_for_selects_by_task():
     assert always_on_for(InstructionTask.publish) == ALWAYS_ON_PUBLISH
     assert always_on_for(InstructionTask.engage) == ALWAYS_ON_ENGAGE
+    assert always_on_for(InstructionTask.auto) == ALWAYS_ON_AUTO
     assert always_on_for("engage") == ALWAYS_ON_ENGAGE
+    assert always_on_for("auto") == ALWAYS_ON_AUTO
     assert always_on_for(None) == ALWAYS_ON_PUBLISH  # unknown falls back to publish
 
 

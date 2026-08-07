@@ -19,8 +19,8 @@ from ..store.base import Store
 from ..tools import build_tools
 from ..tools.browse_tool import close_browser
 from .memory import maybe_compact
-from .prompts import (ENGAGEMENT_INSTRUCTIONS, MANAGER_INSTRUCTIONS, build_engagement_kickoff,
-                      build_kickoff)
+from .prompts import (AUTO_INSTRUCTIONS, ENGAGEMENT_INSTRUCTIONS, MANAGER_INSTRUCTIONS,
+                      build_auto_kickoff, build_engagement_kickoff, build_kickoff)
 
 logger = logging.getLogger("aismm.agent")
 
@@ -40,7 +40,9 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     send exactly what is in the box, so what you read is what the agent gets.
     """
     caps = get_platform(account.platform).capabilities
-    engage = instruction.task_type is InstructionTask.engage
+    task = instruction.task_type
+    engage = task is InstructionTask.engage
+    auto = task is InstructionTask.auto
     state: dict = {
         "account": account,
         "instruction": instruction,
@@ -51,14 +53,20 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     instruction_state = store.get_state(instruction.id)
     attachments = store.list_instruction_files(instruction.id)
     state["attachments"] = attachments
+    if auto:
+        agent_name, instructions, build = "SocialManager", AUTO_INSTRUCTIONS, build_auto_kickoff
+    elif engage:
+        agent_name, instructions, build = ("SocialEngager", ENGAGEMENT_INSTRUCTIONS,
+                                           build_engagement_kickoff)
+    else:
+        agent_name, instructions, build = "SocialManager", MANAGER_INSTRUCTIONS, build_kickoff
     agent = Agent(
-        name="SocialEngager" if engage else "SocialManager",
-        instructions=ENGAGEMENT_INSTRUCTIONS if engage else MANAGER_INSTRUCTIONS,
+        name=agent_name,
+        instructions=instructions,
         tools=build_tools(state, instruction.tools),
         model=build_model(),
         model_settings=ModelSettings(temperature=0.8),
     )
-    build = build_engagement_kickoff if engage else build_kickoff
     kickoff = (prompt_override.strip() or
                build(account=account, instruction=instruction,
                      platform_caps=caps, state=instruction_state,
@@ -104,7 +112,20 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                 "" if state.get("memory_written")
                 else "Also call update_memory with where you got to. "
             )
-            if engage:
+            if auto:
+                nudge = (
+                    "You did not finish this run. " + memory_hint +
+                    "End it now with exactly one terminal call, matching the ONE job you "
+                    "did this run:\n"
+                    "- publish, IF you produced a real post that satisfies the brief. "
+                    + asset_hint +
+                    "\n- finish_engagement, IF you were replying to comments/mentions — "
+                    "including when there was nothing new to answer.\n"
+                    "- report_failure, only if something stopped you from doing either job "
+                    "at all. Do NOT publish a post that describes a problem or invents "
+                    "content you could not fetch."
+                )
+            elif engage:
                 nudge = (
                     "You did not finish this run. " + memory_hint +
                     "End it now with exactly one terminal call:\n"
@@ -146,7 +167,12 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
 
     # Neither terminal tool was called even after the nudge. That is a failed
     # run, recorded as one — not a silent no-op the operator never sees.
-    ending = "finish_engagement or report_failure" if engage else "publish or report_failure"
+    if auto:
+        ending = "publish, finish_engagement or report_failure"
+    elif engage:
+        ending = "finish_engagement or report_failure"
+    else:
+        ending = "publish or report_failure"
     message = (f"The agent ended without calling {ending}. "
                "Check the tool errors above for what blocked it.")
     logger.error("Run ended with no terminal call | instruction='%s' account=%s",

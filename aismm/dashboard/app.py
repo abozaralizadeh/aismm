@@ -1088,7 +1088,16 @@ def create_app() -> Flask:
     def approve(staged_id):
         _owned(get_store().get_staged(staged_id))
         res = orchestrator.approve_staged(staged_id)
-        flash(f"Approve: {res}", "success" if res.get("status") == "published" else "error")
+        # A post returns "published", a reply "replied" — both are success. The
+        # raw dict is for callers; the operator gets a sentence and a link.
+        status = res.get("status")
+        if status in ("published", "replied"):
+            url = res.get("url")
+            what = "Reply sent." if status == "replied" else "Published."
+            flash(f"{what} {url}" if url else what, "success")
+        else:
+            flash(res.get("message") or res.get("error") or "Could not approve this item.",
+                  "error")
         # Back where it was clicked: the run page is where the post is visible.
         return redirect(request.referrer or url_for("runs"))
 

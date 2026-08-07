@@ -309,7 +309,7 @@ both layers.
 ## Engagement runs (responding to comments)
 
 An instruction has a **`task_type`** (`Instruction.task_type`, `InstructionTask.publish` |
-`engage`). A `publish` run researches and posts one thing; an **engage** run reads new
+`engage` | `auto`). A `publish` run researches and posts one thing; an **engage** run reads new
 comments/mentions on the account and replies in its voice, on the same cron schedule. The two share
 the whole pipeline (scheduler → orchestrator → `run_for_account`) and diverge only where it matters:
 `manager_agent` picks `ENGAGEMENT_INSTRUCTIONS` + `build_engagement_kickoff`, and `registry` swaps
@@ -318,6 +318,16 @@ the terminal tool set — `ALWAYS_ON_ENGAGE` = (`finish_engagement`, `report_fai
 `task_type`** (`always_on_for`): the wrong terminal is worse than none — an engage run offered
 `publish` would post a thing it was never asked to — so `build_tools` withholds the other task's
 terminal even if the picker names it.
+
+**`auto` lets the AGENT decide, per run, whether to publish or engage.** `manager_agent` picks
+`AUTO_INSTRUCTIONS` (a decision-router prompt) + `build_auto_kickoff`, and the terminal set is
+`ALWAYS_ON_AUTO` = (`publish`, `finish_engagement`, `report_failure`) — `ALWAYS_ON` now aliases
+this. Auto is the ONE case that keeps BOTH task terminals: it deliberately relaxes the
+disjoint-terminal rule because the operator asked the agent to choose, so `build_tools` does not
+withhold either ending for an auto run. The recovery nudge and the `no_terminal_call` fallback in
+`run_for_account` branch three ways (`auto` / `engage` / else), each naming that run's valid
+endings. The prompt still requires the agent to do exactly ONE job and finish with the single
+terminal that matches it.
 
 **Replies obey the publish-mode gate, exactly like posts.** [engagement.py](aismm/engagement.py)
 `perform_reply` is the mirror of `perform_publish`: `dry_run` → `StagedPost(action_type="reply",

@@ -45,16 +45,24 @@ def registered_tool_names() -> list[str]:
 # to), so the sets are disjoint and picked by task type.
 ALWAYS_ON_PUBLISH = ("publish", "report_failure")
 ALWAYS_ON_ENGAGE = ("finish_engagement", "report_failure")
+# An AUTO run decides publish-vs-engage itself, so it keeps BOTH terminals — this
+# is the one case where the disjoint-set rule above is deliberately relaxed,
+# because the operator asked the agent to choose. It equals the union.
+ALWAYS_ON_AUTO = ("publish", "finish_engagement", "report_failure")
 # The union is what every non-terminal-selection check should treat as "always
 # there regardless of the tool picker".
-ALWAYS_ON = ("publish", "finish_engagement", "report_failure")
+ALWAYS_ON = ALWAYS_ON_AUTO
 
 
 def always_on_for(task_type) -> tuple[str, ...]:
     """The terminal tools for a run of this ``InstructionTask`` (accepts the enum
     or its ``.value``)."""
     value = getattr(task_type, "value", task_type)
-    return ALWAYS_ON_ENGAGE if value == "engage" else ALWAYS_ON_PUBLISH
+    if value == "engage":
+        return ALWAYS_ON_ENGAGE
+    if value == "auto":
+        return ALWAYS_ON_AUTO
+    return ALWAYS_ON_PUBLISH
 
 
 def build_tools(state: dict, enabled: list[str] | None = None) -> list[Any]:

@@ -236,15 +236,18 @@
         {% for t in tasks %}
           <option value="{{ t.value }}"
             {% if (instruction and instruction.task_type == t) or (not instruction and t.value == 'publish') %}selected{% endif %}>
-            {% if t.value == 'engage' %}Respond to comments{% else %}Publish a post{% endif %}
+            {% if t.value == 'engage' %}Respond to comments
+            {% elif t.value == 'auto' %}Auto (agent decides)
+            {% else %}Publish a post{% endif %}
           </option>
         {% endfor %}
       </select>
       <span class="hint">
         <strong>Publish a post</strong> researches and posts on the schedule.
         <strong>Respond to comments</strong> reads new comments/mentions on the target account
-        and replies in its voice — no new post. Works on Instagram, X and YouTube (TikTok has no
-        comment API).
+        and replies in its voice — no new post. <strong>Auto</strong> lets the agent decide each
+        run whether to publish or to answer comments, based on the brief and whether anything new
+        is waiting. Comments work on Instagram, X and YouTube (TikTok has no comment API).
       </span>
     </label>
   </div>

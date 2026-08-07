@@ -284,3 +284,33 @@ def test_a_staged_post_still_shows_approve_and_publish(dash, store, seeded):
                                 status=StagedStatus.pending_approval))
     page = dash.test_client().get("/runs").get_data(as_text=True)
     assert "Approve &amp; publish" in page
+
+
+def test_approving_a_reply_flashes_success_not_an_error(dash, store, seeded, monkeypatch):
+    """A staged reply returns status='replied'; the flash must read it as success
+    (it used to only accept 'published', so a sent reply showed a red error box)."""
+    from aismm.models import StagedPost, StagedStatus
+
+    instr = seeded["instructions"][1]           # the X account instruction
+    acct = seeded["accounts"][1]
+    staged = store.add_staged(StagedPost(
+        instruction_id=instr.id, account_id=acct.id, media_kind="text",
+        action_type="reply", target_type="tweet", target_id="t1",
+        target_excerpt="nice thread", caption="thanks!",
+        status=StagedStatus.pending_approval))
+
+    monkeypatch.setattr("aismm.orchestrator.get_store", lambda: store)
+    monkeypatch.setattr("aismm.tokens.valid_access_token_sync", lambda *a, **k: "tok")
+
+    class _Platform:
+        async def reply_to_target(self, access_token, account, *, target_type, target_id, text):
+            return {"id": "r1", "url": "https://x.com/abo0zar/status/2085"}
+
+    monkeypatch.setattr("aismm.orchestrator.get_platform", lambda name: _Platform())
+
+    client = dash.test_client()
+    resp = client.post(f"/staged/{staged.id}/approve", follow_redirects=True)
+    page = resp.get_data(as_text=True)
+    assert "Reply sent." in page
+    assert "https://x.com/abo0zar/status/2085" in page
+    assert "flash-error" not in page and "'status': 'replied'" not in page

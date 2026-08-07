@@ -71,10 +71,18 @@ class InstructionTask(str, enum.Enum):
     prompt and a non-failure terminal tool (``finish_engagement``) instead of
     ``publish``. The scheduler fires both the same way; the difference is which
     prompt/tools the agent gets (see agent/manager_agent.py).
+
+    ``auto`` lets the AGENT decide, per run, whether to publish or engage — it is
+    given BOTH tool sets and BOTH terminals and picks the one that fits the brief
+    and the account's current state (are there new comments worth answering?).
+    This deliberately relaxes the disjoint-terminal safety rule the other two
+    rely on: the operator has explicitly asked the agent to choose, so offering
+    ``publish`` on a run that turns out to be engagement is the intent, not a leak.
     """
 
     publish = "publish"   # create + publish one post (the default)
     engage = "engage"     # respond to comments/mentions on the account
+    auto = "auto"         # agent decides publish vs engage per run
 
 
 class RunStatus(str, enum.Enum):
