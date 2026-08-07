@@ -12,7 +12,7 @@
   {% for p in platforms %}
     <a class="tab {% if selected and selected == p %}tab-active{% endif %}"
        href="{{ url_for('platform_apps_page', platform=p.value) }}">
-      {{ p.value }}{% if apps[p] %} <span class="badge-count">{{ apps[p]|length }}</span>{% endif %}
+      {{ platform_icon(p.value, 16) }} {{ p.value }}{% if apps[p] %} <span class="badge-count">{{ apps[p]|length }}</span>{% endif %}
     </a>
   {% endfor %}
 </div>
@@ -25,7 +25,7 @@
 
   <div class="split">
     <section class="split-main">
-      <h2>{{ guide.title }}</h2>
+      <h2 class="platform-heading">{{ platform_icon(selected.value, 24) }} {{ guide.title }}</h2>
 
       {% for a in apps[selected] %}
         <form method="post" action="{{ url_for('save_platform_app') }}" class="form card">

@@ -11,6 +11,7 @@
     <section class="account-card">
       <header class="account-head">
         <div class="account-who">
+          {{ platform_icon(a.platform.value, 20) }}
           <span class="badge">{{ a.platform.value }}</span>
           <strong>{{ a.handle or a.external_id or "—" }}</strong>
         </div>
@@ -84,6 +85,31 @@
         </details>
       {% endif %}
 
+      {% if a.platform.value == 'reddit' %}
+        {% set sr = a.meta.get('subreddit') %}
+        <details class="account-section" {% if sr %}open{% endif %}>
+          <summary>
+            Posts go to
+            <strong>
+              {% if sr %}r/{{ sr }}{% else %}your profile (u_{{ a.handle }}){% endif %}
+            </strong>
+          </summary>
+          <form method="post" action="{{ url_for('choose_reddit_subreddit', account_id=a.id) }}"
+                class="form">
+            <label>Subreddit
+              <input type="text" name="subreddit" value="{{ sr or '' }}"
+                     placeholder="Blank = your own profile (u_{{ a.handle }})">
+              <span class="hint">
+                The subreddit name only — <code>r/</code> optional. The post's title is the
+                first line of the caption; the rest is the body. Make sure the account meets
+                that subreddit's rules (karma, age, flair), or Reddit rejects the post.
+              </span>
+            </label>
+            <div class="row"><button class="btn small">Save destination</button></div>
+          </form>
+        </details>
+      {% endif %}
+
       <footer class="account-actions">
         <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
           <button class="btn small" title="Ask the platform what this stored token actually allows">
@@ -106,7 +132,7 @@
 <div class="platform-grid">
   {% for p in platforms %}
   <div class="platform-card">
-    <div class="platform-name">{{ p.name }}</div>
+    <div class="platform-name">{{ platform_icon(p.name, 22) }} {{ p.name }}</div>
     <div class="muted small">
       {% if p.capabilities.supports_video %}video{% endif %}
       {% if p.capabilities.supports_image %} · image{% endif %}

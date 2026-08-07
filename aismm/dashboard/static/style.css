@@ -210,7 +210,8 @@ main.wide { max-width: 1440px; }
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   min-width: 0; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; text-transform: capitalize;
 }
-.platform-name { font-weight: 600; font-size: 1.05rem; }
+.platform-name { font-weight: 600; font-size: 1.05rem;
+  display: flex; align-items: center; gap: .45rem; }
 .connect-option { width: 100%; min-width: 0; max-width: 100%; display: flex; align-items: center; gap: .35rem; overflow: hidden; }
 .connect-option-prefix, .connect-option-arrow { flex: 0 0 auto; }
 .connect-option-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -316,6 +317,12 @@ tr:hover .platform-icon { opacity: 1; }
 
 /* Required marker beside a label. */
 .req { color: var(--danger); font-weight: 700; margin-left: .1rem; }
+
+/* `.form label` is flex-COLUMN, so the caption text and any inline marker beside
+   it (the required `*`, an "— optional" note) are each their own flex item and
+   stack onto separate lines. Grouping the caption in ONE inline item keeps the
+   asterisk on the same line as the field name. */
+.field-label { display: inline; }
 
 /* A checkbox row that also carries its own hint underneath. */
 .check-group { display: flex; flex-direction: column; gap: .3rem; }
@@ -441,7 +448,10 @@ tr:hover .platform-icon { opacity: 1; }
 .tab {
   padding: .45rem .9rem; border: 1px solid var(--border); border-radius: 999px;
   color: var(--muted); font-size: .9rem;
+  display: inline-flex; align-items: center; gap: .4rem;
 }
+/* Section heading carries the selected platform's mark, aligned to the text. */
+.platform-heading { display: flex; align-items: center; gap: .5rem; }
 .tab:hover { color: var(--text); text-decoration: none; border-color: var(--accent); }
 .tab-active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
 .badge-count {

@@ -440,6 +440,29 @@ def create_app() -> Flask:
             flash("X posts go to the home timeline.", "success")
         return redirect(url_for("accounts"))
 
+    @app.route("/accounts/<account_id>/subreddit", methods=["POST"])
+    def choose_reddit_subreddit(account_id):
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.reddit:
+            abort(404)
+        sr = (request.form.get("subreddit") or "").strip()
+        # Store the bare name — the platform strips r/ too, but keep meta clean.
+        sr = sr.removeprefix("/r/").removeprefix("r/").strip("/")
+        meta = dict(account.meta)
+        if sr:
+            meta["subreddit"] = sr
+        else:
+            meta.pop("subreddit", None)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        if sr:
+            flash(f"Reddit posts go to r/{sr}.", "success")
+        else:
+            flash(f"Reddit posts go to your profile (u_{account.handle}).", "success")
+        return redirect(url_for("accounts"))
+
     @app.route("/accounts/<account_id>/check", methods=["POST"])
     def check_account(account_id):
         """What does this account's stored token ACTUALLY allow?

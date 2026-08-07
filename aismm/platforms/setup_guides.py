@@ -154,6 +154,29 @@ GUIDES: dict[str, dict] = {
                  "requirement as Instagram. If FACEBOOK_APP_ID is unset it falls back "
                  "to INSTAGRAM_APP_ID, so an existing Meta app works with no new env vars.",
     },
+    "reddit": {
+        "title": "Reddit",
+        "console": "https://www.reddit.com/prefs/apps",
+        "console_label": "Reddit → Preferences → Apps",
+        "docs": "https://github.com/reddit-archive/reddit/wiki/OAuth2",
+        "requires": "A Reddit account. Posting is subject to each subreddit's rules and "
+                    "your account's karma/age.",
+        "id_label": "Client ID",
+        "secret_label": "Client secret",
+        "steps": [
+            "Open **Reddit → Preferences → Apps** and click **create another app…**.",
+            "Choose type **web app**.",
+            "Set the **redirect uri** to the callback URL below (exactly).",
+            "Create it, then copy the **client id** (the string under the app name) "
+            "and the **secret**.",
+            "Scopes used: `identity submit read`. AISMM requests `duration=permanent` "
+            "so it can keep the connection alive.",
+        ],
+        "notes": "A post goes to a subreddit and needs a title — the caption's first line "
+                 "becomes the title, the rest the body. Set the destination subreddit per "
+                 "account on the Accounts page; with none set it posts to your own "
+                 "profile (u_username). Self/text and single-image posts are supported.",
+    },
 }
 
 

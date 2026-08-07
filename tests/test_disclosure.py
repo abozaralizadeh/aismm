@@ -154,9 +154,10 @@ def test_platforms_with_a_native_label_all_carry_it():
 
 
 def test_platforms_without_a_native_field_disclose_in_the_caption():
-    """LinkedIn and Facebook have no AI-content flag in their publishing APIs."""
+    """LinkedIn, Facebook and Reddit have no AI-content flag in their publishing APIs."""
     assert disclosure.native_flags("linkedin") == {}
     assert disclosure.native_flags("facebook") == {}
+    assert disclosure.native_flags("reddit") == {}
 
 
 def test_no_flags_when_disabled(monkeypatch):

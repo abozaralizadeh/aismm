@@ -78,12 +78,12 @@
     <legend>Basics</legend>
     <div class="section-body">
       <div class="grid-2">
-        <label>Name <span class="req" title="Required">*</span>
+        <label><span class="field-label">Name <span class="req" title="Required">*</span></span>
           <input type="text" name="name" required value="{{ instruction.name if instruction else '' }}"
                  placeholder="e.g. Daily AI news reel">
         </label>
 
-        <label>Task <span class="req" title="Required">*</span>
+        <label><span class="field-label">Task <span class="req" title="Required">*</span></span>
           <span class="label-row">
             <select name="task_type" data-task>
               {% for t in tasks %}
@@ -117,7 +117,7 @@
         </label>
       </div>
 
-      <label>Brief / persona / directive <span class="req" title="Required">*</span>
+      <label><span class="field-label">Brief / persona / directive <span class="req" title="Required">*</span></span>
         <textarea name="brief" rows="6"
           placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
         <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
@@ -129,7 +129,7 @@
   <fieldset class="form-section">
     <legend>Accounts &amp; schedule</legend>
     <div class="section-body">
-      <label>Target accounts <span class="req" title="At least one is required to post">*</span>
+      <label><span class="field-label">Target accounts <span class="req" title="At least one is required to post">*</span></span>
         <div class="checklist">
           {% for a in accounts %}
             <label class="check">

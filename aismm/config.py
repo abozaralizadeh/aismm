@@ -341,6 +341,10 @@ def _load_platform_creds() -> dict[str, PlatformCreds]:
             client_secret=(os.getenv("FACEBOOK_APP_SECRET", "")
                            or os.getenv("INSTAGRAM_APP_SECRET", "")),
         ),
+        "reddit": PlatformCreds(
+            client_id=os.getenv("REDDIT_CLIENT_ID", ""),
+            client_secret=os.getenv("REDDIT_CLIENT_SECRET", ""),
+        ),
     }
 
 
