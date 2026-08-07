@@ -354,6 +354,20 @@ class LocalStore(Store):
                 stmt = stmt.where(StagedPost.status == StagedStatus.pending_approval)
             return list(s.exec(stmt.order_by(StagedPost.created_at.desc()).limit(limit)).all())
 
+    def open_staged_reply_keys(self, account_id):
+        """SQL variant of the base scan — the engagement queue-dedup lookup."""
+        from ..engagement_ledger import key as _key
+
+        open_states = (StagedStatus.preview, StagedStatus.pending_approval,
+                       StagedStatus.approved)
+        with Session(self._engine) as s:
+            rows = s.exec(
+                select(StagedPost.target_type, StagedPost.target_id)
+                .where(StagedPost.account_id == account_id)
+                .where(StagedPost.action_type == "reply")
+                .where(StagedPost.status.in_(open_states))).all()
+        return {_key(t_type, t_id) for t_type, t_id in rows}
+
     # --- workspaces -------------------------------------------------------- #
     def upsert_workspace(self, workspace):
         with Session(self._engine) as s:

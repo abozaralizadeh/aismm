@@ -27,8 +27,8 @@ from .. import attachments, cooldown, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
-    Account, AttachmentPurpose, Instruction, InstructionFile, MediaPref, PlatformApp,
-    PlatformName, PublishMode, RunStatus, WorkspaceMember, WorkspaceRole,
+    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionTask, MediaPref,
+    PlatformApp, PlatformName, PublishMode, RunStatus, WorkspaceMember, WorkspaceRole,
 )
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
@@ -774,7 +774,8 @@ def create_app() -> Flask:
                                accounts=get_store().list_accounts(workspace_id=_workspace_id()),
                                settings=settings,
                                tool_groups=_tool_catalog([]),
-                               modes=list(PublishMode), media_prefs=list(MediaPref))
+                               modes=list(PublishMode), media_prefs=list(MediaPref),
+                               tasks=list(InstructionTask))
 
     @app.route("/instructions/<instruction_id>/edit")
     def edit_instruction(instruction_id):
@@ -790,7 +791,8 @@ def create_app() -> Flask:
                                    instr.schedule, starts_at=instr.schedule_start_at),
                                next_run=_next_run_info(instr, store),
                                tool_groups=_tool_catalog(instr.tools),
-                               modes=list(PublishMode), media_prefs=list(MediaPref))
+                               modes=list(PublishMode), media_prefs=list(MediaPref),
+                               tasks=list(InstructionTask))
 
     @app.route("/instructions", methods=["POST"])
     def save_instruction():
@@ -806,6 +808,7 @@ def create_app() -> Flask:
         instr.schedule = f.get("schedule", "").strip()
         instr.schedule_start_at = _parse_datetime_local(f.get("schedule_start_at", ""))
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
+        instr.task_type = InstructionTask(f.get("task_type", "publish"))
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
@@ -1156,7 +1159,7 @@ def _refresh_scheduler() -> None:
 # so registering a new one never breaks the page.
 TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("Essentials", "Reading the brief and finishing the run.",
-     ("get_context", "publish", "report_failure")),
+     ("get_context", "publish", "finish_engagement", "report_failure")),
     ("Continuity", "Carrying work across scheduled runs.",
      ("read_memory", "update_memory", "read_attachment")),
     ("Research", "Finding real, current material to post about.",
@@ -1169,8 +1172,10 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
       "instagram_profile", "instagram_mentions")),
     ("X (Twitter)", "Reading the timeline and replying. Ignored on other platforms; "
                     "every X call spends pay-per-use API credits.",
-     ("x_recent_posts", "x_mentions", "x_reply_to_post", "x_post_metrics",
+     ("x_recent_posts", "x_mentions", "x_replies", "x_reply_to_post", "x_post_metrics",
       "x_profile", "x_delete_post")),
+    ("YouTube", "Reading and replying to comment threads. Ignored on other platforms.",
+     ("youtube_comments", "youtube_reply_to_comment")),
 ]
 
 

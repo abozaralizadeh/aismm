@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 from ..models import (
     Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, StagedPost,
-    Workspace, WorkspaceMember,
+    StagedStatus, Workspace, WorkspaceMember,
 )
 
 
@@ -153,6 +153,30 @@ class Store(ABC):
     @abstractmethod
     def list_staged(self, *, pending_only: bool = False, limit: int = 100,
                     workspace_id: str | None = None) -> list[StagedPost]: ...
+
+    def open_staged_reply_keys(self, account_id: str) -> set[str]:
+        """``{target_type}:{target_id}`` for this account's still-open staged replies.
+
+        "Open" = preview / pending_approval / approved — a reply staged by an
+        earlier engagement run that has not been sent or rejected yet. The
+        engagement gate (:mod:`aismm.engagement`) uses this to avoid re-staging a
+        reply to a comment that is already waiting in the queue.
+
+        A concrete method rather than ``@abstractmethod``: the default scans
+        ``list_staged`` so a backend without a specialised query still works, and
+        :class:`LocalStore` overrides it with SQL. Kept next to ``list_staged`` so
+        both backends stay in step.
+        """
+        from ..engagement_ledger import key as _key  # local import, avoid cycle
+
+        keys: set[str] = set()
+        for staged in self.list_staged(pending_only=False, limit=500):
+            if (staged.account_id == account_id and staged.action_type == "reply"
+                    and staged.status in (StagedStatus.preview,
+                                          StagedStatus.pending_approval,
+                                          StagedStatus.approved)):
+                keys.add(_key(staged.target_type, staged.target_id))
+        return keys
 
     # --- workspaces -------------------------------------------------------- #
     # A workspace owns accounts, instructions, runs and staged posts. Platform

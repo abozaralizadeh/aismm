@@ -252,3 +252,35 @@ def test_approving_updates_the_right_run_however_old(store, seeded, monkeypatch)
     updated = store.get_run(oldest.id)
     assert updated.status is RunStatus.published
     assert updated.external_url == "https://example.com/p/1"
+
+
+# --- engagement: staged reply cards render differently ------------------------------- #
+
+def test_a_staged_reply_shows_the_comment_and_an_approve_reply_button(dash, store, seeded):
+    """An engagement reply has no media; the card shows what it answers instead."""
+    from aismm.models import StagedPost, StagedStatus
+
+    instr = seeded["instructions"][0]
+    acct = seeded["accounts"][0]
+    store.add_staged(StagedPost(
+        instruction_id=instr.id, account_id=acct.id, media_kind="text",
+        action_type="reply", target_type="comment", target_id="c1",
+        target_excerpt="Where can I buy this?", caption="Link is in our bio!",
+        status=StagedStatus.pending_approval))
+
+    page = dash.test_client().get("/runs").get_data(as_text=True)
+    assert "Where can I buy this?" in page      # the comment being answered
+    assert "Link is in our bio!" in page        # the proposed reply
+    assert "Approve &amp; reply" in page         # not "Approve & publish"
+
+
+def test_a_staged_post_still_shows_approve_and_publish(dash, store, seeded):
+    from aismm.models import StagedPost, StagedStatus
+
+    instr = seeded["instructions"][0]
+    acct = seeded["accounts"][0]
+    store.add_staged(StagedPost(instruction_id=instr.id, account_id=acct.id,
+                                caption="a normal post", media_kind="text",
+                                status=StagedStatus.pending_approval))
+    page = dash.test_client().get("/runs").get_data(as_text=True)
+    assert "Approve &amp; publish" in page

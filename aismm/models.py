@@ -62,6 +62,21 @@ class MediaPref(str, enum.Enum):
     text = "text"      # text-only
 
 
+class InstructionTask(str, enum.Enum):
+    """What an instruction's run is FOR.
+
+    ``publish`` is the original behaviour: research, make media, publish one new
+    post. ``engage`` is a different job entirely — read the account's new
+    comments/mentions and reply in its voice — so it swaps in an engagement
+    prompt and a non-failure terminal tool (``finish_engagement``) instead of
+    ``publish``. The scheduler fires both the same way; the difference is which
+    prompt/tools the agent gets (see agent/manager_agent.py).
+    """
+
+    publish = "publish"   # create + publish one post (the default)
+    engage = "engage"     # respond to comments/mentions on the account
+
+
 class RunStatus(str, enum.Enum):
     running = "running"
     published = "published"
@@ -163,6 +178,11 @@ class Instruction(SQLModel, table=True):
     # choices a smaller model has to weigh. `publish`/`report_failure` are always
     # available regardless — a run has to be able to end.
     tools_json: str = "[]"
+    # What this instruction's runs DO. ``publish`` (default) creates a post;
+    # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
+    # both — for an engage run it gates how replies go out (preview / approval /
+    # live), the same three-way gate posts use.
+    task_type: InstructionTask = InstructionTask.publish
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
     # Label this instruction's posts as AI-generated. On by default (EU AI Act
@@ -242,6 +262,15 @@ class StagedPost(SQLModel, table=True):
     # A carousel has several files; asset_path keeps the first for previews.
     asset_paths_json: str = "[]"
     placement: str = "feed"                  # feed | story | reel
+    # What KIND of staged action this is. ``post`` (default) is a new post whose
+    # media/caption sit in the fields above. ``reply`` is an engagement reply:
+    # the reply text reuses ``caption`` (``media_kind="text"``), and the target
+    # it answers is described by the three fields below. Sharing one table keeps
+    # a single approval queue and one Approve/Reject path (orchestrator).
+    action_type: str = "post"                # post | reply
+    target_type: str = ""                    # comment | mention | reply | dm
+    target_id: str = ""                      # id of the comment/post being answered
+    target_excerpt: str = ""                 # what we're replying to, shown to the reviewer
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""
     created_at: datetime = Field(default_factory=_now)

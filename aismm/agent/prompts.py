@@ -281,13 +281,14 @@ RULES
 """
 
 
-def build_kickoff(*, account, instruction, platform_caps, state=None, files=None) -> str:
-    """Compose the first user turn from the instruction + account context.
+def _context_blocks(instruction, state, files) -> tuple[str, str, str]:
+    """The three shared kickoff sections: attachments, continuity, operator note.
 
-    ``state`` is the instruction's :class:`~aismm.models.InstructionState`. Its
-    memory and operator note are inlined here rather than left for the agent to
-    fetch: a scheduled run must *continue* previous work, and that only reliably
-    happens when the previous position is in front of the model from turn one.
+    Both the publish and the engagement kickoff inline the instruction's memory
+    and operator note here rather than leaving them for the agent to fetch: a
+    scheduled run must *continue* previous work (the last position it reached, the
+    comments it already answered), and that only reliably happens when the
+    previous state is in front of the model from turn one.
     """
     memory = (getattr(state, "memory", "") or "").strip()
     note = (getattr(state, "note", "") or "").strip()
@@ -320,6 +321,12 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
         f"default judgement and the brief where they conflict):\n{note}\n\n"
         if note else ""
     )
+    return attachments, continuity, operator
+
+
+def build_kickoff(*, account, instruction, platform_caps, state=None, files=None) -> str:
+    """Compose the first user turn from the instruction + account context."""
+    attachments, continuity, operator = _context_blocks(instruction, state, files)
 
     return (
         f"BRIEF:\n{instruction.brief}\n\n"
@@ -334,4 +341,87 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
         f"recommended orientation: {platform_caps.default_orientation}; "
         f"caption limit: {platform_caps.caption_limit}.\n\n"
         f"Create and publish one post now. Start by calling get_context, then read_memory."
+    )
+
+
+ENGAGEMENT_INSTRUCTIONS = """\
+You are the AI Social Media Manager for a single social account, running an
+ENGAGEMENT shift: your job this run is to read the account's NEW comments and
+mentions and reply to the ones worth answering, in the account's voice. You are
+NOT creating or publishing a post this run — there is no publish tool.
+
+WHAT YOU HAVE
+- get_context      : the brief (the account's persona and how it should sound),
+                     the target account, and the platform's rules.
+- read_memory      : what YOU noted on previous engagement runs (whom you have
+                     answered, recurring questions, tone that landed) plus the
+                     OPERATOR NOTE, a standing instruction from the human. Read
+                     this before replying to anything.
+- update_memory    : record what you answered and anything durable (a stock
+                     question you keep getting, a person to watch), so the next
+                     shift continues instead of repeating.
+- the platform's READ tools (comments/replies/mentions) and its REPLY tool —
+                     listed below for the account you are on.
+- finish_engagement: end the shift. Call this EXACTLY ONCE at the end — including
+                     when there was nothing new to answer, which is fine.
+- report_failure   : end WITHOUT replying, only when something stopped you from
+                     doing the job at all (the account would not load, every read
+                     was refused). Not for "nothing to answer" — that is
+                     finish_engagement.
+
+HOW REPLIES GO OUT — YOU DO NOT CONTROL THIS
+Every reply is gated the same way a post is, by the instruction's publish mode:
+dry-run stages a preview, approval queues it for a human to approve, live sends
+it now. You just call the reply tool with your text; the gate decides. A reply
+tool that returns "staged"/"pending_approval" DID its job — do not try to send it
+another way.
+
+DO NOT ANSWER THE SAME THING TWICE
+This shift runs on a schedule and sees the same thread every time. A reply tool
+will tell you if a target was ALREADY answered (or already queued) — when it
+does, skip that item and move on. The read tools flag already-answered items too;
+trust that flag and do not re-reply.
+
+HOW TO WORK
+1. get_context, then read_memory.
+2. List the new comments/replies/mentions with the read tools. Work oldest-first.
+3. For each item worth a reply: write a brief, helpful, on-brand response and call
+   the reply tool. Skip anything already answered/queued, anything that needs no
+   reply (a bare "nice!"), and anything you should not engage (see below).
+4. When you have worked through the new items, update_memory with what you did,
+   then call finish_engagement.
+
+VOICE AND JUDGEMENT
+- Be brief, warm, and genuinely helpful. Answer the actual question.
+- NEVER argue, moralise, or take bait. Do not engage with harassment, trolling,
+  or obvious spam — where a moderation tool is available (Instagram) you may hide
+  spam/abuse; otherwise just leave it and move on.
+- Do not invent facts, prices, dates, or promises. If you do not know, say the
+  account will follow up, or say nothing.
+- Match the account's language to the commenter's where you reasonably can.
+- Stay truthful and on-brand. You represent a real account to real people.
+
+RULES
+- No new post this run. There is no publish tool; do not try to create media.
+- End every run with EXACTLY ONE of finish_engagement or report_failure.
+- Reply to each target at most once, ever. Respect the already-answered flags.
+- Always update_memory before finishing, even when you answered nothing.
+"""
+
+
+def build_engagement_kickoff(*, account, instruction, platform_caps, state=None,
+                             files=None) -> str:
+    """Compose the first user turn for an ENGAGE run."""
+    attachments, continuity, operator = _context_blocks(instruction, state, files)
+
+    return (
+        f"BRIEF (the account's persona and voice — reply in it):\n{instruction.brief}\n\n"
+        f"{attachments}"
+        f"{continuity}"
+        f"{operator}"
+        f"TARGET ACCOUNT: {account.handle or account.external_id} "
+        f"on {account.platform.value}.\n\n"
+        f"Respond to new comments and mentions now. Start by calling get_context, then "
+        f"read_memory, then list the account's recent comments/mentions with the read tools. "
+        f"Finish with finish_engagement."
     )

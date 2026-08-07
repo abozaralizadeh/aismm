@@ -8,8 +8,11 @@ ability to END a run.
 import pytest
 
 from aismm.dashboard import app as app_module
-from aismm.models import Account, Instruction, PlatformName, PublishMode
-from aismm.tools.registry import ALWAYS_ON, build_tools, registered_tool_names
+from aismm.models import Account, Instruction, InstructionTask, PlatformName, PublishMode
+from aismm.tools.registry import (
+    ALWAYS_ON, ALWAYS_ON_ENGAGE, ALWAYS_ON_PUBLISH, always_on_for,
+    build_tools, registered_tool_names,
+)
 
 
 def _names(tools):
@@ -43,14 +46,35 @@ def test_a_subset_is_respected(state):
 
 
 def test_the_terminal_tools_are_never_withheld(state):
-    """A run must be able to end, whatever the operator ticked."""
+    """A run must be able to end, whatever the operator ticked — but only with
+    ITS task's terminal (a publish run gets ``publish``, not ``finish_engagement``)."""
     built = _names(build_tools(state, ["web_search"]))
-    for name in ALWAYS_ON:
+    for name in ALWAYS_ON_PUBLISH:
         assert name in built, f"{name} was withheld — the run could never finish"
+    # The other task's terminal is withheld outright, so the model cannot end the
+    # wrong way (an engage terminal on a publish run and vice versa).
+    assert "finish_engagement" not in built
+
+
+def test_an_engage_run_gets_its_own_terminal_not_publish(state):
+    state["instruction"].task_type = InstructionTask.engage
+    built = _names(build_tools(state, ["web_search"]))
+    for name in ALWAYS_ON_ENGAGE:
+        assert name in built, f"{name} was withheld — the engage run could never finish"
+    assert "publish" not in built, "an engage run must never be offered publish"
 
 
 def test_selecting_nothing_still_leaves_a_way_to_finish(state):
-    assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON)
+    assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON_PUBLISH)
+    state["instruction"].task_type = InstructionTask.engage
+    assert _names(build_tools(state, list(ALWAYS_ON))) == sorted(ALWAYS_ON_ENGAGE)
+
+
+def test_always_on_for_selects_by_task():
+    assert always_on_for(InstructionTask.publish) == ALWAYS_ON_PUBLISH
+    assert always_on_for(InstructionTask.engage) == ALWAYS_ON_ENGAGE
+    assert always_on_for("engage") == ALWAYS_ON_ENGAGE
+    assert always_on_for(None) == ALWAYS_ON_PUBLISH  # unknown falls back to publish
 
 
 def test_a_factory_may_still_opt_out_for_its_own_reasons(store):

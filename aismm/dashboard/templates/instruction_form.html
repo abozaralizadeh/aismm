@@ -231,6 +231,25 @@
   </div>
 
   <div class="grid-2">
+    <label>Task
+      <select name="task_type">
+        {% for t in tasks %}
+          <option value="{{ t.value }}"
+            {% if (instruction and instruction.task_type == t) or (not instruction and t.value == 'publish') %}selected{% endif %}>
+            {% if t.value == 'engage' %}Respond to comments{% else %}Publish a post{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <span class="hint">
+        <strong>Publish a post</strong> researches and posts on the schedule.
+        <strong>Respond to comments</strong> reads new comments/mentions on the target account
+        and replies in its voice — no new post. Works on Instagram, X and YouTube (TikTok has no
+        comment API).
+      </span>
+    </label>
+  </div>
+
+  <div class="grid-2">
     <label>Publish mode
       <select name="publish_mode">
         {% for m in modes %}
@@ -240,7 +259,8 @@
           </option>
         {% endfor %}
       </select>
-      <span class="hint">dry_run = preview only · approval = queue for your OK · live = post immediately.</span>
+      <span class="hint">How posts <em>and replies</em> go out: dry_run = preview only ·
+        approval = queue for your OK · live = post/send immediately.</span>
     </label>
   </div>
 

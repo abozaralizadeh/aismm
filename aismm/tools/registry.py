@@ -36,9 +36,25 @@ def registered_tool_names() -> list[str]:
     return list(_TOOL_FACTORIES)
 
 
-# Ending a run needs one of these; an instruction that switched them both off
-# could never finish, so they are never withheld however the selection is set.
-ALWAYS_ON = ("publish", "report_failure")
+# Ending a run needs a terminal tool, so it is never withheld however the
+# selection is set — an instruction that switched its terminal off could never
+# finish. Which terminal depends on the run's job: a PUBLISH run ends with
+# ``publish``, an ENGAGE run with ``finish_engagement``; ``report_failure`` is
+# the shared "I couldn't do it" ending for both. The wrong terminal is worse than
+# none (an engage run offered ``publish`` will publish a post it was never asked
+# to), so the sets are disjoint and picked by task type.
+ALWAYS_ON_PUBLISH = ("publish", "report_failure")
+ALWAYS_ON_ENGAGE = ("finish_engagement", "report_failure")
+# The union is what every non-terminal-selection check should treat as "always
+# there regardless of the tool picker".
+ALWAYS_ON = ("publish", "finish_engagement", "report_failure")
+
+
+def always_on_for(task_type) -> tuple[str, ...]:
+    """The terminal tools for a run of this ``InstructionTask`` (accepts the enum
+    or its ``.value``)."""
+    value = getattr(task_type, "value", task_type)
+    return ALWAYS_ON_ENGAGE if value == "engage" else ALWAYS_ON_PUBLISH
 
 
 def build_tools(state: dict, enabled: list[str] | None = None) -> list[Any]:
@@ -49,13 +65,23 @@ def build_tools(state: dict, enabled: list[str] | None = None) -> list[Any]:
     instruction on task — a text-only account has no use for Sora — and to cut the
     number of choices a smaller model has to reason about.
 
+    The run's terminal tool set is chosen from the instruction's ``task_type``
+    (``state["instruction"]``): a publish run never sees ``finish_engagement`` and
+    an engage run never sees ``publish``, so the model cannot end the wrong way.
+    The OTHER task's terminals are withheld outright even if the picker names them.
+
     A factory may still return ``None`` for its own reasons (Sora with no resource
     configured, the Instagram tools on a non-Instagram run); that is unaffected.
     """
     wanted = set(enabled or ())
+    instruction = state.get("instruction")
+    keep = always_on_for(getattr(instruction, "task_type", None))
+    drop = set(ALWAYS_ON) - set(keep)   # the other task's terminals — never build them
     tools: list[Any] = []
     for name, factory in _TOOL_FACTORIES.items():
-        if wanted and name not in wanted and name not in ALWAYS_ON:
+        if name in drop:
+            continue
+        if wanted and name not in wanted and name not in keep:
             continue
         tool = factory(state)
         if tool is not None:

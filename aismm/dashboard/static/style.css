@@ -239,6 +239,13 @@ form { margin: 0; }
   width: 100%; display: block; height: 200px; object-fit: contain; background: #000;
 }
 .text-preview { padding: 2rem; text-align: center; color: var(--muted); background: var(--panel-2); }
+/* An engagement reply has no media; instead the top of the card shows the
+   comment being answered so the reviewer judges the reply against it. */
+.staged-reply-target { height: auto; padding: .9rem; background: var(--panel-2); }
+.staged-reply-target blockquote {
+  margin: .35rem 0 0; padding-left: .7rem; border-left: 3px solid var(--border);
+  white-space: pre-wrap; color: var(--text);
+}
 .staged-body { padding: .9rem; }
 .caption { white-space: pre-wrap; margin: .5rem 0 .9rem; }
 

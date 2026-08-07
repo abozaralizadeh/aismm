@@ -796,6 +796,22 @@ class Instagram(SocialPlatform):
         return await self._graph_post(access_token, f"{comment_id}/replies",
                                       {"message": message})
 
+    async def reply_to_target(self, access_token: str, account: Account, *,
+                              target_type: str, target_id: str, text: str) -> dict:
+        """Reply to a comment (the mode-gated engagement path).
+
+        Instagram replies live under a COMMENT, so ``comment`` and ``reply``
+        targets both go to ``reply_to_comment``. A ``mention`` is a media tag, not
+        a comment thread, and has no reply endpoint — refused rather than pretended.
+        Graph does not hand back a permalink for a reply, so ``url`` is empty and
+        the ledger keys on the id.
+        """
+        if (target_type or "").lower() not in {"comment", "reply"}:
+            raise RuntimeError(
+                f"Instagram can only reply to a comment here, not a {target_type}.")
+        result = await self.reply_to_comment(access_token, target_id, text)
+        return {"id": result.get("id", ""), "url": ""}
+
     async def set_comment_hidden(self, access_token: str, comment_id: str,
                                  hidden: bool = True) -> dict:
         """Hide (or unhide) a comment — moderation without deleting it."""

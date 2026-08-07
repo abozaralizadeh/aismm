@@ -13,13 +13,14 @@ from agents import Agent, ModelSettings, Runner
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
 from ..llm import build_model
-from ..models import Account, Instruction, Run, RunStatus
+from ..models import Account, Instruction, InstructionTask, Run, RunStatus
 from ..platforms.registry import get_platform
 from ..store.base import Store
 from ..tools import build_tools
 from ..tools.browse_tool import close_browser
 from .memory import maybe_compact
-from .prompts import MANAGER_INSTRUCTIONS, build_kickoff
+from .prompts import (ENGAGEMENT_INSTRUCTIONS, MANAGER_INSTRUCTIONS, build_engagement_kickoff,
+                      build_kickoff)
 
 logger = logging.getLogger("aismm.agent")
 
@@ -39,6 +40,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     send exactly what is in the box, so what you read is what the agent gets.
     """
     caps = get_platform(account.platform).capabilities
+    engage = instruction.task_type is InstructionTask.engage
     state: dict = {
         "account": account,
         "instruction": instruction,
@@ -50,16 +52,17 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     attachments = store.list_instruction_files(instruction.id)
     state["attachments"] = attachments
     agent = Agent(
-        name="SocialManager",
-        instructions=MANAGER_INSTRUCTIONS,
+        name="SocialEngager" if engage else "SocialManager",
+        instructions=ENGAGEMENT_INSTRUCTIONS if engage else MANAGER_INSTRUCTIONS,
         tools=build_tools(state, instruction.tools),
         model=build_model(),
         model_settings=ModelSettings(temperature=0.8),
     )
+    build = build_engagement_kickoff if engage else build_kickoff
     kickoff = (prompt_override.strip() or
-               build_kickoff(account=account, instruction=instruction,
-                             platform_caps=caps, state=instruction_state,
-                             files=attachments))
+               build(account=account, instruction=instruction,
+                     platform_caps=caps, state=instruction_state,
+                     files=attachments))
     # Keep the exact prompt on the Run: debugging a failure means seeing what the
     # agent was told, not what the instruction says now. run.prompt always stays
     # plain text even when the model also receives files natively.
@@ -101,16 +104,27 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                 "" if state.get("memory_written")
                 else "Also call update_memory with where you got to. "
             )
-            nudge = (
-                "You did not finish this run. " + memory_hint +
-                "End it now with exactly one terminal call:\n"
-                "- publish, IF you have a real post that satisfies the brief. "
-                + asset_hint +
-                "\n- report_failure, if you could not carry out the instruction. "
-                "Do NOT publish a post that describes the problem, apologises, or "
-                "substitutes invented content for what you failed to fetch — a "
-                "failed run is the correct outcome there."
-            )
+            if engage:
+                nudge = (
+                    "You did not finish this run. " + memory_hint +
+                    "End it now with exactly one terminal call:\n"
+                    "- finish_engagement, once you have replied to (or staged replies for) "
+                    "the new comments/mentions worth answering — including when there was "
+                    "nothing new to answer, which is a normal, correct outcome.\n"
+                    "- report_failure, only if something stopped you from doing the job at "
+                    "all (the account would not load, every read was refused)."
+                )
+            else:
+                nudge = (
+                    "You did not finish this run. " + memory_hint +
+                    "End it now with exactly one terminal call:\n"
+                    "- publish, IF you have a real post that satisfies the brief. "
+                    + asset_hint +
+                    "\n- report_failure, if you could not carry out the instruction. "
+                    "Do NOT publish a post that describes the problem, apologises, or "
+                    "substitutes invented content for what you failed to fetch — a "
+                    "failed run is the correct outcome there."
+                )
             logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
             # Continue the SAME conversation so prior tool outputs/assets are retained.
             follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
@@ -132,7 +146,8 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
 
     # Neither terminal tool was called even after the nudge. That is a failed
     # run, recorded as one — not a silent no-op the operator never sees.
-    message = ("The agent ended without calling publish or report_failure. "
+    ending = "finish_engagement or report_failure" if engage else "publish or report_failure"
+    message = (f"The agent ended without calling {ending}. "
                "Check the tool errors above for what blocked it.")
     logger.error("Run ended with no terminal call | instruction='%s' account=%s",
                  instruction.name, account.handle or account.external_id)

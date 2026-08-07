@@ -31,11 +31,17 @@ import logging
 
 from agents import function_tool
 
-from .. import tokens
+from .. import engagement, engagement_ledger, tokens
 from ..models import PlatformName
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.twitter")
+
+# One canonical target kind for every X tweet the account might answer — a
+# mention and a reply are both just tweet ids, so keying the ledger on "tweet"
+# (not "mention" vs "reply") means the read tools' already_answered flag and the
+# reply tool's recorded fingerprint always line up, and dedup actually works.
+_X_TARGET = "tweet"
 
 
 def _guard(state: dict) -> bool:
@@ -69,9 +75,9 @@ async def _with_context(state: dict, call):
         return {"error": "x_api_error", "message": str(exc)}
 
 
-def _post_view(post: dict) -> dict:
+def _post_view(post: dict, account=None) -> dict:
     metrics = post.get("public_metrics", {}) or {}
-    return {
+    view = {
         "id": post.get("id"),
         "text": (post.get("text") or "")[:600],
         "posted_at": post.get("created_at"),
@@ -81,6 +87,11 @@ def _post_view(post: dict) -> dict:
         "quotes": metrics.get("quote_count"),
         "impressions": metrics.get("impression_count"),
     }
+    # For an engagement read, flag what this account already answered so the agent
+    # skips it rather than replying to the same tweet on every scheduled run.
+    if account is not None:
+        view["already_answered"] = engagement_ledger.answered(account, _X_TARGET, post.get("id"))
+    return view
 
 
 def _make_recent_posts(state: dict):
@@ -123,11 +134,37 @@ def _make_mentions(state: dict):
         """
         async def call(platform, account, token):
             posts = await platform.list_mentions(token, account, limit=limit)
-            return {"count": len(posts), "mentions": [_post_view(p) for p in posts]}
+            return {"count": len(posts), "mentions": [_post_view(p, account) for p in posts]}
 
         return await _with_context(state, call)
 
     return x_mentions
+
+
+def _make_replies(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def x_replies(limit: int = 10) -> dict:
+        """Replies OTHERS left under this account's recent posts — the comment
+        thread on X, as opposed to ``x_mentions`` (someone @-ing the account).
+
+        Use it on an engagement run to find comments to answer, then reply with
+        ``x_reply_to_post``. Items flagged ``already_answered`` have been handled —
+        skip them. Best-effort: X's reply search needs project access some apps
+        lack, so an empty list can mean "none" or "not available on this app".
+
+        Args:
+            limit: How many replies to return (newest-ish first).
+        """
+        async def call(platform, account, token):
+            posts = await platform.list_replies(token, account, limit=limit)
+            return {"count": len(posts), "replies": [_post_view(p, account) for p in posts]}
+
+        return await _with_context(state, call)
+
+    return x_replies
 
 
 def _make_reply(state: dict):
@@ -135,24 +172,28 @@ def _make_reply(state: dict):
         return None
 
     @function_tool
-    async def x_reply_to_post(post_id: str, text: str) -> dict:
+    async def x_reply_to_post(post_id: str, text: str, replying_to: str = "") -> dict:
         """Reply publicly to a post, in the account's voice.
 
-        This posts IMMEDIATELY and is NOT covered by the instruction's publish
-        mode — that gate is about posts, not conversation. Be brief and helpful,
-        never argue, and never promise anything on the account's behalf.
+        The reply goes out through the instruction's publish mode, exactly like a
+        post: ``dry_run`` stages a preview, ``approval`` queues it for a human, and
+        only ``live`` sends it now. A result of "staged"/"pending_approval" means
+        it did its job. Be brief and helpful, never argue, and never promise
+        anything on the account's behalf. A post already answered (or already
+        queued) comes back "skipped" — move on.
 
         Args:
-            post_id: The id of the post to reply to (from ``x_mentions``).
+            post_id: The id of the post to reply to (from ``x_mentions`` / ``x_replies``).
             text: The reply, 280 characters max.
+            replying_to: The text of the post you are answering, so a human
+                reviewing the queue can see what the reply responds to.
         """
-        async def call(platform, account, token):
-            result = await platform.reply(token, post_id, text)
-            logger.info("Replied to X post %s", post_id)
-            return {"status": "replied", "id": result.get("id"),
-                    "in_reply_to": post_id}
-
-        return await _with_context(state, call)
+        if not _guard(state):
+            return {"error": "not_available",
+                    "message": "This run does not target a connected X account."}
+        return await engagement.perform_reply(
+            state, target_type=_X_TARGET, target_id=post_id, text=text,
+            target_excerpt=replying_to)
 
     return x_reply_to_post
 
@@ -224,6 +265,7 @@ def _make_delete_post(state: dict):
 
 register_tool("x_recent_posts", _make_recent_posts)
 register_tool("x_mentions", _make_mentions)
+register_tool("x_replies", _make_replies)
 register_tool("x_reply_to_post", _make_reply)
 register_tool("x_post_metrics", _make_post_metrics)
 register_tool("x_profile", _make_profile)

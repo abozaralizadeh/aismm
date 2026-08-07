@@ -80,6 +80,45 @@ def _check_publish_signatures() -> None:
         notes.append(f"Publish contract: {len(registered_platforms())} platform(s) OK")
 
 
+def _check_reply_signatures() -> None:
+    """Every platform that declares ``supports_comments`` must accept what
+    ``engagement.perform_reply`` always sends to ``reply_to_target``.
+
+    Same failure mode as the publish contract: an override with a narrower
+    signature looks fine until the first live reply, which then dies with
+    TypeError after the agent has already read and composed a reply.
+    """
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.reply_to_target)
+    checked = 0
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        if not getattr(cls.capabilities, "supports_comments", False):
+            continue
+        checked += 1
+        actual = names(cls.reply_to_target)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.reply_to_target() is missing {', '.join(sorted(missing))} — "
+                f"perform_reply passes these on every call, so replying on "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("reply_to_target() is missing" in p for p in problems):
+        notes.append(f"Reply contract: {checked} comment-capable platform(s) OK")
+
+
 def _check_imports() -> None:
     """Import everything a worker imports at boot, minus the side effects."""
     import aismm.dashboard.app  # noqa: F401  - route + template wiring
@@ -107,7 +146,7 @@ def _check_config() -> None:
 
 def main() -> int:
     for check in (_check_store_backends, _check_imports, _check_publish_signatures,
-                  _check_config):
+                  _check_reply_signatures, _check_config):
         try:
             check()
         except Exception as exc:  # noqa: BLE001 - any failure here blocks the deploy

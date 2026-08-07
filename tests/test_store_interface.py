@@ -131,3 +131,107 @@ def test_carousel_capability_matches_reality(name):
     caps = _get_platform_class(name).capabilities
     if caps.supports_carousel:
         assert caps.max_carousel_items > 1
+
+
+# --- every comment-capable platform must honour the reply contract ------------------- #
+# Same failure mode as publish: `engagement.perform_reply` always calls
+# reply_to_target with the full keyword set, so a narrower override 500s only on
+# the first live reply — after the agent has read and composed one.
+
+_COMMENT_PLATFORMS = [
+    n for n in _registered_platforms()
+    if getattr(_get_platform_class(n).capabilities, "supports_comments", False)
+]
+
+
+@_pytest.mark.parametrize("name", _COMMENT_PLATFORMS, ids=lambda n: n.value)
+def test_reply_accepts_every_argument_perform_reply_sends(name):
+    required = _publish_kwargs(_SocialPlatform.reply_to_target)
+    actual = _publish_kwargs(_get_platform_class(name).reply_to_target)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.reply_to_target() is missing {sorted(missing)} — perform_reply "
+        f"passes these on every call, so the first reply would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _COMMENT_PLATFORMS, ids=lambda n: n.value)
+def test_reply_is_callable_with_the_full_keyword_set(name):
+    signature = _inspect.signature(_get_platform_class(name).reply_to_target)
+    signature.bind_partial(None, access_token="t", account=None,
+                           target_type="comment", target_id="1", text="hi")
+
+
+def test_the_preflight_reply_check_agrees():
+    """The deploy gate and the suite must not disagree about the reply contract."""
+    from scripts import preflight
+
+    preflight.problems.clear()
+    preflight.notes.clear()
+    preflight._check_reply_signatures()
+    assert preflight.problems == []
+
+
+# --- new engagement columns round-trip through both backends ------------------------- #
+# `task_type` on Instruction and action_type/target_* on StagedPost are additive
+# columns (LocalStore ALTER TABLE, Azure schemaless). A backend that dropped them
+# would silently make engage runs behave like publish runs.
+
+from aismm.models import (  # noqa: E402
+    Instruction as _Instruction, InstructionTask as _InstructionTask,
+    StagedPost as _StagedPost,
+)
+
+
+def _both_backends():
+    from aismm.store.azure_store import AzureStore
+    from aismm.store.local_store import LocalStore
+    from tests.test_azure_store import FakeTableClient
+
+    return [
+        ("local", LocalStore(db_url="sqlite:///:memory:")),
+        ("azure", AzureStore(table_client=FakeTableClient())),
+    ]
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_task_type_round_trips(label, store):
+    store.init()
+    instr = store.upsert_instruction(
+        _Instruction(name="E", task_type=_InstructionTask.engage))
+    assert store.get_instruction(instr.id).task_type is _InstructionTask.engage
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_staged_reply_columns_round_trip(label, store):
+    store.init()
+    staged = store.add_staged(_StagedPost(
+        instruction_id="i", account_id="a", caption="reply text", media_kind="text",
+        action_type="reply", target_type="comment", target_id="c42",
+        target_excerpt="a comment we answer"))
+    got = store.get_staged(staged.id)
+    assert got.action_type == "reply"
+    assert got.target_type == "comment"
+    assert got.target_id == "c42"
+    assert got.target_excerpt == "a comment we answer"
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_open_staged_reply_keys_finds_open_replies_only(label, store):
+    from aismm.models import StagedStatus as _StagedStatus
+
+    store.init()
+    store.add_staged(_StagedPost(instruction_id="i", account_id="a", action_type="reply",
+                                 target_type="comment", target_id="open1",
+                                 status=_StagedStatus.pending_approval))
+    store.add_staged(_StagedPost(instruction_id="i", account_id="a", action_type="reply",
+                                 target_type="comment", target_id="rejected1",
+                                 status=_StagedStatus.rejected))
+    store.add_staged(_StagedPost(instruction_id="i", account_id="other", action_type="reply",
+                                 target_type="comment", target_id="otheracct",
+                                 status=_StagedStatus.preview))
+    keys = store.open_staged_reply_keys("a")
+    assert "comment:open1" in keys
+    assert "comment:rejected1" not in keys       # rejected is not "open"
+    assert "comment:otheracct" not in keys       # different account

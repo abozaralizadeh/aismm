@@ -306,6 +306,51 @@ words. When on, trimming to a caption limit cuts the caption, never the label. D
 Art. 50 (applies 2 Aug 2026) plus each platform's own rule; `AI_DISCLOSURE_ENABLED=0` opts out of
 both layers.
 
+## Engagement runs (responding to comments)
+
+An instruction has a **`task_type`** (`Instruction.task_type`, `InstructionTask.publish` |
+`engage`). A `publish` run researches and posts one thing; an **engage** run reads new
+comments/mentions on the account and replies in its voice, on the same cron schedule. The two share
+the whole pipeline (scheduler → orchestrator → `run_for_account`) and diverge only where it matters:
+`manager_agent` picks `ENGAGEMENT_INSTRUCTIONS` + `build_engagement_kickoff`, and `registry` swaps
+the terminal tool set — `ALWAYS_ON_ENGAGE` = (`finish_engagement`, `report_failure`) vs
+`ALWAYS_ON_PUBLISH` = (`publish`, `report_failure`). The sets are **disjoint and picked by
+`task_type`** (`always_on_for`): the wrong terminal is worse than none — an engage run offered
+`publish` would post a thing it was never asked to — so `build_tools` withholds the other task's
+terminal even if the picker names it.
+
+**Replies obey the publish-mode gate, exactly like posts.** [engagement.py](aismm/engagement.py)
+`perform_reply` is the mirror of `perform_publish`: `dry_run` → `StagedPost(action_type="reply",
+preview)`, `approval` → `StagedPost(pending_approval)` (dashboard Approve → `orchestrator.
+approve_staged` branches on `action_type=="reply"` and sends via `reply_to_target`), `live` → send
+now. ONE staged queue serves both — `StagedPost` grew `action_type`/`target_type`/`target_id`/
+`target_excerpt` and the reply text reuses `caption`. Earlier the reply tools posted immediately;
+they are now gated so an autonomous reply bot can be supervised. The write tools that ACT (moderate,
+delete) stay un-gated — that gate is about outbound content.
+
+**A cron engage run re-reads the same thread every fire, so two guards run before anything is staged
+or sent** ([engagement_ledger.py](aismm/engagement_ledger.py), same `account.meta` fingerprint
+pattern as [publish_ledger.py](aismm/publish_ledger.py) — no schema change, both backends,
+`MAX_ENTRIES`-bounded): (1) a target already REPLIED to (`engagement_ledger.answered`, keyed on
+`{target_type}:{target_id}` — the upstream item, never the reply text the agent rewrites each run);
+(2) a still-OPEN staged reply for the same target (`Store.open_staged_reply_keys`, SQL on LocalStore
++ scan fallback in `base.py`), so the queue doesn't fill with duplicates of one unanswered comment.
+A *rejected* reply is neither, so it can be reconsidered next run. The read tools annotate each item
+`already_answered` from the ledger so the agent skips it up front. `finish_engagement` is the
+non-failure ending: it reads the per-run tally on `state["engagement"]` (kept in code by
+`perform_reply`, not reported by the model) and sets the run status published/staged/skipped.
+
+**`supports_comments` gates a platform in or out.** Instagram/X/YouTube declare it; **TikTok does
+NOT** — its comment API is audit-gated for third-party apps, so `tiktok_tools` factories return
+`None` and log once rather than pretending. Adding a comment-capable platform means implementing
+`reply_to_target(access_token, account, *, target_type, target_id, text)` (base raises) — and
+`scripts/preflight.py` + `tests/test_store_interface.py` bind that call against every
+`supports_comments` platform, the same drift guard as `publish`. X has no "comments" endpoint, so
+`twitter.list_replies` searches recent replies under the account's own posts by `conversation_id`.
+**DMs are phase 2** — the `target_type` axis on `StagedPost` and the ledger already accept `dm`;
+YouTube/TikTok have no DM API. No AI-disclosure suffix on a reply (it is conversational, not a
+labelled post).
+
 ## Gotchas
 
 - **The brand mark is a PATH, not text** (`static/brand/`, geometry in `brand/_glyph.txt`). A

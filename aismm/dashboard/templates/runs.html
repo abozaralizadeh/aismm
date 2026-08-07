@@ -35,15 +35,25 @@
 <div class="staged-list">
   {% for s in pending %}
   <div class="staged">
-    <div class="staged-media">
-      {% if s.media_kind == 'video' %}
-        <video controls playsinline preload="metadata" src="{{ media_url(s.asset_path) }}"></video>
-      {% elif s.media_kind == 'image' %}
-        <img src="{{ media_url(s.asset_path) }}" alt="preview">
-      {% else %}
-        <div class="text-preview">Text-only</div>
-      {% endif %}
-    </div>
+    {% if s.action_type == 'reply' %}
+      {# An engagement reply: no media. Show what we're answering (target_excerpt)
+         above the proposed reply so the reviewer judges the pair, not a caption
+         floating on its own. #}
+      <div class="staged-media staged-reply-target">
+        <div class="muted small">Replying to</div>
+        <blockquote>{{ s.target_excerpt or '(comment)' }}</blockquote>
+      </div>
+    {% else %}
+      <div class="staged-media">
+        {% if s.media_kind == 'video' %}
+          <video controls playsinline preload="metadata" src="{{ media_url(s.asset_path) }}"></video>
+        {% elif s.media_kind == 'image' %}
+          <img src="{{ media_url(s.asset_path) }}" alt="preview">
+        {% else %}
+          <div class="text-preview">Text-only</div>
+        {% endif %}
+      </div>
+    {% endif %}
     <div class="staged-body">
       <div class="muted small">
         {% set instr = instructions.get(s.instruction_id) %}
@@ -53,7 +63,7 @@
       <p class="caption">{{ s.caption }}</p>
       <div class="row">
         <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
-          <button class="btn btn-primary">Approve &amp; publish</button>
+          <button class="btn btn-primary">{% if s.action_type == 'reply' %}Approve &amp; reply{% else %}Approve &amp; publish{% endif %}</button>
         </form>
         <form method="post" action="{{ url_for('reject', staged_id=s.id) }}">
           <button class="btn btn-danger">Reject</button>

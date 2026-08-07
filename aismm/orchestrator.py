@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import cooldown, logging_setup, publish_ledger, tokens
+from . import cooldown, engagement_ledger, logging_setup, publish_ledger, tokens
 from .config import settings
 from .agent import run_for_account
 from .assets import exists as asset_exists
@@ -403,6 +403,12 @@ def approve_staged(staged_id: str) -> dict:
     if not access_token:
         return {"error": "no_token", "message": "Reconnect the account in the dashboard."}
 
+    # A staged REPLY is answered, not published: it sends through the platform's
+    # reply path and records the engagement ledger, not the publish ledger. The
+    # rest of this function is the post-publishing pipeline and does not apply.
+    if staged.action_type == "reply":
+        return _approve_staged_reply(store, staged, account, platform, access_token)
+
     kind = staged.media_kind or kind_from_path(staged.asset_path)
     # A staged carousel has several items and a story has a placement; passing only
     # asset_path posted the first image of a carousel as a lone feed post.
@@ -454,6 +460,49 @@ def approve_staged(staged_id: str) -> dict:
     store.update_staged(staged)
     _record_published_run(store, staged, result.url)
     return {"status": "published", "url": result.url}
+
+
+def _approve_staged_reply(store, staged: StagedPost, account: Account, platform,
+                          access_token: str) -> dict:
+    """Send a staged reply now (the Approve button for an engagement reply).
+
+    The reply's own duplicate guard (the engagement ledger) is re-checked here:
+    the same target could have been answered by a live run between staging and
+    approval. On success the ledger is recorded so no later run answers it again.
+    """
+    if engagement_ledger.answered(account, staged.target_type, staged.target_id):
+        staged.status = StagedStatus.rejected
+        store.update_staged(staged)
+        return {"error": "already_answered",
+                "message": "That comment has since been answered — nothing sent."}
+    try:
+        result = _run_async(platform.reply_to_target(
+            access_token, account, target_type=staged.target_type,
+            target_id=staged.target_id, text=staged.caption))
+    except RateLimited as exc:
+        held = cooldown.start(account, store, exc.retry_after_seconds,
+                              reason="approval reply was rate-limited")
+        logger.error("Approval reply rate-limited: %s", exc)
+        return {"error": "rate_limited",
+                "message": (f"{exc} — paused for {held // 60} minutes. The reply is still "
+                            f"pending; approve it again after that.")}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Approval reply failed")
+        return {"error": "reply_failed", "message": str(exc)}
+
+    url = result.get("url", "") if isinstance(result, dict) else ""
+    engagement_ledger.record(account, store, staged.target_type, staged.target_id,
+                             url=url, instruction_id=staged.instruction_id)
+    staged.status = StagedStatus.published
+    staged.external_url = url
+    store.update_staged(staged)
+    run = store.get_run(staged.run_id) if staged.run_id else None
+    if run:
+        run.status = RunStatus.published
+        run.log = (run.log + f"\nApproved & sent reply to {staged.target_type} "
+                   f"{staged.target_id}" + (f": {url}" if url else "")).strip()
+        store.update_run(run)
+    return {"status": "replied", "url": url}
 
 
 def reject_staged(staged_id: str) -> dict:

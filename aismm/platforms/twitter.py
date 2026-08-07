@@ -196,6 +196,9 @@ class Twitter(SocialPlatform):
         # Anything over 280 becomes a thread rather than being cut off.
         supports_threads=True,
         max_thread_posts=25,
+        # Replies to the account's posts and mentions are readable/answerable —
+        # the engagement run reads them and answers through the mode gate.
+        supports_comments=True,
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
@@ -501,6 +504,38 @@ class Twitter(SocialPlatform):
             "user.fields": "id,name,username,description,public_metrics,verified"})
         return payload.get("data", {}) or {}
 
+    async def list_replies(self, access_token: str, account: Account, *,
+                           limit: int = 10, since_posts: int = 5) -> list[dict]:
+        """Replies OTHERS wrote under this account's recent posts.
+
+        Mentions cover "someone @-ed us"; this covers "someone replied to what we
+        posted" — the comment thread under a tweet. X has no direct "get replies"
+        endpoint, so we take the account's recent posts, then run one recent
+        search for tweets whose ``conversation_id`` is one of those posts and that
+        are replies not written by the account itself.
+
+        Kept deliberately small (recent search + posts both spend credits on the
+        pay-per-use API) and best-effort: recent search needs project access some
+        apps lack, so a failure returns ``[]`` rather than killing the run — the
+        agent still has mentions to work from.
+        """
+        posts = await self.list_posts(access_token, account, limit=max(1, min(since_posts, 10)))
+        conversation_ids = [str(p.get("id")) for p in posts if p.get("id")]
+        if not conversation_ids:
+            return []
+        convo = " OR ".join(f"conversation_id:{cid}" for cid in conversation_ids)
+        handle = (account.handle or "").lstrip("@")
+        query = f"({convo}) is:reply" + (f" -from:{handle}" if handle else "")
+        try:
+            payload = await self._get(access_token, "tweets/search/recent", {
+                "query": query, "max_results": max(10, min(limit, 100)),
+                "tweet.fields": self.TWEET_FIELDS,
+                "expansions": "author_id", "user.fields": "username"})
+        except Exception as exc:  # noqa: BLE001 - reads are best-effort here
+            logger.warning("X reply search failed (%s); returning no replies", exc)
+            return []
+        return payload.get("data", []) or []
+
     async def reply(self, access_token: str, post_id: str, text: str) -> dict:
         """Reply to a post, in the account's voice. Posts IMMEDIATELY."""
         async with httpx.AsyncClient(timeout=30) as client:
@@ -513,6 +548,19 @@ class Twitter(SocialPlatform):
             if r.status_code >= 400:
                 raise self._api_error(r)
             return r.json().get("data", {})
+
+    async def reply_to_target(self, access_token: str, account: Account, *,
+                              target_type: str, target_id: str, text: str) -> dict:
+        """Reply to a post/mention/reply (the mode-gated engagement path).
+
+        Every X target is a tweet id, so this delegates to :meth:`reply` and
+        builds the reply's public url from the account handle and the new id.
+        """
+        data = await self.reply(access_token, target_id, text)
+        new_id = data.get("id", "")
+        handle = (account.handle or "i").lstrip("@")
+        return {"id": new_id,
+                "url": f"https://x.com/{handle}/status/{new_id}" if new_id else ""}
 
     async def delete_post(self, access_token: str, post_id: str) -> dict:
         """Delete one of this account's own posts."""

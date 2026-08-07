@@ -30,7 +30,7 @@ import logging
 
 from agents import function_tool
 
-from .. import tokens
+from .. import engagement, engagement_ledger, tokens
 from ..models import PlatformName
 from .registry import register_tool
 
@@ -118,6 +118,9 @@ def _make_comments(state: dict):
                 {"id": c.get("id"), "text": c.get("text"), "from": c.get("username"),
                  "at": c.get("timestamp"), "likes": c.get("like_count"),
                  "hidden": c.get("hidden"),
+                 # True once this account has already replied — skip these, do not
+                 # answer the same comment twice across scheduled engagement runs.
+                 "already_answered": engagement_ledger.answered(account, "comment", c.get("id")),
                  "replies": [{"id": r.get("id"), "text": r.get("text"),
                               "from": r.get("username")}
                              for r in (c.get("replies", {}) or {}).get("data", [])]}
@@ -133,25 +136,33 @@ def _make_reply(state: dict):
         return None
 
     @function_tool
-    async def instagram_reply_to_comment(comment_id: str, message: str) -> dict:
+    async def instagram_reply_to_comment(comment_id: str, message: str,
+                                         comment_excerpt: str = "") -> dict:
         """Reply publicly to a comment, in the account's voice.
 
-        This posts immediately and is visible to everyone — it is not covered by
-        the instruction's publish mode, which governs posts. Be helpful and brief,
-        stay on-brief, never argue, and do not promise anything on the brand's
-        behalf. If a comment is abusive or spam, use
-        ``instagram_moderate_comment`` instead of replying.
+        The reply goes out through the instruction's publish mode, exactly like a
+        post: in ``dry_run`` it is staged as a preview, in ``approval`` it is
+        queued for a human to approve, and only in ``live`` is it sent now. A
+        result of "staged"/"pending_approval" means it did its job — do not try to
+        send it another way. Be helpful and brief, stay on-brief, never argue, and
+        do not promise anything on the brand's behalf. If a comment is abusive or
+        spam, use ``instagram_moderate_comment`` instead of replying.
+
+        A comment already answered (or already queued) comes back "skipped" — move
+        on, do not answer it twice.
 
         Args:
             comment_id: From ``instagram_comments``.
             message: The reply text.
+            comment_excerpt: The comment you are answering, so a human reviewing the
+                queue can see what the reply responds to.
         """
-        async def call(platform, account, token):
-            result = await platform.reply_to_comment(token, comment_id, message)
-            logger.info("Replied to Instagram comment %s (%d chars)", comment_id, len(message))
-            return {"status": "replied", "reply_id": result.get("id")}
-
-        return await _with_context(state, call)
+        if not _guard(state):
+            return {"error": "not_available",
+                    "message": "This run does not target a connected Instagram account."}
+        return await engagement.perform_reply(
+            state, target_type="comment", target_id=comment_id, text=message,
+            target_excerpt=comment_excerpt)
 
     return instagram_reply_to_comment
 

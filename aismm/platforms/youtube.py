@@ -25,6 +25,7 @@ from .registry import register
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+DATA_API = "https://www.googleapis.com/youtube/v3"
 
 
 class YouTube(SocialPlatform):
@@ -37,12 +38,18 @@ class YouTube(SocialPlatform):
         default_orientation="portrait",   # Shorts (9:16, <=60s); use landscape for long-form
         caption_limit=5000,               # description limit; title capped at 100
         notes="Video only. Title = first line of caption (<=100 chars); rest = description.",
+        # Comment threads on the channel's videos are readable and answerable via
+        # the Data API (needs the youtube.force-ssl scope — reconnect to grant it).
+        supports_comments=True,
     )
     auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
     token_endpoint = "https://oauth2.googleapis.com/token"
     scopes = [
         "https://www.googleapis.com/auth/youtube.upload",
         "https://www.googleapis.com/auth/youtube.readonly",
+        # Reading comment threads and inserting replies both require force-ssl;
+        # an account connected before this was added must be reconnected.
+        "https://www.googleapis.com/auth/youtube.force-ssl",
     ]
     extra_authorize_params = {"access_type": "offline", "prompt": "consent"}
 
@@ -106,6 +113,64 @@ class YouTube(SocialPlatform):
         video_id = data.get("id", "")
         return PublishResult(url=f"https://youtu.be/{video_id}" if video_id else "",
                              external_id=video_id, raw=data)
+
+    # ------------------------------------------------------------------ #
+    # Reading and engagement (comment threads)
+    # ------------------------------------------------------------------ #
+    async def list_comment_threads(self, access_token: str, account: Account, *,
+                                   limit: int = 20) -> list[dict]:
+        """Recent comment threads across THIS channel's videos, newest first.
+
+        ``allThreadsRelatedToChannelId`` returns top-level comments on every video
+        the channel owns in one call — the engagement run reads these and answers
+        the ones worth a reply. Each item's ``id`` is the thread's top-level
+        comment id, which is the ``parentId`` a reply is inserted under.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{DATA_API}/commentThreads", params={
+                "part": "snippet", "allThreadsRelatedToChannelId": account.external_id,
+                "maxResults": max(1, min(limit, 100)), "order": "time",
+                "textFormat": "plainText"},
+                headers={"Authorization": f"Bearer {access_token}"})
+            r.raise_for_status()
+            items = r.json().get("items", [])
+        threads = []
+        for item in items:
+            top = ((item.get("snippet") or {}).get("topLevelComment") or {})
+            snip = top.get("snippet") or {}
+            threads.append({
+                "id": top.get("id", ""),                       # parentId for a reply
+                "thread_id": item.get("id", ""),
+                "text": snip.get("textDisplay") or snip.get("textOriginal") or "",
+                "from": snip.get("authorDisplayName", ""),
+                "at": snip.get("publishedAt", ""),
+                "likes": snip.get("likeCount"),
+                "video_id": ((item.get("snippet") or {}).get("videoId") or ""),
+                "reply_count": (item.get("snippet") or {}).get("totalReplyCount", 0),
+            })
+        return threads
+
+    async def reply_to_comment(self, access_token: str, parent_id: str, text: str) -> dict:
+        """Insert a reply under a top-level comment (``comments.insert``)."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{DATA_API}/comments", params={"part": "snippet"},
+                headers={"Authorization": f"Bearer {access_token}",
+                         "Content-Type": "application/json"},
+                json={"snippet": {"parentId": parent_id, "textOriginal": text}})
+            r.raise_for_status()
+            return r.json()
+
+    async def reply_to_target(self, access_token: str, account: Account, *,
+                              target_type: str, target_id: str, text: str) -> dict:
+        """Reply to a comment (the mode-gated engagement path).
+
+        ``target_id`` is a top-level comment id from ``list_comment_threads``. The
+        Data API returns no watch-page anchor for a reply, so ``url`` is empty and
+        the ledger keys on the id.
+        """
+        result = await self.reply_to_comment(access_token, target_id, text)
+        return {"id": result.get("id", ""), "url": ""}
 
 
 register(PlatformName.youtube, YouTube)

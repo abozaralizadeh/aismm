@@ -40,8 +40,8 @@ from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, MediaPref,
-    PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
+    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, InstructionTask,
+    MediaPref, PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
     Workspace, WorkspaceMember, WorkspaceRole,
 )
 from .base import Store
@@ -203,6 +203,7 @@ class AzureStore(Store):
             "name": i.name, "brief": i.brief, "account_ids_json": i.account_ids_json,
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
             "tools_json": i.tools_json,
+            "task_type": i.task_type.value,
             "publish_mode": i.publish_mode.value,
             "media_pref": i.media_pref.value, "enabled": i.enabled,
             "disclose_ai": i.disclose_ai,
@@ -217,6 +218,7 @@ class AzureStore(Store):
             account_ids_json=e.get("account_ids_json", "[]"), schedule=e.get("schedule", ""),
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
             tools_json=e.get("tools_json", "[]"),
+            task_type=InstructionTask(e.get("task_type", "publish")),
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
             media_pref=MediaPref(e.get("media_pref", "auto")),
             enabled=bool(e.get("enabled", True)),
@@ -257,6 +259,8 @@ class AzureStore(Store):
             "instruction_id": s.instruction_id, "account_id": s.account_id, "run_id": s.run_id,
             "caption": s.caption, "asset_path": s.asset_path, "media_kind": s.media_kind,
             "asset_paths_json": s.asset_paths_json, "placement": s.placement,
+            "action_type": s.action_type, "target_type": s.target_type,
+            "target_id": s.target_id, "target_excerpt": s.target_excerpt,
             "status": s.status.value, "external_url": s.external_url, "created_at": s.created_at,
         }
 
@@ -270,6 +274,10 @@ class AzureStore(Store):
             media_kind=e.get("media_kind", "text"),
             asset_paths_json=e.get("asset_paths_json", "[]"),
             placement=e.get("placement", "feed"),
+            action_type=e.get("action_type", "post"),
+            target_type=e.get("target_type", ""),
+            target_id=e.get("target_id", ""),
+            target_excerpt=e.get("target_excerpt", ""),
             status=StagedStatus(e.get("status", "preview")),
             external_url=e.get("external_url", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),

@@ -193,6 +193,25 @@ class SocialPlatform(ABC):
         both — the publish tool checks ``Capabilities`` before calling.
         """
 
+    async def reply_to_target(self, access_token: str, account: Account, *,
+                              target_type: str, target_id: str, text: str) -> dict:
+        """Reply to a comment / mention / reply — the engagement counterpart of
+        :meth:`publish`, and the one method the mode-gated engagement flow
+        (:mod:`aismm.engagement`) calls once a live reply is due.
+
+        ``target_type`` is ``comment`` / ``mention`` / ``reply`` (later ``dm``);
+        ``target_id`` is the platform id of the thing being answered. Returns a
+        dict that SHOULD carry a ``url`` (the reply's permalink where one exists)
+        and/or an ``id`` — :mod:`aismm.engagement` records the url in the ledger.
+
+        The default refuses: a platform without a comment API declares
+        ``supports_comments=False`` and never reaches here (the gate checks
+        capabilities first), but a defensive message beats an ``AttributeError``
+        if it does — the same lesson as ``publish`` growing ``asset_paths``.
+        """
+        raise RuntimeError(
+            f"{self.name.value} does not support replying to a {target_type} here.")
+
     async def post_exists(self, access_token: str, account: Account,
                           external_id: str) -> bool | None:
         """Is this post still PUBLICLY on the account?
