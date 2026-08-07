@@ -36,6 +36,7 @@ from ..platforms.registry import get_platform
 from ..schedules import describe as describe_schedule
 from ..auth import oauth
 from . import sso
+from .platform_icons import icon as platform_icon
 from .. import orchestrator, scheduler
 from ..store import get_store
 
@@ -207,6 +208,10 @@ def create_app() -> Flask:
         workspaces.ensure_user(get_store(), email, name)
         session["workspace_bootstrapped"] = email
         return None
+
+    @app.template_global("platform_icon")
+    def _platform_icon(name, size=14):
+        return platform_icon(name, size=size)
 
     @app.template_global("media_url")
     def _media_url(asset_path, download=False):
@@ -716,6 +721,12 @@ def create_app() -> Flask:
         rows = store.list_instructions(workspace_id=scope)
         next_runs = {i.id: _next_run_info(i, store) for i in rows}
 
+        # Which platforms each instruction actually posts to. "3 accounts" does
+        # not say where; the marks do, in less room. One query, not one per row,
+        # and an account that has since been disconnected simply drops out.
+        platform_of = {a.id: a.platform.value
+                       for a in store.list_accounts(workspace_id=scope)}
+
         args = request.args
         search = args.get("q", "").strip()
         enabled = args.get("enabled", "").strip()
@@ -761,6 +772,9 @@ def create_app() -> Flask:
             readbacks={i.id: describe_schedule(i.schedule) if i.schedule else ""
                        for i in rows},
             total=len(rows),
+            platforms={i.id: sorted({platform_of[a] for a in (i.account_ids or [])
+                                     if a in platform_of})
+                       for i in rows},
             modes=list(PublishMode), sorts=INSTRUCTION_SORTS,
             filters={"q": search, "enabled": enabled, "mode": mode, "sort": sort,
                      "dir": "desc" if descending else "asc"},

@@ -46,7 +46,15 @@
   {% for i in instructions %}
     <tr>
       <td><a href="{{ url_for('edit_instruction', instruction_id=i.id) }}">{{ i.name }}</a></td>
-      <td class="small">{{ i.account_ids|length }}</td>
+      <td class="small nowrap">
+        {{ i.account_ids|length }}
+        {% set marks = platforms.get(i.id, []) %}
+        {% if marks %}
+          <span class="platform-marks" title="{{ marks|join(', ') }}">
+            {% for p in marks %}{{ platform_icon(p) }}{% endfor %}
+          </span>
+        {% endif %}
+      </td>
       <td class="schedule-cell small">
         {% if i.schedule %}
           <span class="mono schedule-raw" title="{{ i.schedule }}">{{ i.schedule }}</span>

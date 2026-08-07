@@ -364,6 +364,68 @@ def test_profile_returns_counts(api):
     assert data["public_metrics"]["followers_count"] == 42
 
 
+# --- reading replies must never surface the account's OWN replies -------------------- #
+# Reported live: on X the bot replied a second time to a comment it had already
+# answered. The reply search is `conversation_id:P is:reply -from:{handle}`, and
+# that `-from:` string is the only thing excluding the account's own replies — an
+# empty/renamed handle, or a case the operator doesn't match, lets them through,
+# and the agent then answers its OWN reply (a fresh target id the ledger has never
+# seen), posting a second reply under the same comment. Excluding by numeric
+# author id can't slip that way.
+
+def _reply_search(monkeypatch, data):
+    from aismm.platforms import twitter as tw
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"data": data}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **kw):
+            if "search/recent" in url:
+                return _Resp()
+            # list_posts (the conversation seed) — one own post to search under.
+            return _PostsResp()
+
+    class _PostsResp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"data": [{"id": "P1"}]}
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
+
+
+def test_reply_search_drops_the_accounts_own_replies(monkeypatch):
+    account = Account(platform=PlatformName.twitter, handle="me", external_id="9")
+    _reply_search(monkeypatch, [
+        {"id": "r1", "text": "great!", "author_id": "111"},   # someone else — keep
+        {"id": "r2", "text": "our own reply", "author_id": "9"},  # the account — drop
+    ])
+    replies = asyncio.run(_x().list_replies("t", account))
+    assert [r["id"] for r in replies] == ["r1"]
+
+
+def test_reply_search_deduplicates_by_id(monkeypatch):
+    account = Account(platform=PlatformName.twitter, handle="me", external_id="9")
+    _reply_search(monkeypatch, [
+        {"id": "r1", "text": "a", "author_id": "111"},
+        {"id": "r1", "text": "a", "author_id": "111"},        # same tweet twice
+    ])
+    replies = asyncio.run(_x().list_replies("t", account))
+    assert [r["id"] for r in replies] == ["r1"]
+
+
 # --- billing errors must be spelled out, not left as a bare status ------------------- #
 # X moved to pay-per-use credits in Feb 2026 — there is no free tier. An account
 # out of credits gets 402 on EVERYTHING, posting included, and httpx's own

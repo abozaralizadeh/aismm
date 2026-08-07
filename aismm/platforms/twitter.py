@@ -533,12 +533,32 @@ class Twitter(SocialPlatform):
         try:
             payload = await self._get(access_token, "tweets/search/recent", {
                 "query": query, "max_results": max(10, min(limit, 100)),
-                "tweet.fields": self.TWEET_FIELDS,
+                "tweet.fields": f"{self.TWEET_FIELDS},author_id",
                 "expansions": "author_id", "user.fields": "username"})
         except Exception as exc:  # noqa: BLE001 - reads are best-effort here
             logger.warning("X reply search failed (%s); returning no replies", exc)
             return []
-        return payload.get("data", []) or []
+
+        # Drop the account's OWN replies by author id, and de-duplicate by tweet
+        # id. The ``-from:{handle}`` clause above is the first line of defence,
+        # but it is a fragile string: an empty/renamed handle, or a case the
+        # search operator does not match, lets the account's own replies through
+        # — and the agent then answers its OWN reply, posting a second reply
+        # under a comment it already handled. Keying on the numeric author id
+        # (always this account's ``external_id``) can't miss that way, so a
+        # ``-from:`` slip no longer turns the thread into a self-reply loop.
+        me = str(account.external_id or "")
+        seen: set[str] = set()
+        replies: list[dict] = []
+        for p in payload.get("data", []) or []:
+            pid = str(p.get("id") or "")
+            if not pid or pid in seen:
+                continue
+            if me and str(p.get("author_id") or "") == me:
+                continue
+            seen.add(pid)
+            replies.append(p)
+        return replies
 
     async def reply(self, access_token: str, post_id: str, text: str) -> dict:
         """Reply to a post, in the account's voice. Posts IMMEDIATELY."""

@@ -357,6 +357,16 @@ NOT** — its comment API is audit-gated for third-party apps, so `tiktok_tools`
 `scripts/preflight.py` + `tests/test_store_interface.py` bind that call against every
 `supports_comments` platform, the same drift guard as `publish`. X has no "comments" endpoint, so
 `twitter.list_replies` searches recent replies under the account's own posts by `conversation_id`.
+**`list_replies` MUST exclude the account's OWN replies by numeric `author_id`, not just the
+`-from:{handle}` search string.** A reply the account already made is a reply in the same
+conversation, so it comes straight back on the next fire; the `-from:` clause is the only thing
+keeping it out, and an empty/renamed handle (or a case the operator doesn't match) lets it through —
+the agent then answers its OWN reply, a fresh id the ledger has never seen, posting a second reply
+under a comment it already handled (observed live on X, and X-specific: Instagram keeps replies
+nested under the top-level comment, so `list_comments` never surfaces them as new items). Excluding
+on `author_id == account.external_id` (from the `expansions=author_id` the search already requests)
+can't slip that way; the same pass de-duplicates by tweet id. The ledger prevents a repeat of the
+*same* id — the author-id filter is what stops a *new* self-reply id from ever being offered.
 **DMs are phase 2** — the `target_type` axis on `StagedPost` and the ledger already accept `dm`;
 YouTube/TikTok have no DM API. No AI-disclosure suffix on a reply (it is conversational, not a
 labelled post).
@@ -425,6 +435,17 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   single card, which is what made one staged post sit in a narrow column with a gap next to it. The
   max track width (380px) stops that one card stretching across a wide screen instead, and the list
   scrolls at 70vh rather than pushing the page down.
+- **Platform brand marks come from vendored Simple Icons SVGs**
+  ([dashboard/platform_icons.py](aismm/dashboard/platform_icons.py), files in
+  `static/brand/platforms/` + a NOTICE recording CC0 and the download URL). The instruction list
+  shows them beside the account count, because "3 accounts" doesn't say WHERE it posts. The path is
+  read out of the SVG at import, so the file is the single definition — never paste a copy into
+  Python. They are INLINED, not `<img>`: a row would otherwise fire four requests, and an `<img>`
+  can't be recoloured. X and TikTok publish monochrome marks so they take `currentColor` (black
+  would vanish on the dark dashboard); Instagram and YouTube keep their brand colour. **The enum
+  member is `twitter` but the brand is `X`** — `FILES`/`COLORS` bridge that here rather than
+  renaming an enum every DB row uses. An unknown platform renders nothing and a missing file is
+  logged, never fatal; the count and the `title` still carry the information.
 - **Instructions are filtered in the VIEW, runs in the STORE.** Deliberate asymmetry: the run table
   grows without bound and must be paged in SQL, while an operator has tens of instructions. The
   media thumbnail belongs on the RUNS list — a run has an asset, an instruction does not.

@@ -135,6 +135,15 @@ td.actions-cell .actions { flex-wrap: nowrap; justify-content: flex-end; }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 form { margin: 0; }
 
+/* Platform brand marks beside the account count. "3 accounts" doesn't say where
+   it posts; these do, in less room than the words. Vertically centred against
+   the number rather than sitting on the baseline, and given a touch of opacity
+   so they read as metadata and not as buttons. */
+.platform-marks { display: inline-flex; align-items: center; gap: .25rem;
+  margin-left: .35rem; vertical-align: -.15em; }
+.platform-icon { display: block; opacity: .85; flex: none; }
+tr:hover .platform-icon { opacity: 1; }
+
 .badge { display: inline-block; padding: .12rem .5rem; border-radius: 999px; font-size: .78rem;
          background: var(--panel-2); border: 1px solid var(--border); text-transform: capitalize; }
 .badge-live, .badge-published { background: rgba(53,194,138,.15); border-color: var(--ok); color: var(--ok); }

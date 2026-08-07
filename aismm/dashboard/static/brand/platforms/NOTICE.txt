@@ -1,0 +1,11 @@
+Platform brand marks, from Simple Icons (https://simpleicons.org), release 13.
+
+Licence: CC0 1.0 Universal — https://github.com/simple-icons/simple-icons/blob/master/LICENSE.md
+The icons themselves remain the trademarks of their respective owners and are
+used here only to identify the platform an account belongs to (nominative use).
+
+Downloaded from https://cdn.jsdelivr.net/npm/simple-icons@13/icons/<name>.svg
+
+These files are the SINGLE definition of each mark: platform_icons.py reads the
+path out of them at import and inlines it, so there is no second copy to drift.
+Re-download from the same URL to update; do not hand-edit.
