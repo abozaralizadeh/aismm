@@ -141,7 +141,9 @@
           {% elif file %}
             <img class="thumb" src="{{ media_url(file) }}" alt="" loading="lazy">
           {% else %}
-            <span class="thumb thumb-empty" aria-hidden="true"></span>
+            <span class="thumb thumb-empty" aria-hidden="true">
+              <img src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
+            </span>
           {% endif %}
         </a>
       </td>

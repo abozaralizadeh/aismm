@@ -5,21 +5,26 @@
      alt="AISM² — AI Social Media Manager. Smarter content, stronger connections: plan, create, schedule and analyze across Instagram, X, YouTube, TikTok and more."
      width="1600" height="678">
 
-<h1 class="visually-hidden">Overview</h1>
-
-{# Two clocks: schedules and next-run times are shown in UTC (the app's internal
-   clock), so an operator needs their own wall time beside it to reconcile them.
-   Both tick client-side — the server never knows the browser's timezone. #}
-<div class="clock-bar" aria-hidden="false">
-  <div class="clock">
-    <span class="clock-label">UTC</span>
-    <time class="clock-time" data-clock="utc">--:--:--</time>
-    <span class="clock-date" data-clock="utc-date"></span>
+{# Header row: a title anchors the left so the clocks aren't left floating in
+   dead space. Schedules and next-run times are shown in UTC (the app's internal
+   clock), so an operator needs their own wall time beside it. Both tick
+   client-side — the server never knows the browser's timezone. #}
+<div class="dash-header">
+  <div class="dash-heading">
+    <h1 class="dash-title">Overview</h1>
+    <p class="dash-sub muted">Accounts, schedules and recent activity at a glance.</p>
   </div>
-  <div class="clock">
-    <span class="clock-label" data-clock-zone title="Your browser's timezone">Local</span>
-    <time class="clock-time" data-clock="local">--:--:--</time>
-    <span class="clock-date" data-clock="local-date"></span>
+  <div class="clock-bar">
+    <div class="clock">
+      <span class="clock-label">UTC</span>
+      <time class="clock-time" data-clock="utc">--:--:--</time>
+      <span class="clock-date" data-clock="utc-date"></span>
+    </div>
+    <div class="clock">
+      <span class="clock-label" data-clock-zone title="Your browser's timezone">Local</span>
+      <time class="clock-time" data-clock="local">--:--:--</time>
+      <span class="clock-date" data-clock="local-date"></span>
+    </div>
   </div>
 </div>
 
@@ -203,7 +208,9 @@
         {% elif file %}
           <img class="thumb" src="{{ media_url(file) }}" alt="" loading="lazy">
         {% else %}
-          <span class="thumb thumb-empty" aria-hidden="true"></span>
+          <span class="thumb thumb-empty" aria-hidden="true">
+            <img src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
+          </span>
         {% endif %}
       </a>
       <div class="feed-body">
