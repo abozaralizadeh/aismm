@@ -290,6 +290,7 @@ configured, the same code simply retries in place.
 | `STORE_BACKEND` | `auto` / `local` / `azure` — see [Storage](#storage-local-sqlite-or-azure-table--blob). |
 | `AZURE_STORAGE_CONNECTION_STRING` | Storage account for Table + Blob (SandBox's `connection_string` also accepted). |
 | `AISMM_TABLE_NAME` / `AISMM_BLOB_NAME` | Table and blob container names (default `aismm` / `aismm-media`). |
+| `ASSET_RETENTION_DAYS` | Days a local media file is kept once blob storage has a copy (default `14`, `0` disables). |
 | `MEMORY_MAX_CHARS` | Size at which an instruction's [carry-over memory](#continuity-memory-notes-and-browsing) is summarized (default 6000). |
 | `AI_DISCLOSURE_ENABLED` / `_TEXT` / `_SEPARATOR` | [AI-content disclosure](#ai-content-disclosure) — on by default. |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` / `DASHBOARD_BASE_URL` / `FLASK_SECRET_KEY` | Dashboard. |
@@ -960,6 +961,45 @@ accepting an upload, so this removes the need for the dashboard itself to be pub
 A local copy is always written as well: X, YouTube and TikTok upload the bytes directly, and reads
 fall back to downloading from the blob when the local file is missing — so a second host, or a wiped
 data dir, doesn't break publishing.
+
+### The local disk is a cache, not the archive
+
+Media is not small — one Sora clip is tens of megabytes and a run can produce nine of them. Kept
+forever, they fill the disk, and a full disk stops **everything**: the next run cannot write its
+media, gunicorn cannot write its logs, SQLite cannot commit.
+
+So with blob storage configured, `data/assets/` is a **cache**. A daily housekeeping job (04:30, plus
+one sweep at startup) deletes local files older than `ASSET_RETENTION_DAYS` (default 14). Nothing is
+lost: `read_bytes` and the dashboard's `/assets/<file>` route both fall back to the blob, so old
+previews, thumbnails and **Publish this again** keep working on a pruned file.
+
+The safety rule is absolute and worth stating plainly:
+
+> **A local file is deleted only after the blob copy has been confirmed to exist.** Without blob
+> storage configured the prune is a **no-op** — the local file is the only copy. If the blob cannot
+> be reached, the file is kept.
+
+The dashboard also points every preview and thumbnail **straight at the blob URL**, so the browser
+fetches media from storage and the VM is not in the path. If the container is not anonymously
+readable, AISMM serves the file itself instead — nothing breaks, it is just slower — and the
+**Download** button always goes through the dashboard, because a blob URL cannot send the
+`Content-Disposition` header iOS needs to save a video.
+
+The media of the last 200 runs is spared regardless of age, so anything you might still want to
+review or republish stays fast. From a shell:
+
+```bash
+python -m aismm.cli assets                  # show usage; list what would be deleted
+python -m aismm.cli assets --apply          # delete it
+python -m aismm.cli assets --older-than 30 --apply
+```
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ASSET_RETENTION_DAYS` | `14` | How long a local copy is kept once the blob has it. `0` disables the prune. |
+
+Without blob storage, keep an eye on the disk yourself — `python -m aismm.cli assets` reports how
+much the cache is using and how old the oldest file is.
 
 Two limits worth knowing: Table Storage caps a single property at 64 KB (AISMM raises a clear error
 past 32 000 characters rather than letting Azure return an opaque 400), and it cannot sort or

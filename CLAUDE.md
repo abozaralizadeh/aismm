@@ -207,7 +207,25 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Media goes through [assets.py](aismm/assets.py)**, never `open()`/`Path.read_bytes` on an
   `asset_path`: with Azure configured the bytes may live only in blob storage. `save_bytes` writes
   locally *and* mirrors to blob, `read_bytes` falls back to the blob, `public_url` returns the blob
-  URL when available.
+  URL when available. **With blob configured the local folder is a CACHE, not the archive** —
+  media is tens of MB per clip, and a full disk stops everything (the next run can't write media,
+  gunicorn can't log, SQLite can't commit). `assets.prune_local` + `orchestrator.prune_asset_cache`
+  run daily (`scheduler._schedule_housekeeping`, cron `30 4 * * *`, plus a boot sweep) and drop local
+  files older than `ASSET_RETENTION_DAYS` (14). The safety rule is absolute: **a file is deleted only
+  after `blob_media.exists()` confirms the blob copy** — no blob configured is a NO-OP, an
+  unreachable blob KEEPS the file. The media of the last 200 runs is spared regardless of age, and
+  `/assets/<file>` falls back to streaming from blob (preserving `?download=1`) so a pruned file
+  still previews and still republishes. **Every `<img>`/`<video>` in the dashboard goes through the
+  `media_url()` template global**, which returns the BLOB url so the browser fetches media from
+  storage and the VM is not in the path — a `url_for('asset', …)` in a new template quietly routes it
+  back through the VM, and a test asserts no template does. It falls back to `/assets` when the
+  container is not anonymously readable (`blob_media.public_read()`; `None` means *could not ask* and
+  is treated as "don't risk it" — our own route always works, so an unknown is never worth a broken
+  preview) and **always** for `download=True`: a blob URL cannot set `Content-Disposition:
+  attachment` without a SAS token, and that header is the only way to save a video out of iOS Safari. `ASSET_RETENTION_DAYS=0` turns the prune OFF rather than
+  meaning "delete everything" — zeroing a retention setting is switching it off; `cli assets
+  --older-than 0 --apply` is the explicit way to clear the lot. Housekeeping must never stop the
+  scheduler booting: both the job registration and the sweep swallow and log their failures.
 - **Config is a frozen `Settings` singleton** ([config.py](aismm/config.py)) read from env **at
   import time**. Tests that need different config set env before import or pass an explicit `db_url`
   to `LocalStore`. Don't call `os.getenv` elsewhere.

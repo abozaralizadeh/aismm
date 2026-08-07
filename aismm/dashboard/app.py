@@ -8,20 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import io
 import logging
 import re
 import threading
 from collections.abc import Callable
 
 from flask import (
-    Flask, abort, flash, g, redirect, render_template, request, send_from_directory,
-    session, url_for,
+    Flask, abort, flash, g, redirect, render_template, request, send_file,
+    send_from_directory, session, url_for,
 )
 from markupsafe import Markup, escape
 from werkzeug.utils import secure_filename
 
 from ..config import settings
-from ..assets import public_url
+from ..assets import browser_url, public_url
 from .. import attachments, cooldown, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
@@ -206,6 +207,23 @@ def create_app() -> Flask:
         workspaces.ensure_user(get_store(), email, name)
         session["workspace_bootstrapped"] = email
         return None
+
+    @app.template_global("media_url")
+    def _media_url(asset_path, download=False):
+        """Where a template should point at media: blob first, us as the fallback.
+
+        Every `<img>`/`<video>` in the dashboard goes through this, so media is
+        fetched from storage directly and the VM is not in the path. Downloads
+        stay on our route — a blob URL cannot set the attachment header iOS needs.
+        """
+        if not asset_path:
+            return ""
+        name = str(asset_path).rsplit("/", 1)[-1]
+        if not download:
+            direct = browser_url(name)
+            if direct:
+                return direct
+        return url_for("asset", filename=name, **({"download": 1} if download else {}))
 
     @app.context_processor
     def _inject_workspaces():
@@ -1087,8 +1105,26 @@ def create_app() -> Flask:
         # ?download=1 forces a save rather than inline playback. iOS Safari gives
         # no way to save a <video> it is playing — long-press does nothing — so
         # without this there is no route to the file from a phone at all.
-        return send_from_directory(settings.assets_dir, filename,
-                                   as_attachment=bool(request.args.get("download")))
+        as_attachment = bool(request.args.get("download"))
+        local = settings.assets_dir / secure_filename(filename)
+        if local.is_file():
+            return send_from_directory(settings.assets_dir, filename,
+                                       as_attachment=as_attachment)
+
+        # Pruned from the local cache but still in blob storage. Streamed rather
+        # than redirected so ?download=1 keeps working and a private container
+        # still serves — without this, tidying the disk would break every
+        # thumbnail and preview of anything older than the retention window.
+        from ..store import blob_media
+
+        if not blob_media.enabled():
+            abort(404)
+        try:
+            data = blob_media.download(local.name)
+        except Exception:  # noqa: BLE001 - genuinely gone
+            abort(404)
+        return send_file(io.BytesIO(data), mimetype=blob_media.content_type_for(local.name),
+                         as_attachment=as_attachment, download_name=local.name)
 
     @app.route("/healthz")
     def healthz():

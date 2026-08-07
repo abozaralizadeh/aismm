@@ -252,6 +252,10 @@ class Settings:
     # sequence is legitimately tens of minutes of Sora rendering — but never
     # absent. Set RUN_TIMEOUT_SECONDS=0 to disable it entirely, knowing that a
     # single hung run then blocks that instruction until the service restarts.
+    # Days a generated asset stays on local disk once blob storage has a copy.
+    # The local folder is a CACHE when blob is configured; without pruning a VM
+    # fills up and the next run fails trying to write its media. 0 disables it.
+    asset_retention_days: int = 14
     run_timeout_seconds: int = 7200
     # How long ONE Sora job may take before it is abandoned and retried elsewhere.
     sora_job_timeout_seconds: int = 1800
@@ -398,6 +402,7 @@ def load_settings() -> Settings:
         store_backend=os.getenv("STORE_BACKEND", "auto").strip().lower() or "auto",
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
         memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
+        asset_retention_days=int(os.getenv("ASSET_RETENTION_DAYS", "14") or 0),
         run_timeout_seconds=int(os.getenv("RUN_TIMEOUT_SECONDS", "7200") or 0),
         sora_job_timeout_seconds=int(
             os.getenv("SORA_JOB_TIMEOUT_SECONDS", "1800") or 1800),

@@ -106,6 +106,35 @@ def cmd_list(_args) -> int:
     return 0
 
 
+def cmd_assets(args) -> int:
+    """Show what the local asset cache is holding, and optionally free it."""
+    from . import assets, orchestrator
+    from .store import blob_media, get_store
+
+    configure_logging()
+    usage = assets.local_usage()
+    print(f"\nLocal asset cache: {usage['files']:,} file(s), "
+          f"{usage['bytes'] / 1e6:,.1f} MB, oldest {usage['oldest_days']} days")
+    print(f"Blob storage:      {'configured' if blob_media.enabled() else 'NOT configured'}")
+    if not blob_media.enabled():
+        print("\nWithout blob storage the local files are the only copy, so nothing is "
+              "pruned. Set AZURE_STORAGE_CONNECTION_STRING first.\n")
+        return 0
+
+    result = orchestrator.prune_asset_cache(get_store(), older_than_days=args.older_than,
+                                            apply=args.apply)
+    verb = "Deleted" if args.apply else "Would delete"
+    print(f"\n{verb} {result['deleted']:,} file(s), freeing {result['freed_bytes'] / 1e6:,.1f} MB")
+    print(f"  kept (too recent):        {result['skipped_recent']:,}")
+    print(f"  kept (NOT in blob yet):   {result['kept_local_only']:,}")
+    if result["kept_local_only"]:
+        print("  ^ those are the only copy — check that blob uploads are working.")
+    if not args.apply:
+        print("\nRe-run with --apply to delete them.")
+    print()
+    return 0
+
+
 def cmd_runs(args) -> int:
     """Close out runs left marked ``running`` by a process that died."""
     from . import orchestrator
@@ -288,6 +317,13 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--instruction", required=True, help="instruction id (prefix) or name")
     pp.add_argument("--account", help="limit to one account id")
     pp.set_defaults(func=cmd_post)
+
+    pa = sub.add_parser("assets", help="show local media usage and prune what blob already has")
+    pa.add_argument("--apply", action="store_true",
+                    help="delete them (default is a dry run)")
+    pa.add_argument("--older-than", type=int, default=None, metavar="DAYS",
+                    help="retention window (default: ASSET_RETENTION_DAYS)")
+    pa.set_defaults(func=cmd_assets)
 
     pruns = sub.add_parser("runs", help="close out runs stuck on 'running' after a crash")
     pruns.add_argument("--apply", action="store_true",

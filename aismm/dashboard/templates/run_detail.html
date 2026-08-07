@@ -133,15 +133,15 @@
       <div class="detail-media">
         {% set filename = run.asset_path.split('/')[-1] %}
         {% if filename.lower().endswith(('.mp4', '.mov', '.webm')) %}
-          <video controls playsinline preload="metadata" src="{{ url_for('asset', filename=filename) }}"></video>
+          <video controls playsinline preload="metadata" src="{{ media_url(filename) }}"></video>
         {% else %}
-          <img src="{{ url_for('asset', filename=filename) }}" alt="run media">
+          <img src="{{ media_url(filename) }}" alt="run media">
         {% endif %}
       </div>
       <div class="media-actions">
-        <a class="btn small" href="{{ url_for('asset', filename=filename, download=1) }}"
+        <a class="btn small" href="{{ media_url(filename, download=True) }}"
            download="{{ filename }}">Download</a>
-        <a class="btn small" href="{{ url_for('asset', filename=filename) }}"
+        <a class="btn small" href="{{ media_url(filename) }}"
            target="_blank" rel="noopener">Open in a new tab</a>
         {% if asset_url %}
           <a class="btn small" href="{{ asset_url }}" target="_blank" rel="noopener">Public URL ↗</a>

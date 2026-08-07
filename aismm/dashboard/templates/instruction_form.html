@@ -334,7 +334,7 @@
   {% for f in files %}
     <tr>
       <td class="small">
-        <a href="{{ url_for('asset', filename=f.asset_path.split('/')[-1]) }}" target="_blank">{{ f.filename }}</a>
+        <a href="{{ media_url(f.asset_path) }}" target="_blank">{{ f.filename }}</a>
         <div class="muted">{{ f.content_type or "unknown type" }}</div>
       </td>
       <td><span class="badge">{{ f.purpose.value }}</span></td>

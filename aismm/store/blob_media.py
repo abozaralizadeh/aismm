@@ -33,6 +33,8 @@ CONTENT_TYPES = {
 
 _container_client = None
 _ensured = False
+_UNASKED = object()
+_public_read: object = _UNASKED
 
 
 def enabled() -> bool:
@@ -68,8 +70,9 @@ def _client():
 
 def reset_client() -> None:
     """Drop the cached client (tests, or a settings change)."""
-    global _container_client, _ensured
+    global _container_client, _ensured, _public_read
     _container_client, _ensured = None, False
+    _public_read = _UNASKED
 
 
 def upload(name: str, data: bytes, content_type: str | None = None) -> str:
@@ -88,6 +91,28 @@ def upload(name: str, data: bytes, content_type: str | None = None) -> str:
 def url(name: str) -> str:
     """Public URL for a blob (no request made)."""
     return _client().get_blob_client(name).url
+
+
+def public_read() -> bool | None:
+    """Whether the container allows anonymous blob reads (``None`` = don't know).
+
+    A blob URL is only usable by a browser — or by Instagram — when the container's
+    access level is "Blob". Asked once and cached: the answer changes about as
+    often as the storage account does, and the caller is a page render.
+
+    ``None`` is deliberately distinct from ``False``. Being unable to *ask* (no
+    permission on the container properties, network blip) is not evidence the
+    container is private, and the callers treat the two differently.
+    """
+    global _public_read
+    if _public_read is _UNASKED:
+        try:
+            level = _client().get_container_properties().public_access
+            _public_read = str(level).lower() in {"blob", "container"}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read the container's access level: %s", exc)
+            _public_read = None
+    return _public_read
 
 
 def exists(name: str) -> bool:

@@ -23,6 +23,18 @@ from aismm.models import Account, Instruction, PlatformName, Run, RunStatus
 UTC = dt.timezone.utc
 
 
+class _FakeScheduler:
+    """Enough of BackgroundScheduler for start() — including the housekeeping job."""
+
+    running = True
+
+    def start(self):
+        return None
+
+    def add_job(self, *args, **kwargs):
+        return None
+
+
 @pytest.fixture()
 def setup(store, monkeypatch):
     monkeypatch.setattr(orchestrator, "get_store", lambda: store, raising=False)
@@ -133,8 +145,7 @@ def test_starting_the_scheduler_closes_them(store, setup, monkeypatch):
     # reap_stale_runs() resolves the store itself, so patch it at the source.
     monkeypatch.setattr(store_module, "get_store", lambda: store)
     monkeypatch.setattr(scheduler, "refresh_jobs", lambda: None)
-    monkeypatch.setattr(scheduler, "get_scheduler",
-                        lambda: type("S", (), {"running": True, "start": lambda self: None})())
+    monkeypatch.setattr(scheduler, "get_scheduler", lambda: _FakeScheduler())
     scheduler.start()
     assert store.get_run(stranded.id).status is RunStatus.failed
 
@@ -146,8 +157,7 @@ def test_a_failure_while_reaping_does_not_stop_the_scheduler(monkeypatch):
                         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("db down")))
     started = {}
     monkeypatch.setattr(scheduler, "refresh_jobs", lambda: started.setdefault("jobs", True))
-    monkeypatch.setattr(scheduler, "get_scheduler",
-                        lambda: type("S", (), {"running": True, "start": lambda self: None})())
+    monkeypatch.setattr(scheduler, "get_scheduler", lambda: _FakeScheduler())
     scheduler.start()
     assert started["jobs"] is True          # tidying must never block the scheduler
 

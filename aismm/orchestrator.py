@@ -251,6 +251,41 @@ def reap_stale_runs(store=None, *, older_than_seconds: int = 0, apply: bool = Tr
     return stale
 
 
+def prune_asset_cache(store=None, *, older_than_days: int | None = None,
+                      apply: bool = True) -> dict:
+    """Free disk by dropping cached assets that blob storage already holds.
+
+    The media of RECENT runs is spared regardless of age: those are the ones a
+    preview, a thumbnail or a republish is most likely to want, and fetching
+    them back from blob for every page view is a poor trade for a few MB.
+
+    ``ASSET_RETENTION_DAYS=0`` turns the prune OFF rather than meaning "delete
+    everything" — an operator zeroing a retention setting is switching it off,
+    and reading it the other way would wipe the cache. Deleting everything is
+    still reachable, deliberately, via an explicit ``--older-than 0``.
+    """
+    from . import assets
+    from .store import get_store
+
+    days = settings.asset_retention_days if older_than_days is None else older_than_days
+    if older_than_days is None and days <= 0:
+        return {"applied": False, "deleted": 0, "freed_bytes": 0, "kept_local_only": 0,
+                "skipped_recent": 0, "files": [],
+                "skipped": "ASSET_RETENTION_DAYS=0 — the local cache is never pruned."}
+
+    store = store or get_store()
+    keep: set[str] = set()
+    try:
+        for run in store.list_runs(limit=200):
+            for path in ([run.asset_path] + list(run.asset_paths or [])):
+                if path:
+                    keep.add(path.rsplit("/", 1)[-1])
+    except Exception as exc:  # noqa: BLE001 - housekeeping must not fail a boot
+        logger.warning("Could not list recent runs to spare their media: %s", exc)
+
+    return assets.prune_local(days, apply=apply, keep=keep)
+
+
 def close_stale_runs(store, runs, *, minutes: int = 0) -> int:
     """Mark the given abandoned runs failed, saying why. Returns how many."""
     for run in runs:

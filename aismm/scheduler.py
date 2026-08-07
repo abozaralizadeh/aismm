@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import datetime
 
 from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from .orchestrator import run_instruction
 from .schedules import describe, parse_schedule, parse_trigger  # noqa: F401 - re-exported
@@ -154,8 +156,35 @@ def start() -> BackgroundScheduler:
     if not sched.running:
         sched.start()
     _reap_stale_runs()
+    _schedule_housekeeping(sched)
     refresh_jobs()
     return sched
+
+
+def _schedule_housekeeping(sched) -> None:
+    """A daily sweep of the local asset cache, plus one at boot.
+
+    Disk is the one resource that fails everything at once: once it is full the
+    next run cannot write its media, and neither can anything else. A daily job
+    is cheap insurance, and the prune is a no-op unless blob storage is holding
+    the durable copy.
+    """
+    from .orchestrator import prune_asset_cache
+
+    def _prune():
+        try:
+            prune_asset_cache()
+        except Exception as exc:  # noqa: BLE001 - never let tidying stop the scheduler
+            logger.warning("Asset cache prune failed: %s", exc)
+
+    # Registering the job must not be able to stop the service booting either:
+    # posting is the point, tidying the disk is maintenance.
+    try:
+        sched.add_job(_prune, CronTrigger.from_crontab("30 4 * * *"), id="housekeeping:assets",
+                      replace_existing=True, misfire_grace_time=3600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not schedule the asset prune: %s", exc)
+    threading.Thread(target=_prune, name="prune-assets-boot", daemon=True).start()
 
 
 def _reap_stale_runs() -> None:
