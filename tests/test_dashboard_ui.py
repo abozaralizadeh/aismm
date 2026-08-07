@@ -454,3 +454,48 @@ def test_the_rasters_can_be_regenerated():
     script = (BRAND.parents[2] / "scripts/make_brand_assets.py").read_text()
     assert "M50 8" not in script or "A_OUTER" in script
     assert "(50, 8)" in script                    # the same geometry as the SVGs
+
+
+# --- the overview dashboard ------------------------------------------------- #
+
+def test_overview_empty_state_onboards(dash, store):
+    """A fresh sign-in has no accounts, so the overview leads with onboarding
+    instead of empty charts."""
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert "Welcome to AISM" in page
+    assert "Connect an account" in page
+    assert "onboard-step" in page
+    # No charts to draw without data.
+    assert 'class="chart"' not in page
+
+
+def test_overview_with_accounts_shows_insights(dash, store, account):
+    """Once connected it becomes a real dashboard: KPIs, an activity chart and a
+    recent-activity feed built from actual runs."""
+    instruction = _instruction(store, "Comicbook")
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.published, asset_path="/x/panel.jpg",
+                      caption="hello world"))
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.failed, error="boom"))
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert "Connected accounts" in page
+    assert 'class="chart"' in page              # activity chart is drawn
+    assert "Recent activity" in page
+    assert "Comicbook" in page                  # the run's instruction
+    assert "Welcome to AISM" not in page        # not the onboarding state
+
+
+def test_overview_metrics_count_only_real_outcomes(dash, store, account):
+    """Success rate is published / (published + failed) — the honest denominator,
+    not a fabricated reach figure."""
+    instruction = _instruction(store, "News")
+    for _ in range(3):
+        store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                          status=RunStatus.published))
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.failed))
+    insights = app_module._overview_insights(store, "")
+    assert insights["published_window"] == 3
+    assert insights["totals"]["failed"] == 1
+    assert insights["success_rate"] == 75        # 3 / (3 + 1)

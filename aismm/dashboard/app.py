@@ -363,13 +363,12 @@ def create_app() -> Flask:
     @app.route("/")
     def index():
         store = get_store()
+        insights = _overview_insights(store, _workspace_id())
         return render_template(
             "index.html",
-            accounts=store.list_accounts(workspace_id=_workspace_id()),
-            instructions=store.list_instructions(workspace_id=_workspace_id()),
-            pending=store.list_staged(pending_only=True, workspace_id=_workspace_id()),
             settings=settings,
             scheduler_running=scheduler.get_scheduler().running,
+            **insights,
         )
 
     # ---- accounts -------------------------------------------------------- #
@@ -1367,6 +1366,154 @@ def _next_run_info(instruction, store) -> dict:
     info["blocked_until"] = blocked_until
     info["at"] = scheduler.next_run_after(instruction.id, blocked_until) or fires_at
     return info
+
+
+# --- overview insights ----------------------------------------------------- #
+# The overview is a real dashboard, and its charts are inline SVG computed here:
+# no external chart library and no CDN, the same reason the favicon is drawn from
+# a path rather than a font — nothing that varies per machine or can fail to load.
+# This function does the numbers and the point geometry; the template only lays
+# the SVG out. Runs are scanned from a bounded recent sample (the runs table is
+# unbounded — see list_runs), which is plenty for a two-week activity chart.
+_ACTIVITY_DAYS = 14
+_INSIGHT_WINDOW_DAYS = 30
+_RECENT_RUN_SAMPLE = 500
+
+
+def _as_utc(value):
+    """A tz-aware UTC datetime — SQLite hands back naive ones, Azure ISO strings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = dt.datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+def _sparkline(values, *, width=720, height=180, pad_x=6, pad_y=16):
+    """An area-line chart as SVG geometry (polyline points + a closed area path).
+
+    Returns everything the template needs to render it responsively; a flat/empty
+    series still produces a valid baseline so the chart never breaks.
+    """
+    n = len(values)
+    top = max(values) if values else 0
+    top = top or 1
+    inner_w = width - 2 * pad_x
+    inner_h = height - 2 * pad_y
+    step = inner_w / max(n - 1, 1)
+    pts = []
+    for i, value in enumerate(values):
+        x = pad_x + (i * step if n > 1 else inner_w / 2)
+        y = pad_y + inner_h * (1 - value / top)
+        pts.append((round(x, 1), round(y, 1)))
+    baseline = height - pad_y
+    line = " ".join(f"{x},{y}" for x, y in pts)
+    area = ""
+    if pts:
+        area = (f"M{pts[0][0]},{baseline} "
+                + " ".join(f"L{x},{y}" for x, y in pts)
+                + f" L{pts[-1][0]},{baseline} Z")
+    dots = [{"x": x, "y": y, "value": v} for (x, y), v in zip(pts, values)]
+    return {"width": width, "height": height, "line": line, "area": area,
+            "dots": dots, "max": top, "baseline": baseline}
+
+
+def _overview_insights(store, scope) -> dict:
+    now = dt.datetime.now(dt.timezone.utc)
+    accounts = store.list_accounts(workspace_id=scope)
+    instructions = store.list_instructions(workspace_id=scope)
+    pending = store.list_staged(pending_only=True, workspace_id=scope)
+    runs = store.list_runs(limit=_RECENT_RUN_SAMPLE, workspace_id=scope,
+                           sort="created_at", descending=True)
+
+    # Per-day activity for the last fortnight, and per-status totals for the month.
+    today = now.date()
+    days = [today - dt.timedelta(days=offset)
+            for offset in range(_ACTIVITY_DAYS - 1, -1, -1)]
+    per_day = {day: 0 for day in days}
+    window_start = now - dt.timedelta(days=_INSIGHT_WINDOW_DAYS)
+    totals = {"published": 0, "staged": 0, "skipped": 0, "failed": 0}
+    for run in runs:
+        created = _as_utc(run.created_at)
+        if created is None:
+            continue
+        day = created.date()
+        if day in per_day:
+            per_day[day] += 1
+        status = run.status.value if hasattr(run.status, "value") else str(run.status)
+        if created >= window_start and status in totals:
+            totals[status] += 1
+
+    daily = [{"count": per_day[day],
+              "weekday": day.strftime("%a"),
+              "date": day.strftime("%b %-d")} for day in days]
+    spark = _sparkline([d["count"] for d in daily])
+
+    # Outcome mix over the window, as a stacked bar (label, count, colour token).
+    outcome_total = sum(totals.values())
+    outcomes = [
+        {"label": "Published", "count": totals["published"], "tone": "ok"},
+        {"label": "Staged", "count": totals["staged"], "tone": "accent"},
+        {"label": "Skipped", "count": totals["skipped"], "tone": "muted"},
+        {"label": "Failed", "count": totals["failed"], "tone": "danger"},
+    ]
+
+    # Accounts by platform (icons + a mini bar in the template).
+    platform_counts: dict[str, int] = {}
+    for account in accounts:
+        platform_counts[account.platform.value] = \
+            platform_counts.get(account.platform.value, 0) + 1
+    platforms = [{"name": name, "count": count}
+                 for name, count in sorted(platform_counts.items(),
+                                           key=lambda kv: (-kv[1], kv[0]))]
+
+    # Recent activity: the last handful of runs, resolved to names for display.
+    instr_by_id = {i.id: i for i in instructions}
+    acct_by_id = {a.id: a for a in accounts}
+    recent = [{"run": run,
+               "instruction": instr_by_id.get(run.instruction_id),
+               "account": acct_by_id.get(run.account_id)}
+              for run in runs[:6]]
+
+    # What fires next, soonest first (only enabled, scheduled instructions).
+    upcoming = []
+    for instruction in instructions:
+        if not instruction.enabled or not (instruction.schedule or "").strip():
+            continue
+        info = _next_run_info(instruction, store)
+        fires_at = _as_utc(info.get("at"))
+        if fires_at:
+            upcoming.append({"instruction": instruction, "at": fires_at, "info": info})
+    upcoming.sort(key=lambda item: item["at"])
+    upcoming = upcoming[:5]
+
+    published = totals["published"]
+    failed = totals["failed"]
+    decided = published + failed
+    return {
+        "accounts": accounts,
+        "instructions": instructions,
+        "pending": pending,
+        "has_accounts": bool(accounts),
+        "has_activity": any(d["count"] for d in daily) or bool(runs),
+        "enabled_instructions": sum(1 for i in instructions if i.enabled),
+        "daily": daily,
+        "spark": spark,
+        "outcomes": outcomes,
+        "outcome_total": outcome_total,
+        "platforms": platforms,
+        "recent": recent,
+        "upcoming": upcoming,
+        "totals": totals,
+        "published_window": published,
+        "runs_week": sum(d["count"] for d in daily[-7:]),
+        "success_rate": round(100 * published / decided) if decided else None,
+        "window_days": _INSIGHT_WINDOW_DAYS,
+        "activity_days": _ACTIVITY_DAYS,
+    }
 
 
 def _parse_datetime_local(value: str) -> dt.datetime | None:

@@ -6,33 +6,210 @@
 
 <h1 class="visually-hidden">Overview</h1>
 
-<div class="cards">
+{% if not has_accounts %}
+{# Fresh sign-in: no connected accounts yet. The dashboard has nothing honest to
+   chart, so lead with onboarding instead of empty widgets. #}
+<section class="onboarding">
+  <div class="onboarding-head">
+    <h2>Welcome to AISM²</h2>
+    <p class="muted">Your autonomous social media manager researches a topic, generates the
+      media, writes the caption and publishes on a schedule — across Instagram, X, YouTube and
+      TikTok. Three steps to your first post.</p>
+  </div>
+  <ol class="onboard-steps">
+    <li class="onboard-step">
+      <span class="onboard-num">1</span>
+      <h3>Connect a social account</h3>
+      <p class="muted">Link Instagram, X, YouTube or TikTok so the agent has somewhere to post.</p>
+      <a class="btn btn-primary" href="{{ url_for('accounts') }}">Connect an account →</a>
+    </li>
+    <li class="onboard-step">
+      <span class="onboard-num">2</span>
+      <h3>Create an instruction</h3>
+      <p class="muted">A brief, the accounts it targets, a schedule and a publish mode. Start in
+        <em>dry-run</em> to preview before anything goes live.</p>
+      <a class="btn" href="{{ url_for('new_instruction') }}">New instruction →</a>
+    </li>
+    <li class="onboard-step">
+      <span class="onboard-num">3</span>
+      <h3>Run it &amp; review</h3>
+      <p class="muted">Let the scheduler fire it or hit <em>Run now</em>, then review results and
+        approvals here on your dashboard.</p>
+      <a class="btn" href="{{ url_for('runs') }}">See runs →</a>
+    </li>
+  </ol>
+</section>
+
+{% else %}
+{# Connected: real, honest operational metrics. We don't collect reach/followers,
+   so every number here comes from runs, schedules and the approval queue. #}
+<div class="cards kpis">
   <div class="card">
     <div class="card-num">{{ accounts|length }}</div>
     <div class="card-label">Connected accounts</div>
-    <a href="{{ url_for('accounts') }}">Manage →</a>
+    <div class="chip-row">
+      {% for p in platforms %}<span class="chip" title="{{ p.name }}: {{ p.count }}">{{ platform_icon(p.name, 16) }}</span>{% endfor %}
+    </div>
   </div>
   <div class="card">
-    <div class="card-num">{{ instructions|length }}</div>
-    <div class="card-label">Instructions</div>
+    <div class="card-num">{{ enabled_instructions }}<span class="card-sub">/ {{ instructions|length }}</span></div>
+    <div class="card-label">Active instructions</div>
     <a href="{{ url_for('instructions') }}">Manage →</a>
   </div>
   <div class="card">
-    <div class="card-num">{{ pending|length }}</div>
+    <div class="card-num">{{ published_window }}</div>
+    <div class="card-label">Published · {{ window_days }}d</div>
+    {% if success_rate is not none %}
+      <span class="badge badge-published">{{ success_rate }}% success</span>
+    {% else %}
+      <span class="muted small">no live posts yet</span>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="card-num {{ 'accent-num' if pending }}">{{ pending|length }}</div>
     <div class="card-label">Awaiting approval</div>
-    <a href="{{ url_for('runs') }}">Review →</a>
+    {% if pending %}<a href="{{ url_for('runs') }}">Review →</a>{% else %}<span class="muted small">nothing queued</span>{% endif %}
   </div>
   <div class="card">
     <div class="card-num">{{ "on" if scheduler_running else "off" }}</div>
     <div class="card-label">Scheduler</div>
-    <span class="muted">provider: {{ settings.llm.provider }}</span>
+    <span class="muted small">provider: {{ settings.llm.provider }}</span>
   </div>
 </div>
 
-<h2>Quick start</h2>
-<ol class="steps">
-  <li><a href="{{ url_for('accounts') }}">Connect a social account</a> (Instagram, X, YouTube, or TikTok).</li>
-  <li><a href="{{ url_for('new_instruction') }}">Create an instruction</a>: a brief + the accounts it targets + a schedule + a publish mode.</li>
-  <li>Let the scheduler run it, or hit <em>Run now</em> — then review results under <a href="{{ url_for('runs') }}">Runs</a>.</li>
-</ol>
+<section class="panel-grid panel-grid-2">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Activity</h2>
+      <span class="muted small">last {{ activity_days }} days · {{ runs_week }} this week</span>
+    </div>
+    {% if has_activity %}
+    <svg class="chart" viewBox="0 0 {{ spark.width }} {{ spark.height }}" role="img"
+         aria-label="Runs per day over the last {{ activity_days }} days">
+      <defs>
+        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--accent)" stop-opacity=".35"/>
+          <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      {% if spark.area %}<path d="{{ spark.area }}" fill="url(#areaGrad)"/>{% endif %}
+      <polyline points="{{ spark.line }}" fill="none" stroke="var(--accent)"
+                stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      {% for dot in spark.dots %}
+      <circle cx="{{ dot.x }}" cy="{{ dot.y }}" r="2.6" fill="var(--accent)">
+        <title>{{ daily[loop.index0].date }}: {{ dot.value }} run(s)</title>
+      </circle>
+      {% endfor %}
+    </svg>
+    <div class="chart-axis small muted">
+      <span>{{ daily[0].date }}</span>
+      <span>Today</span>
+    </div>
+    {% else %}
+    <p class="empty-hint">No runs yet. Hit <em>Run now</em> on an instruction and activity will
+      chart here.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Outcomes</h2>
+      <span class="muted small">last {{ window_days }} days</span>
+    </div>
+    {% if outcome_total %}
+    <div class="stack-bar" role="img" aria-label="Run outcomes over the last {{ window_days }} days">
+      {% for o in outcomes %}{% if o.count %}
+      <span class="stack-seg seg-{{ o.tone }}" style="width: {{ (o.count / outcome_total * 100)|round(2) }}%"
+            title="{{ o.label }}: {{ o.count }}"></span>
+      {% endif %}{% endfor %}
+    </div>
+    <ul class="legend">
+      {% for o in outcomes %}
+      <li><span class="dot dot-{{ o.tone }}"></span>{{ o.label }} <strong>{{ o.count }}</strong></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-hint">No completed runs in the last {{ window_days }} days.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel-grid panel-grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Platforms</h2><a class="small" href="{{ url_for('accounts') }}">Accounts →</a></div>
+    {% if platforms %}
+    <ul class="platform-stats">
+      {% for p in platforms %}
+      <li>
+        <span class="pstat-icon">{{ platform_icon(p.name, 20) }}</span>
+        <span class="pstat-name">{{ p.name }}</span>
+        <span class="pstat-bar"><span style="width: {{ (p.count / accounts|length * 100)|round }}%"></span></span>
+        <span class="pstat-count">{{ p.count }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-hint">No accounts connected.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Upcoming</h2><a class="small" href="{{ url_for('instructions') }}">Instructions →</a></div>
+    {% if upcoming %}
+    <ul class="upcoming">
+      {% for u in upcoming %}
+      <li>
+        <span class="up-when">{{ u.at.strftime('%a %H:%M') }}</span>
+        <a class="up-name" href="{{ url_for('edit_instruction', instruction_id=u.instruction.id) }}">{{ u.instruction.name }}</a>
+        {% if u.info.skipped %}<span class="badge badge-off small">cooling</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-hint">Nothing scheduled. Enable an instruction with a schedule to see its next
+      fire here.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Recent activity</h2><a class="small" href="{{ url_for('runs') }}">All runs →</a></div>
+  {% if recent %}
+  <ul class="feed">
+    {% for item in recent %}
+    {% set r = item.run %}
+    {% set file = r.asset_path.split('/')[-1] if r.asset_path else '' %}
+    <li>
+      <a class="feed-thumb" href="{{ url_for('run_detail', run_id=r.id) }}">
+        {% if file and file.lower().endswith(('.mp4', '.mov', '.webm')) %}
+          <video class="thumb" src="{{ media_url(file) }}#t=0.5" preload="metadata" muted playsinline></video>
+        {% elif file %}
+          <img class="thumb" src="{{ media_url(file) }}" alt="" loading="lazy">
+        {% else %}
+          <span class="thumb thumb-empty" aria-hidden="true"></span>
+        {% endif %}
+      </a>
+      <div class="feed-body">
+        <div class="feed-line">
+          <a href="{{ url_for('run_detail', run_id=r.id) }}">
+            {{ item.instruction.name if item.instruction else 'deleted instruction' }}</a>
+          <span class="badge badge-{{ r.status.value }}">{{ r.status.value }}</span>
+        </div>
+        <div class="feed-meta small muted">
+          {% if item.account %}{{ platform_icon(item.account.platform.value, 14) }}
+            {{ item.account.handle or item.account.external_id }} · {% endif %}
+          {{ r.created_at.strftime('%b %-d, %H:%M') }}
+        </div>
+        {% if r.caption or r.error %}
+        <div class="feed-excerpt small">{{ (r.caption or r.error)[:120] }}</div>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-hint">No runs yet — your latest posts and replies will appear here.</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}
