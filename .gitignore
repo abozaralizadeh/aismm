@@ -4,6 +4,8 @@ tokens.key
 *.sqlite
 *.sqlite3
 *.db
+*.log
+*.logs
 data/
 assets/
 

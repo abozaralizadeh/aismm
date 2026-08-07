@@ -341,9 +341,15 @@ Two implementation notes, both about not depending on things that vary per machi
   python scripts/make_brand_assets.py    # favicon.ico, favicon-32.png, apple-touch-icon.png
   ```
 
-The accent doubles as the dashboard's UI accent: `#E85C7A` is 5.6:1 on the page background and
-5.2:1 on a panel, so it passes AA for text as it is, and the mark and the links are literally the
-same colour.
+**The accent is for the mark only.** It is not the dashboard's UI accent and should not become one:
+`#E85C7A` is 16 units from the danger red (`#f0616d`) in RGB — close enough to read as the same
+colour — so a primary button rendered in it was nearly indistinguishable from Delete. Links and
+buttons keep the interactive blue; red keeps meaning destructive. In the UI the brand accent appears
+in exactly one place: the superscript ² of the wordmark.
+
+**The mark and the wordmark are alternatives, never a pair.** The mark *is* an A, so beside "AISM²"
+it reads as a stray letter rather than a logo. The dashboard shows the wordmark, and swaps to the
+mark alone below 420px where the topbar runs out of room.
 
 ---
 

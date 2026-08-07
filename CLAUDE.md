@@ -300,11 +300,15 @@ both layers.
   with the dashboard's `--panel`. The "2" is dropped below ~48px, per the design. Wordmark type uses
   `textLength` + `lengthAdjust`: laid out by hand it overflowed its card as soon as a different
   fallback font rendered it.
-- **`--accent` is `var(--brand-accent)` — check the contrast before changing the brand colour.**
-  The current `#E85C7A` is 5.6:1 on `--bg` and 5.2:1 on `--panel`, so one colour serves both the
-  mark and the text. That is a property of THIS accent, not a rule: the design's earlier `#4C5FE8`
-  was 3.4:1 and needed `--accent` split off as a lightened tint. If the brand colour changes again,
-  measure it — under 4.5:1 means splitting them again, not shipping unreadable links.
+- **`--brand-accent` is for the MARK; `--accent` is the UI.** They are deliberately different.
+  `#E85C7A` sits 16 units from `--danger` (`#f0616d`) in RGB — the same colour to a human — so a
+  primary button and a Delete button in it were nearly indistinguishable, which is a misclick
+  hazard, not a taste question. Interactive stays blue (`#6ea8fe`), red keeps meaning destructive,
+  and `var(--brand-accent)` appears in exactly ONE rule (`.brand-word sup`). A test asserts that
+  count, the RGB distance from `--danger`, and the contrast of `--accent` on both panels.
+- **The mark and the wordmark are ALTERNATIVES, never shown together.** The mark is an A, so beside
+  "AISM²" it reads as a stray letter. `.brand-mark` is `display: none` until the 420px block swaps
+  the two — one or the other at every width.
 - **Dashboard mobile rules** ([static/style.css](aismm/dashboard/static/style.css)): a new `<table>`
   must be wrapped in `<div class="table-scroll">` or the whole page scrolls sideways on a phone, and
   form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus

@@ -9,11 +9,12 @@ html {
 
   --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a2f3a;
   --text: #e6e8ec; --muted: #9aa3b2;
-  /* The brand accent IS the UI accent: #E85C7A is 5.6:1 on the page and 5.2:1
-     on a panel, so it passes AA for text as it is. (The design's earlier indigo
-     did not — 3.4:1 — and needed a lightened tint for links; the rose does not,
-     so the mark and the links are now literally the same colour.) */
-  --accent: var(--brand-accent); --accent-2: #7c5cff;
+  /* --brand-accent is for the MARK ONLY. It is not the UI accent, and must not
+     become one: #E85C7A sits 16 units from --danger (#f0616d) in RGB — close
+     enough to read as the same colour — so a primary button and a Delete button
+     rendered in it were nearly indistinguishable. Interactive blue stays blue;
+     red keeps meaning destructive. */
+  --accent: #6ea8fe; --accent-2: #7c5cff;
   --ok: #35c28a; --warn: #f0b429; --danger: #f0616d; --radius: 12px;
 }
 * { box-sizing: border-box; }
@@ -34,14 +35,16 @@ h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; color: var(--text); }
   padding: .8rem 1.5rem; background: var(--panel); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 10;
 }
-.brand { display: flex; align-items: center; gap: .55rem; font-weight: 700; font-size: 1.1rem; }
+.brand { display: flex; align-items: center; font-weight: 700; font-size: 1.15rem; }
 .brand:hover { text-decoration: none; }
-.brand-mark { height: 22px; width: auto; display: block; }
-.brand-mark-lg { height: 40px; }
+/* The mark is the NARROW-screen form of the wordmark, not a companion to it.
+   Only one is ever visible — see the 420px rule at the end of this file. */
+.brand-mark { display: none; height: 22px; width: auto; }
 .brand-word { color: var(--text); letter-spacing: -.01em; }
-/* The squared motif: the "2" is the accent, at every size it appears. */
+/* The squared motif: the "2" is the brand accent. This is the only place in the
+   UI that colour appears — see --brand-accent. */
 .brand-word sup { color: var(--brand-accent); font-size: .62em; top: -.5em; margin-left: 1px; }
-.login-brand { display: flex; align-items: center; justify-content: center; gap: .7rem; }
+.login-brand { text-align: center; font-size: 2rem; }
 /* The nav scrolls sideways rather than being clipped when it doesn't fit. */
 .topbar nav {
   display: flex; gap: 1.25rem; overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -367,9 +370,12 @@ th .sort-active { color: var(--accent); }
 
 @media (max-width: 420px) {
   main { padding: 1rem .75rem 3rem; }
-  .brand { font-size: 1rem; }
-  .brand-mark { height: 19px; }
+  .brand { font-size: 1.05rem; }
   .table-scroll table { min-width: 30rem; }
+  /* Here the topbar also holds the workspace switcher and a scrolling nav, so
+     the wordmark gives way to the mark. One or the other, never both. */
+  .brand-mark { display: block; }
+  .brand-word { display: none; }
 }
 
 /* Any TOUCH device gets 16px form controls, not just narrow ones: iPadOS Safari
@@ -478,3 +484,4 @@ th .sort-active { color: var(--accent); }
 .schedule-raw {
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+

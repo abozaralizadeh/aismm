@@ -11,11 +11,7 @@
 </head>
 <body class="login-page">
   <main class="login-card">
-    <h1 class="login-brand">
-      <img class="brand-mark brand-mark-lg"
-           src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
-      <span class="brand-word">AISM<sup>2</sup></span>
-    </h1>
+    <h1 class="login-brand"><span class="brand-word">AISM<sup>2</sup></span></h1>
     <p class="login-sub">This dashboard is private. Sign in to continue.</p>
 
     {% if signed_out %}

@@ -14,6 +14,9 @@
 </head>
 <body>
   <header class="topbar">
+    {# The wordmark alone when there is room; the mark alone when there is not.
+       Never the two together — the mark IS an A, so beside "AISM²" it reads as a
+       stray letter rather than a logo. CSS swaps them at 420px. #}
     <a class="brand" href="{{ url_for('index') }}" aria-label="AISM² home">
       <img class="brand-mark" src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
       <span class="brand-word">AISM<sup>2</sup></span>

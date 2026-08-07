@@ -378,27 +378,75 @@ def test_the_brand_tokens_are_defined():
         assert token in css
 
 
-def test_the_ui_accent_follows_the_brand():
-    """#E85C7A passes AA on the dark UI (5.6:1 / 5.2:1), so one colour serves the
-    mark and the text. The design's earlier indigo did not, and needed a split."""
+def _css_var(name):
     css = (BRAND / "style.css").read_text()
-    assert "--accent: var(--brand-accent)" in css
+    return css.split(f"{name}: ")[1].split(";")[0].strip()
+
+
+def test_the_brand_accent_is_not_the_ui_accent():
+    """Reported: the rose read as the Delete colour. It is 16 units from
+    --danger in RGB — the same colour, to a human — so a primary button and a
+    destructive one became nearly indistinguishable."""
+    assert _css_var("--brand-accent") == "#E85C7A"
+    assert _css_var("--accent") == "#6ea8fe"
+
+
+def test_the_ui_accent_is_nowhere_near_the_danger_colour():
+    """The property that actually matters, checked rather than assumed."""
+    def _rgb(value):
+        return tuple(int(value[i:i + 2], 16) for i in (1, 3, 5))
+
+    def _distance(a, b):
+        return sum((x - y) ** 2 for x, y in zip(_rgb(a), _rgb(b))) ** 0.5
+
+    accent, danger = _css_var("--accent"), _css_var("--danger")
+    assert _distance(accent, danger) > 100, f"{accent} is too close to {danger}"
+
+
+def test_the_brand_accent_appears_only_on_the_mark():
+    """The one place that colour is allowed in the UI is the squared motif."""
+    css = (BRAND / "style.css").read_text()
+    uses = [line.strip() for line in css.splitlines()
+            if "var(--brand-accent)" in line and not line.strip().startswith(("/*", "*"))]
+    assert len(uses) == 1
+    assert ".brand-word sup" in uses[0]
 
 
 def test_the_accent_is_readable_on_the_dark_ui():
-    """A brand colour under 4.5:1 must not be used for links — measure, don't
-    assume, when the design's accent changes."""
+    """Whatever the accent is, links have to be legible against the panels."""
     def _luminance(value):
         channels = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
         linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
                   for c in channels]
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
-    css = (BRAND / "style.css").read_text()
-    accent = css.split("--brand-accent: ")[1].split(";")[0].strip()
+    accent = _css_var("--accent")
     for background in ("#0f1115", "#171a21"):
         lighter, darker = sorted((_luminance(accent), _luminance(background)), reverse=True)
         assert (lighter + 0.05) / (darker + 0.05) >= 4.5, f"{accent} on {background}"
+
+
+# --- the mark and the wordmark are alternatives, not a pair ---------------------------- #
+
+def test_the_header_shows_the_wordmark_by_default():
+    """The mark IS an A: beside "AISM²" it reads as a stray letter."""
+    css = (BRAND / "style.css").read_text()
+    assert ".brand-mark { display: none;" in css
+
+
+def test_the_mark_replaces_the_wordmark_only_when_space_runs_out():
+    css = (BRAND / "style.css").read_text()
+    # Everything after the media query's opening brace, to its closing one.
+    narrow = css.split("@media (max-width: 420px) {")[1]
+    narrow = narrow[:narrow.index("\n}")]
+    assert ".brand-mark { display: block; }" in narrow
+    assert ".brand-word { display: none; }" in narrow
+
+
+def test_the_login_page_uses_the_wordmark_alone():
+    login = (BRAND.parents[0] / "templates/login.html").read_text()
+    assert "AISM<sup>2</sup>" in login
+    assert "brand-mark" not in login
 
 
 def test_the_rasters_can_be_regenerated():
