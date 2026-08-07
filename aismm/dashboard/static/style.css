@@ -102,6 +102,17 @@ main.wide { max-width: 1440px; }
 .steps { line-height: 2; }
 
 /* ---- overview dashboard ------------------------------------------------- */
+.clock-bar { display: flex; gap: .8rem; justify-content: flex-end; flex-wrap: wrap;
+             margin: 0 0 1.3rem; }
+.clock { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+         padding: .5rem .9rem; min-width: 9rem; }
+.clock-label { display: block; color: var(--muted); font-size: .72rem; font-weight: 600;
+               text-transform: uppercase; letter-spacing: .05em;
+               max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clock-time { display: block; font-size: 1.4rem; font-weight: 700; line-height: 1.15;
+              font-variant-numeric: tabular-nums; }
+.clock-date { display: block; color: var(--muted); font-size: .78rem; }
+
 .kpis { margin-bottom: 1.4rem; }
 .card-num { display: flex; align-items: baseline; gap: .3rem; }
 .card-num.accent-num { color: var(--accent); }

@@ -1,10 +1,27 @@
 {% extends "base.html" %}
+{% block main_class %}wide{% endblock %}
 {% block content %}
 <img class="hero-banner" src="{{ url_for('static', filename='brand/banner.jpg') }}"
      alt="AISM² — AI Social Media Manager. Smarter content, stronger connections: plan, create, schedule and analyze across Instagram, X, YouTube, TikTok and more."
      width="1600" height="678">
 
 <h1 class="visually-hidden">Overview</h1>
+
+{# Two clocks: schedules and next-run times are shown in UTC (the app's internal
+   clock), so an operator needs their own wall time beside it to reconcile them.
+   Both tick client-side — the server never knows the browser's timezone. #}
+<div class="clock-bar" aria-hidden="false">
+  <div class="clock">
+    <span class="clock-label">UTC</span>
+    <time class="clock-time" data-clock="utc">--:--:--</time>
+    <span class="clock-date" data-clock="utc-date"></span>
+  </div>
+  <div class="clock">
+    <span class="clock-label" data-clock-zone title="Your browser's timezone">Local</span>
+    <time class="clock-time" data-clock="local">--:--:--</time>
+    <span class="clock-date" data-clock="local-date"></span>
+  </div>
+</div>
 
 {% if not has_accounts %}
 {# Fresh sign-in: no connected accounts yet. The dashboard has nothing honest to
@@ -212,4 +229,39 @@
   {% endif %}
 </section>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var utc = document.querySelector('[data-clock="utc"]');
+  var local = document.querySelector('[data-clock="local"]');
+  var utcDate = document.querySelector('[data-clock="utc-date"]');
+  var localDate = document.querySelector('[data-clock="local-date"]');
+  var zone = document.querySelector('[data-clock-zone]');
+  if (!utc || !local) { return; }
+  if (zone) {
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz) { zone.textContent = tz; zone.title = tz; }
+    } catch (e) { /* keep the "Local" fallback */ }
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  function tick() {
+    var now = new Date();
+    utc.textContent = pad(now.getUTCHours()) + ':' + pad(now.getUTCMinutes()) + ':' + pad(now.getUTCSeconds());
+    local.textContent = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+    if (utcDate) {
+      utcDate.textContent = days[now.getUTCDay()] + ' ' + months[now.getUTCMonth()] + ' ' + now.getUTCDate();
+    }
+    if (localDate) {
+      localDate.textContent = days[now.getDay()] + ' ' + months[now.getMonth()] + ' ' + now.getDate();
+    }
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
 {% endblock %}

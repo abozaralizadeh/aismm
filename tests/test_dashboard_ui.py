@@ -486,6 +486,21 @@ def test_overview_with_accounts_shows_insights(dash, store, account):
     assert "Welcome to AISM" not in page        # not the onboarding state
 
 
+def test_overview_uses_the_wide_column(dash, store):
+    """Like Runs and Instructions, the dashboard gets the full desktop width."""
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert 'class="wide"' in page
+
+
+def test_overview_has_utc_and_local_clocks(dash, store):
+    """Schedules read in UTC; the operator needs their own wall time beside it.
+    Both tick client-side — the server never learns the browser timezone."""
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert 'data-clock="utc"' in page
+    assert 'data-clock="local"' in page
+    assert "resolvedOptions().timeZone" in page   # local zone detected in the browser
+
+
 def test_overview_metrics_count_only_real_outcomes(dash, store, account):
     """Success rate is published / (published + failed) — the honest denominator,
     not a fabricated reach figure."""
