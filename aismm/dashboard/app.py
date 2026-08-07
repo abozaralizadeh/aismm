@@ -1176,13 +1176,13 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("Media", "Generating images and video.",
      ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
     ("Instagram", "Reading the feed and handling comments. Ignored on other platforms.",
-     ("instagram_recent_posts", "instagram_comments", "instagram_reply_to_comment",
-      "instagram_moderate_comment", "instagram_insights", "instagram_publishing_limit",
-      "instagram_profile", "instagram_mentions")),
+     ("instagram_recent_posts", "instagram_comments", "instagram_recent_comments",
+      "instagram_reply_to_comment", "instagram_moderate_comment", "instagram_insights",
+      "instagram_publishing_limit", "instagram_profile", "instagram_mentions")),
     ("X (Twitter)", "Reading the timeline and replying. Ignored on other platforms; "
                     "every X call spends pay-per-use API credits.",
-     ("x_recent_posts", "x_mentions", "x_replies", "x_reply_to_post", "x_post_metrics",
-      "x_profile", "x_delete_post")),
+     ("x_recent_posts", "x_mentions", "x_replies", "x_reply_to_post", "x_like_post",
+      "x_post_metrics", "x_profile", "x_delete_post")),
     ("YouTube", "Reading and replying to comment threads. Ignored on other platforms.",
      ("youtube_comments", "youtube_reply_to_comment")),
 ]

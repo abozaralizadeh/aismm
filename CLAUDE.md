@@ -361,6 +361,25 @@ NOT** — its comment API is audit-gated for third-party apps, so `tiktok_tools`
 YouTube/TikTok have no DM API. No AI-disclosure suffix on a reply (it is conversational, not a
 labelled post).
 
+**Comments live PER POST on Instagram, so an engage run must sweep every recent post, not just the
+latest.** `instagram_comments` reads ONE `media_id`; a run that only checked the newest post left the
+comment on a reel unanswered. `instagram_recent_comments` walks the recent media (feed AND reels) and
+returns all their comments together, each tagged with its `media_id`/`media_type` and
+`already_answered`, so one run answers them all — one post failing is skipped, never fatal. The
+ENGAGE and AUTO prompts both say to work through every new comment on every post. On X, `x_replies`
+already spans recent posts by `conversation_id`.
+
+**Liking is X-only, and it is NOT gated.** `Capabilities.supports_liking` + `SocialPlatform.
+like_target(access_token, account, *, target_type, target_id, like=True)` (base raises); only X
+implements it (`POST /2/users/:id/likes` / `DELETE …/likes/:id`), needing the **`like.write`** scope
+— an account connected before it was added must be **reconnected**. Instagram's Graph API, YouTube's
+Data API and TikTok's app API expose **no** like-a-comment endpoint, so they declare
+`supports_liking=False` and offer no like tool. Liking is an immediate write like moderation/delete
+(a like is not outbound *content*), idempotent so it needs no ledger, and does not count as
+answering — a liked comment can still get a reply. `x_like_post(post_id, like=True)` can also un-like.
+`scripts/preflight.py` + `tests/test_store_interface.py` bind `like_target` against every
+`supports_liking` platform, the same drift guard as `publish`/`reply_to_target`.
+
 ## Gotchas
 
 - **The brand mark is a PATH, not text** (`static/brand/`, geometry in `brand/_glyph.txt`). A

@@ -227,3 +227,11 @@ def test_a_new_instruction_starts_with_everything_ticked(dash):
     page = dash.test_client().get("/instructions/new").get_data(as_text=True)
     assert page.count("checked") >= len(registered_tool_names())
     assert "All tools" in page
+
+
+def test_the_form_warns_that_auto_is_less_precise(dash):
+    """Auto is offered, but the form must nudge toward a specific task for reliability."""
+    page = dash.test_client().get("/instructions/new").get_data(as_text=True)
+    assert "Auto (agent decides)" in page          # the option is there
+    assert "less predictable" in page               # and so is the caution beside it
+    assert "hint-warn" in page

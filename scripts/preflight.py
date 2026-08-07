@@ -119,6 +119,40 @@ def _check_reply_signatures() -> None:
         notes.append(f"Reply contract: {checked} comment-capable platform(s) OK")
 
 
+def _check_like_signatures() -> None:
+    """Every platform that declares ``supports_liking`` must accept what the like
+    tool sends to ``like_target`` — the same drift guard as the reply contract."""
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.like_target)
+    checked = 0
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        if not getattr(cls.capabilities, "supports_liking", False):
+            continue
+        checked += 1
+        actual = names(cls.like_target)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.like_target() is missing {', '.join(sorted(missing))} — "
+                f"the like tool passes these on every call, so liking on "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("like_target() is missing" in p for p in problems):
+        notes.append(f"Like contract: {checked} like-capable platform(s) OK")
+
+
 def _check_imports() -> None:
     """Import everything a worker imports at boot, minus the side effects."""
     import aismm.dashboard.app  # noqa: F401  - route + template wiring
@@ -146,7 +180,7 @@ def _check_config() -> None:
 
 def main() -> int:
     for check in (_check_store_backends, _check_imports, _check_publish_signatures,
-                  _check_reply_signatures, _check_config):
+                  _check_reply_signatures, _check_like_signatures, _check_config):
         try:
             check()
         except Exception as exc:  # noqa: BLE001 - any failure here blocks the deploy

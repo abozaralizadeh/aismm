@@ -45,7 +45,7 @@ def api(monkeypatch):
     from aismm.platforms import twitter as tw
 
     calls = {"uploads": [], "tweets": [], "gets": [], "deletes": [],
-             "appends": [], "finalizes": []}
+             "appends": [], "finalizes": [], "likes": []}
 
     class _Resp:
         def __init__(self, payload, status=200):
@@ -77,6 +77,9 @@ def api(monkeypatch):
             if url.endswith("/finalize"):
                 calls["finalizes"].append(url)
                 return _Resp({"data": {"id": url.split("/")[-2]}})
+            if url.endswith("/likes"):
+                calls["likes"].append((url, kw.get("json", {})))
+                return _Resp({"data": {"liked": True}})
             calls["tweets"].append(kw.get("json", {}))
             return _Resp({"data": {"id": "1799"}})
 
@@ -293,7 +296,7 @@ def _tool(name, state=None):
     return next((t for t in tools if getattr(t, "name", "") == name), None)
 
 
-X_TOOLS = ["x_recent_posts", "x_mentions", "x_reply_to_post",
+X_TOOLS = ["x_recent_posts", "x_mentions", "x_reply_to_post", "x_like_post",
            "x_post_metrics", "x_profile", "x_delete_post"]
 
 
@@ -332,6 +335,28 @@ def test_a_reply_is_also_held_to_280(api):
 def test_delete_calls_the_delete_endpoint(api):
     asyncio.run(_x().delete_post("t", "555"))
     assert api["deletes"] and api["deletes"][0].endswith("/tweets/555")
+
+
+def test_like_posts_to_the_users_likes_endpoint(api):
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    result = asyncio.run(_x().like_target("t", account, target_type="tweet",
+                                          target_id="555", like=True))
+    assert result["liked"] is True and result["id"] == "555"
+    url, body = api["likes"][0]
+    assert url.endswith("/users/9/likes")          # likes act as the connected user
+    assert body == {"tweet_id": "555"}
+
+
+def test_unlike_deletes_from_the_users_likes_endpoint(api):
+    account = Account(platform=PlatformName.twitter, handle="a", external_id="9")
+    asyncio.run(_x().like_target("t", account, target_type="tweet",
+                                 target_id="555", like=False))
+    assert api["deletes"] and api["deletes"][0].endswith("/users/9/likes/555")
+
+
+def test_x_declares_it_can_like_and_requests_the_scope():
+    assert _x().capabilities.supports_liking is True
+    assert "like.write" in _x().scopes
 
 
 def test_profile_returns_counts(api):

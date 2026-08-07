@@ -43,6 +43,11 @@ class Capabilities:
     max_carousel_items: int = 10
     supports_comments: bool = False          # read/reply/moderate
     supports_insights: bool = False
+    # Can the account LIKE a comment/post it is engaging with? Only some
+    # platforms expose this over their API — X does (POST /2/users/:id/likes);
+    # Instagram's Graph API, YouTube's Data API and TikTok's app API offer no
+    # like-a-comment endpoint at all, so their tools do not pretend to.
+    supports_liking: bool = False
 
     image_formats: tuple[str, ...] = ()      # () = anything
     max_image_bytes: int | None = None
@@ -211,6 +216,24 @@ class SocialPlatform(ABC):
         """
         raise RuntimeError(
             f"{self.name.value} does not support replying to a {target_type} here.")
+
+    async def like_target(self, access_token: str, account: Account, *,
+                          target_type: str, target_id: str, like: bool = True) -> dict:
+        """Like (``like=True``) or un-like (``like=False``) a comment/post.
+
+        The lightweight counterpart of :meth:`reply_to_target` — an
+        acknowledgement that needs no words, which the engagement flow uses when a
+        comment is warm but does not call for a reply. It is an immediate write
+        (like moderation), NOT gated by ``publish_mode``: a like is not outbound
+        content the way a post or a reply is.
+
+        Only a platform declaring ``supports_liking=True`` implements this; the
+        default refuses, and the tool layer never offers a like tool on a platform
+        without it. Returns a dict that SHOULD carry ``liked`` (the resulting
+        state) and the ``id`` that was liked.
+        """
+        raise RuntimeError(
+            f"{self.name.value} has no API to like a {target_type}.")
 
     async def post_exists(self, access_token: str, account: Account,
                           external_id: str) -> bool | None:

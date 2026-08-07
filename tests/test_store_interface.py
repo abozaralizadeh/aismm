@@ -173,6 +173,43 @@ def test_the_preflight_reply_check_agrees():
     assert preflight.problems == []
 
 
+# --- every like-capable platform must honour the like contract ----------------------- #
+
+_LIKE_PLATFORMS = [
+    n for n in _registered_platforms()
+    if getattr(_get_platform_class(n).capabilities, "supports_liking", False)
+]
+
+
+@_pytest.mark.parametrize("name", _LIKE_PLATFORMS, ids=lambda n: n.value)
+def test_like_accepts_every_argument_the_tool_sends(name):
+    required = _publish_kwargs(_SocialPlatform.like_target)
+    actual = _publish_kwargs(_get_platform_class(name).like_target)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.like_target() is missing {sorted(missing)} — the like tool "
+        f"passes these on every call, so the first like would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _LIKE_PLATFORMS, ids=lambda n: n.value)
+def test_like_is_callable_with_the_full_keyword_set(name):
+    signature = _inspect.signature(_get_platform_class(name).like_target)
+    signature.bind_partial(None, access_token="t", account=None,
+                           target_type="tweet", target_id="1", like=True)
+
+
+def test_the_preflight_like_check_agrees():
+    """The deploy gate and the suite must not disagree about the like contract."""
+    from scripts import preflight
+
+    preflight.problems.clear()
+    preflight.notes.clear()
+    preflight._check_like_signatures()
+    assert preflight.problems == []
+
+
 # --- new engagement columns round-trip through both backends ------------------------- #
 # `task_type` on Instruction and action_type/target_* on StagedPost are additive
 # columns (LocalStore ALTER TABLE, Azure schemaless). A backend that dropped them

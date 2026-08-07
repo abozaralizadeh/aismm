@@ -131,6 +131,58 @@ def _make_comments(state: dict):
     return instagram_comments
 
 
+def _make_recent_comments(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def instagram_recent_comments(posts: int = 12, per_post: int = 25) -> dict:
+        """Sweep comments across this account's recent posts AND reels in ONE call.
+
+        On Instagram, comments belong to a specific post — ``instagram_comments``
+        reads ONE ``media_id`` at a time. An engagement run must answer the new
+        comments on EVERY recent post and reel, not just the latest one, so this
+        walks the recent media for you and returns all their comments together,
+        each tagged with the post it is on. Reply to every item that is not
+        ``already_answered`` this run — do not stop after the first post.
+
+        Args:
+            posts: How many recent media (posts + reels) to scan, newest first.
+            per_post: How many comments to read per post (1–100).
+        """
+        async def call(platform, account, token):
+            media = await platform.list_media(token, account, limit=max(1, min(posts, 50)))
+            items: list[dict] = []
+            for m in media:
+                media_id = m.get("id")
+                if not media_id:
+                    continue
+                try:
+                    comments = await platform.list_comments(
+                        token, media_id, limit=max(1, min(per_post, 100)))
+                except Exception as exc:  # noqa: BLE001 - one post failing must not lose the rest
+                    logger.warning("Comments unavailable for media %s: %s", media_id, exc)
+                    continue
+                for c in comments:
+                    items.append({
+                        "id": c.get("id"), "text": c.get("text"), "from": c.get("username"),
+                        "at": c.get("timestamp"), "likes": c.get("like_count"),
+                        "hidden": c.get("hidden"),
+                        "media_id": media_id,
+                        "media_type": m.get("media_product_type") or m.get("media_type"),
+                        "media_permalink": m.get("permalink"),
+                        "already_answered": engagement_ledger.answered(
+                            account, "comment", c.get("id")),
+                    })
+            pending = [i for i in items if not i["already_answered"]]
+            return {"scanned_media": len(media), "count": len(items),
+                    "pending": len(pending), "comments": items}
+
+        return await _with_context(state, call)
+
+    return instagram_recent_comments
+
+
 def _make_reply(state: dict):
     if not _guard(state):
         return None
@@ -306,6 +358,7 @@ def _make_mentions(state: dict):
 
 register_tool("instagram_recent_posts", _make_recent_posts)
 register_tool("instagram_comments", _make_comments)
+register_tool("instagram_recent_comments", _make_recent_comments)
 register_tool("instagram_reply_to_comment", _make_reply)
 register_tool("instagram_moderate_comment", _make_moderate)
 register_tool("instagram_insights", _make_insights)

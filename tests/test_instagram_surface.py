@@ -224,6 +224,9 @@ def test_instagram_tools_only_appear_for_instagram_runs(store, account):
 
     assert "instagram_recent_posts" in ig_names
     assert "instagram_reply_to_comment" in ig_names
+    # The cross-post sweep is what lets one engage run answer comments on every
+    # recent post and reel, not just the latest one.
+    assert "instagram_recent_comments" in ig_names
     assert not any(n.startswith("instagram_") for n in tt_names)
 
 
@@ -232,9 +235,10 @@ def test_every_instagram_tool_is_registered():
 
     names = registered_tool_names()
     for expected in ("instagram_recent_posts", "instagram_comments",
-                     "instagram_reply_to_comment", "instagram_moderate_comment",
-                     "instagram_insights", "instagram_publishing_limit",
-                     "instagram_profile", "instagram_mentions"):
+                     "instagram_recent_comments", "instagram_reply_to_comment",
+                     "instagram_moderate_comment", "instagram_insights",
+                     "instagram_publishing_limit", "instagram_profile",
+                     "instagram_mentions"):
         assert expected in names
 
 
@@ -380,6 +384,83 @@ def test_a_tool_without_a_token_reports_rather_than_crashing(store):
         Account(platform=PlatformName.instagram, external_id="x"), access_token="")
     state = _tool_state(store, account)
     assert asyncio.run(instagram_tools._instagram_context(state)) is None
+
+
+# --- the cross-post comment sweep (one engage run answers every post) ---------------- #
+
+def _invoke(tool, **kwargs):
+    """Drive a function_tool from a test, as the agent runtime would."""
+    from agents import RunConfig
+    from agents.tool_context import ToolContext
+
+    ctx = ToolContext(context=None, tool_name=tool.name, tool_call_id="1",
+                      tool_arguments="{}", run_config=RunConfig())
+    return asyncio.run(tool.on_invoke_tool(ctx, json.dumps(kwargs)))
+
+
+def _sweep_tool(store, account):
+    return next(t for t in build_tools(_tool_state(store, account))
+                if t.name == "instagram_recent_comments")
+
+
+def _sweep_handler(request):
+    path = request.url.path
+    if path.endswith("/media"):
+        return httpx.Response(200, json={"data": [
+            {"id": "m1", "media_product_type": "FEED", "permalink": "https://p/1"},
+            {"id": "m2", "media_product_type": "REELS", "permalink": "https://p/2"}]})
+    if path.endswith("m1/comments"):
+        return httpx.Response(200, json={"data": [
+            {"id": "c1", "text": "on the post", "username": "a"}]})
+    if path.endswith("m2/comments"):
+        return httpx.Response(200, json={"data": [
+            {"id": "c2", "text": "on the reel", "username": "b"}]})
+    return httpx.Response(200, json={"data": []})
+
+
+def test_the_sweep_reads_comments_across_every_recent_post(monkeypatch, store, account):
+    from aismm.platforms import instagram as ig_module
+
+    client, _ = _graph(_sweep_handler)
+    monkeypatch.setattr(ig_module.httpx, "AsyncClient", client)
+
+    result = _invoke(_sweep_tool(store, account), posts=10)
+    assert result["scanned_media"] == 2
+    ids = {c["id"] for c in result["comments"]}
+    assert ids == {"c1", "c2"}                      # the reel comment is NOT missed
+    by_id = {c["id"]: c for c in result["comments"]}
+    assert by_id["c2"]["media_id"] == "m2"
+    assert by_id["c2"]["media_type"] == "REELS"
+
+
+def test_the_sweep_flags_already_answered_and_counts_pending(monkeypatch, store, account):
+    from aismm.platforms import instagram as ig_module
+
+    client, _ = _graph(_sweep_handler)
+    monkeypatch.setattr(ig_module.httpx, "AsyncClient", client)
+    monkeypatch.setattr(instagram_tools.engagement_ledger, "answered",
+                        lambda acc, kind, cid: cid == "c1")
+
+    result = _invoke(_sweep_tool(store, account), posts=10)
+    assert result["count"] == 2 and result["pending"] == 1
+    answered = {c["id"]: c["already_answered"] for c in result["comments"]}
+    assert answered == {"c1": True, "c2": False}
+
+
+def test_one_post_failing_does_not_lose_the_others(monkeypatch, store, account):
+    from aismm.platforms import instagram as ig_module
+
+    def handler(request):
+        if request.url.path.endswith("m1/comments"):
+            return httpx.Response(500, json={"error": {"message": "boom"}})
+        return _sweep_handler(request)
+
+    client, _ = _graph(handler)
+    monkeypatch.setattr(ig_module.httpx, "AsyncClient", client)
+
+    result = _invoke(_sweep_tool(store, account), posts=10)
+    # m1's comments failed, but m2's still come back.
+    assert {c["id"] for c in result["comments"]} == {"c2"}
 
 
 # --- media must exist, and must come from THIS run ---------------------------------- #

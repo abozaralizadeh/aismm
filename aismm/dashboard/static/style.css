@@ -159,6 +159,7 @@ form { margin: 0; }
 }
 .form input[type=datetime-local]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .hint { color: var(--muted); font-size: .82rem; font-weight: 400; }
+.hint-warn { display: block; margin-top: .4rem; color: var(--warn); }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
 .checklist { display: flex; flex-direction: column; gap: .35rem; background: var(--panel-2);
              border: 1px solid var(--border); border-radius: 8px; padding: .6rem .7rem; font-weight: 400; }

@@ -199,10 +199,14 @@ class Twitter(SocialPlatform):
         # Replies to the account's posts and mentions are readable/answerable —
         # the engagement run reads them and answers through the mode gate.
         supports_comments=True,
+        # X is the one platform whose API lets the account LIKE a tweet
+        # (POST /2/users/:id/likes). Needs the like.write scope below.
+        supports_liking=True,
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
-    scopes = ["tweet.read", "tweet.write", "users.read", "media.write", "offline.access"]
+    scopes = ["tweet.read", "tweet.write", "users.read", "media.write",
+              "like.write", "offline.access"]
     use_pkce = True
     token_auth_style = "basic"
 
@@ -561,6 +565,32 @@ class Twitter(SocialPlatform):
         handle = (account.handle or "i").lstrip("@")
         return {"id": new_id,
                 "url": f"https://x.com/{handle}/status/{new_id}" if new_id else ""}
+
+    async def like_target(self, access_token: str, account: Account, *,
+                          target_type: str, target_id: str, like: bool = True) -> dict:
+        """Like or un-like a tweet on behalf of the connected account.
+
+        ``POST /2/users/{id}/likes`` (body ``{"tweet_id": ...}``) to like,
+        ``DELETE /2/users/{id}/likes/{tweet_id}`` to un-like — both need the
+        ``like.write`` scope, so an account connected before it was added must be
+        reconnected. Liking is idempotent (X returns ``liked: true`` for a tweet
+        already liked), so the engagement flow never needs a "already liked"
+        ledger the way replies do.
+        """
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            if like:
+                r = await client.post(
+                    f"{API}/users/{account.external_id}/likes",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={"tweet_id": target_id})
+            else:
+                r = await client.delete(
+                    f"{API}/users/{account.external_id}/likes/{target_id}", headers=headers)
+            if r.status_code >= 400:
+                raise self._api_error(r)
+            data = r.json().get("data", {}) or {}
+        return {"liked": data.get("liked", like), "id": target_id}
 
     async def delete_post(self, access_token: str, post_id: str) -> dict:
         """Delete one of this account's own posts."""

@@ -511,8 +511,10 @@ Uses **X API v2** with **OAuth 2.0 (PKCE)**.
 1. Create a Project + App in the **X Developer Portal** (<https://developer.x.com>).
 2. Enable **OAuth 2.0**, set the app type (a *confidential* client is simplest), and add the callback
    `https://<your-host>/oauth/twitter/callback`.
-3. Scopes AISMM requests: `tweet.read tweet.write users.read media.write offline.access`
-   (`offline.access` yields a refresh token; `media.write` enables media upload).
+3. Scopes AISMM requests: `tweet.read tweet.write users.read media.write like.write offline.access`
+   (`offline.access` yields a refresh token; `media.write` enables media upload; `like.write` lets an
+   engagement run like comments). An account connected before `like.write` was added must be
+   **reconnected** before it can like.
 4. Put `TWITTER_CLIENT_ID` / `TWITTER_CLIENT_SECRET` in `.env`. (Optionally add
    `TWITTER_API_KEY`/`TWITTER_API_SECRET` — the OAuth 1.0a consumer keys — if you need the legacy
    v1.1 media-upload path; see the note in [`aismm/platforms/twitter.py`](aismm/platforms/twitter.py).)

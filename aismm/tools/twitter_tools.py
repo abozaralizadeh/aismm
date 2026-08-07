@@ -198,6 +198,36 @@ def _make_reply(state: dict):
     return x_reply_to_post
 
 
+def _make_like(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def x_like_post(post_id: str, like: bool = True) -> dict:
+        """Like a post on X — a mention or a reply under this account's posts.
+
+        A like is the right, low-key response when a comment is warm, supportive,
+        or a simple "thanks" that needs acknowledging but not a written reply. Use
+        it freely alongside ``x_reply_to_post``: like the ones you are answering
+        AND the friendly ones you are not. Unlike a reply, a like is NOT gated by
+        the publish mode — it sends immediately. It is idempotent, so liking a
+        post you already liked is harmless.
+
+        Args:
+            post_id: The id of the post to like (from ``x_mentions`` / ``x_replies``).
+            like: ``True`` to like (default), ``False`` to remove a previous like.
+        """
+        async def call(platform, account, token):
+            result = await platform.like_target(
+                token, account, target_type=_X_TARGET, target_id=post_id, like=like)
+            logger.info("%s X post %s", "Liked" if like else "Un-liked", post_id)
+            return {"status": "liked" if result.get("liked") else "unliked", **result}
+
+        return await _with_context(state, call)
+
+    return x_like_post
+
+
 def _make_post_metrics(state: dict):
     if not _guard(state):
         return None
@@ -267,6 +297,7 @@ register_tool("x_recent_posts", _make_recent_posts)
 register_tool("x_mentions", _make_mentions)
 register_tool("x_replies", _make_replies)
 register_tool("x_reply_to_post", _make_reply)
+register_tool("x_like_post", _make_like)
 register_tool("x_post_metrics", _make_post_metrics)
 register_tool("x_profile", _make_profile)
 register_tool("x_delete_post", _make_delete_post)
