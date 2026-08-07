@@ -329,6 +329,18 @@ def _load_platform_creds() -> dict[str, PlatformCreds]:
             client_id=os.getenv("TIKTOK_CLIENT_KEY", ""),
             client_secret=os.getenv("TIKTOK_CLIENT_SECRET", ""),
         ),
+        "linkedin": PlatformCreds(
+            client_id=os.getenv("LINKEDIN_CLIENT_ID", ""),
+            client_secret=os.getenv("LINKEDIN_CLIENT_SECRET", ""),
+        ),
+        # Facebook Pages ride the SAME Meta app as Instagram, so an existing Meta
+        # setup connects Pages with no new credentials — its own env vars win
+        # when a separate app is preferred.
+        "facebook": PlatformCreds(
+            client_id=os.getenv("FACEBOOK_APP_ID", "") or os.getenv("INSTAGRAM_APP_ID", ""),
+            client_secret=(os.getenv("FACEBOOK_APP_SECRET", "")
+                           or os.getenv("INSTAGRAM_APP_SECRET", "")),
+        ),
     }
 
 

@@ -141,14 +141,22 @@ def test_an_unknown_platform_gets_no_flags(platform):
     assert disclosure.native_flags(platform) == {}
 
 
-def test_every_platform_we_publish_to_has_a_native_label():
-    """All four expose one. An earlier version claimed Instagram and X did not,
-    so those two were labelled in the caption only — a sentence of prose where
-    the platform offers a real, rendered label."""
-    from aismm.models import PlatformName
+def test_platforms_with_a_native_label_all_carry_it():
+    """Every platform whose *API* exposes an AI-content field must set it.
 
-    for platform in PlatformName:
-        assert disclosure.native_flags(platform.value), platform.value
+    An earlier version claimed Instagram and X had none, so those two were
+    labelled in the caption only — a sentence of prose where the platform offers
+    a real, rendered label. LinkedIn's Posts API and Facebook's Pages API expose
+    no such field, so those disclose via the (opt-in) caption suffix instead;
+    they are asserted flag-less below so the two paths stay explicit."""
+    for platform in ("instagram", "twitter", "tiktok", "youtube"):
+        assert disclosure.native_flags(platform), platform
+
+
+def test_platforms_without_a_native_field_disclose_in_the_caption():
+    """LinkedIn and Facebook have no AI-content flag in their publishing APIs."""
+    assert disclosure.native_flags("linkedin") == {}
+    assert disclosure.native_flags("facebook") == {}
 
 
 def test_no_flags_when_disabled(monkeypatch):

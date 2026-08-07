@@ -8,7 +8,7 @@ from aismm.platforms.registry import get_platform, registered_platforms
 
 def test_all_platforms_registered():
     names = {p.value for p in registered_platforms()}
-    assert names == {"instagram", "twitter", "youtube", "tiktok"}
+    assert names == {"instagram", "twitter", "youtube", "tiktok", "linkedin", "facebook"}
 
 
 def test_capabilities_matrix():
@@ -20,6 +20,10 @@ def test_capabilities_matrix():
     assert tw.supports_text and tw.supports_image and tw.supports_video
     ig = get_platform(PlatformName.instagram).capabilities
     assert ig.needs_public_media_url and ig.supports_image and ig.supports_video
+    li = get_platform(PlatformName.linkedin).capabilities
+    assert li.supports_text and li.supports_image and li.supports_video
+    fb = get_platform(PlatformName.facebook).capabilities
+    assert fb.needs_public_media_url and fb.supports_text and fb.supports_carousel
 
 
 def test_authorize_url_shapes():

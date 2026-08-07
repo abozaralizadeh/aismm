@@ -109,6 +109,51 @@ GUIDES: dict[str, dict] = {
         "notes": "Until the app passes TikTok's audit, every post is forced to "
                  "`SELF_ONLY` visibility — visible to you alone.",
     },
+    "linkedin": {
+        "title": "LinkedIn",
+        "console": "https://www.linkedin.com/developers/apps",
+        "console_label": "LinkedIn Developers → My apps",
+        "docs": "https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api",
+        "requires": "A LinkedIn app associated with a Company Page (required to create an app).",
+        "id_label": "Client ID",
+        "secret_label": "Client secret",
+        "steps": [
+            "Create an app in LinkedIn Developers and verify it against a Company Page.",
+            "On the **Products** tab, request **Sign In with LinkedIn using OpenID "
+            "Connect** and **Share on LinkedIn**.",
+            "On **Auth**, add the redirect URI below to *Authorized redirect URLs*.",
+            "Copy the **Client ID** and **Client secret** from the Auth tab.",
+            "Scopes used: `openid profile email w_member_social` — posts go to the "
+            "signed-in member's feed.",
+        ],
+        "notes": "Posts as the member who signs in. Company Page posting would need "
+                 "`w_organization_social` and an admin role — not enabled here yet.",
+    },
+    "facebook": {
+        "title": "Facebook Pages (via a Meta app)",
+        "console": "https://developers.facebook.com/apps",
+        "console_label": "Meta for Developers → My Apps",
+        "docs": "https://developers.facebook.com/docs/pages-api/posts",
+        "requires": "A Facebook **Page** you administer. Reuses the same Meta app as Instagram.",
+        "id_label": "App ID",
+        "secret_label": "App secret",
+        "steps": [
+            "Use your existing Meta app (the same one Instagram uses) or create a "
+            "**Business** app.",
+            "Add **Facebook Login for Business**, and under its settings add the "
+            "redirect URI below to *Valid OAuth Redirect URIs*.",
+            "Copy the *App ID* and *App secret* from **App settings → Basic**.",
+            "Request `pages_show_list`, `pages_read_engagement` and "
+            "`pages_manage_posts`. Posting to Pages you don't own needs App Review.",
+            "⚠️ **Several Pages? Tick EVERY Page in ONE login** — a single Connect "
+            "claims them all. Connecting one at a time replaces the earlier grant, "
+            "same as Instagram.",
+        ],
+        "notes": "Facebook fetches media from a public URL, so this deployment must be "
+                 "reachable from the internet (or use Azure Blob storage) — the same "
+                 "requirement as Instagram. If FACEBOOK_APP_ID is unset it falls back "
+                 "to INSTAGRAM_APP_ID, so an existing Meta app works with no new env vars.",
+    },
 }
 
 

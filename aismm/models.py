@@ -40,6 +40,8 @@ class PlatformName(str, enum.Enum):
     twitter = "twitter"
     youtube = "youtube"
     tiktok = "tiktok"
+    linkedin = "linkedin"
+    facebook = "facebook"
 
 
 class PublishMode(str, enum.Enum):

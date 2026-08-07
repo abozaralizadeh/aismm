@@ -35,7 +35,8 @@ ICON_DIR = Path(__file__).resolve().parent / "static/brand/platforms"
 # Keyed by PlatformName VALUE, so `twitter` — the enum member kept its original
 # name. The mark and its file are called `x`, because that is the brand now; the
 # two are bridged here rather than by renaming an enum every row in the DB uses.
-COLORS = {"instagram": "#E4405F", "youtube": "#FF0000", "twitter": "", "tiktok": ""}
+COLORS = {"instagram": "#E4405F", "youtube": "#FF0000", "twitter": "", "tiktok": "",
+          "linkedin": "#0A66C2", "facebook": "#0866FF"}
 FILES = {"twitter": "x"}
 
 _PATH = re.compile(r'\sd="([^"]+)"')
