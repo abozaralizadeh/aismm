@@ -208,13 +208,16 @@ def _make_generate_image(state: dict):
                 earlier ``generate_image``) to guide the result — use this to keep
                 a character, product or style consistent across posts.
 
-                Two jobs this is especially good at, because image generation has
-                none of the restrictions video generation puts on reference
-                images: building a CHARACTER SHEET once (then reusing its
-                asset_path in every later call, and recording it in memory so the
-                next run reuses it too), and painting the OPENING FRAME of a video
-                shot — pass the sheet here, describe the moment, then hand the
-                result to ``create_video_sequence`` as that shot's reference.
+                Unlike video generation, this accepts references containing
+                PEOPLE, so it is how you keep a character or product consistent
+                across still posts — reuse the same asset_path, and record it in
+                memory so the next run reuses it rather than inventing a new one.
+
+                Do NOT paint frames here to feed a video: Sora rejects any
+                reference image with a human face, whoever made it, so an image
+                generated for that purpose is refused and the money is wasted.
+                Video consistency comes from the sequence's own `style` block and
+                continuity="remix".
 
         Returns ``asset_path`` and ``public_url`` to pass to ``publish``.
         """

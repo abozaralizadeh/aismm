@@ -351,7 +351,7 @@ def test_each_shot_gets_its_own_image(seq, monkeypatch, tmp_path):
 
 def test_a_shot_with_no_image_falls_back_to_the_chained_frame(seq, monkeypatch, tmp_path):
     paths = _panels(monkeypatch, tmp_path, 1)
-    _run_sequence(["a", "b"], reference_asset_paths=[paths[0], ""])
+    _run_sequence(["a", "b"], reference_asset_paths=[paths[0], ""], continuity="auto")
     assert seq["creates"][0]["reference"] is not None
     assert seq["creates"][1]["reference"] == b"tail-frame"
 
@@ -359,7 +359,7 @@ def test_a_shot_with_no_image_falls_back_to_the_chained_frame(seq, monkeypatch, 
 def test_the_supplied_image_wins_over_the_chained_frame(seq, monkeypatch, tmp_path):
     """Naming a panel for a shot is a more specific instruction than "continue"."""
     paths = _panels(monkeypatch, tmp_path, 2)
-    _run_sequence(["a", "b"], reference_asset_paths=paths)
+    _run_sequence(["a", "b"], reference_asset_paths=paths, continuity="auto")
     assert seq["creates"][1]["reference"] != b"tail-frame"
 
 
@@ -373,56 +373,90 @@ def test_a_shot_with_an_image_is_told_it_is_a_look_not_a_paused_video(seq, monke
 
 
 # --- cuts -------------------------------------------------------------------------- #
+# A cut is TWO decisions, not one: what the prompt asks for (a new moment) and
+# where the pixels come from (an earlier clip). Treating "cut" as "no source" is
+# what let cuts drift into a different film — the cast changed across every jump.
 
-def test_a_cut_shot_gets_no_chained_frame(seq):
-    """Continuity across a jump is what produced repeated action."""
+def test_a_cut_is_still_remixed_from_an_earlier_clip(seq):
+    """The source fixes the look; the prompt asks for a new moment."""
     _run_sequence(["a", "b"], scene_continuity=["", "cut"])
-    assert seq["creates"][1]["reference"] is None
+    assert len(seq["remixes"]) == 1
 
 
-def test_a_cut_shot_is_told_to_start_a_new_shot(seq):
+def test_a_cut_is_told_the_source_is_only_there_to_fix_the_look(seq):
     _run_sequence(["a", "b"], scene_continuity=["", "cut"])
+    prompt = seq["remixes"][0]["prompt"]
+    assert "CUT:" in prompt
+    assert "ONLY to fix the look" in prompt
+    assert "Do NOT continue or repeat that shot" in prompt
+
+
+def test_a_cut_with_nothing_to_remix_still_says_it_is_a_new_shot(seq):
+    """continuity="none" has no source, so the style block is all there is."""
+    _run_sequence(["a", "b"], continuity="none", scene_continuity=["", "cut"])
     prompt = seq["creates"][1]["prompt"]
     assert "CUT:" in prompt
     assert "do NOT continue the previous shot" in prompt
-    assert "Keep the style, world, characters" in prompt      # same film, new shot
 
 
 def test_a_cut_still_carries_the_style(seq):
     _run_sequence(["a", "b"], style="ink and wash, teal palette",
                   scene_continuity=["", "cut"])
-    assert "ink and wash, teal palette" in seq["creates"][1]["prompt"]
+    assert "ink and wash, teal palette" in seq["remixes"][0]["prompt"]
 
 
-def test_shots_without_a_per_shot_mode_still_continue(seq):
-    _run_sequence(["a", "b"], scene_continuity=["", ""])
+def test_shots_without_a_per_shot_mode_take_the_sequence_default(seq):
+    _run_sequence(["a", "b"], scene_continuity=["", ""], continuity="auto")
     assert seq["creates"][1]["reference"] == b"tail-frame"
 
 
-def test_a_cut_shot_is_never_remixed(seq):
-    """Remix means "the previous shot, advanced" — the opposite of a cut."""
-    _run_sequence(["a", "b"], continuity="remix", scene_continuity=["", "cut"])
-    assert seq["remixes"] == []
+# --- choosing WHICH shot to remix from ----------------------------------------------- #
+# Chaining forward advances the action but drifts a little further with every
+# link. A shot that returns to the opening framing should go back to that shot.
+
+def test_a_shot_remixes_the_one_before_it_by_default(seq):
+    _run_sequence(["a", "b", "c"])
+    assert [r["base"] for r in seq["remixes"]] == ["job-1", "remix-1"]
 
 
-def test_a_later_shot_can_continue_after_a_cut(seq):
-    """The tail frame is still kept, so shot 3 can chain even though 2 was a cut."""
-    _run_sequence(["a", "b", "c"], scene_continuity=["", "cut", ""])
-    assert seq["creates"][2]["reference"] == b"tail-frame"
+def test_a_shot_can_remix_a_named_earlier_shot(seq):
+    """[0, 0, 1] — shot 3 returns to the opening, not to shot 2."""
+    _run_sequence(["a", "b", "c"], scene_remix_from=[0, 0, 1])
+    assert [r["base"] for r in seq["remixes"]] == ["job-1", "job-1"]
+
+
+def test_the_prompt_names_the_shot_being_edited(seq):
+    _run_sequence(["a", "b", "c"], scene_remix_from=[0, 0, 1])
+    assert "shot 1 of this sequence" in seq["remixes"][1]["prompt"]
+
+
+def test_an_impossible_source_falls_back_instead_of_failing_the_shot(seq):
+    """Forward references and failed shots must not cost a clip."""
+    result = _run_sequence(["a", "b", "c"], scene_remix_from=[0, 3, 0])
+    assert len(seq["remixes"]) == 2
+    assert "not available" in " ".join(result["timing_notes"])
 
 
 # --- length ------------------------------------------------------------------------ #
 
 def test_clip_length_defaults_to_the_longest(seq):
     """Many 4s clips read as a slideshow; the agent had been picking them."""
-    _run_sequence(["a", "b"])
+    _run_sequence(["a", "b"], continuity="none")
     assert [call["seconds"] for call in seq["creates"]] == [12, 12]
 
 
-def test_length_can_vary_per_shot(seq):
-    """Rhythm: a held beat at 12s, an impact at 4s."""
-    _run_sequence(["a", "b", "c"], scene_seconds=[12, 4, 8])
+def test_length_can_vary_on_shots_that_are_not_remixed(seq):
+    """A remix inherits its source's duration, so varying lengths only reach
+    Sora when the shots are created rather than chained."""
+    _run_sequence(["a", "b", "c"], scene_seconds=[12, 4, 8], continuity="none")
     assert [call["seconds"] for call in seq["creates"]] == [12, 4, 8]
+
+
+def test_varying_lengths_under_remix_are_called_out_up_front(seq):
+    """Rather than letting the agent discover it per shot and caption a total
+    the file does not have."""
+    result = _run_sequence(["a", "b"], scene_seconds=[12, 4], continuity="remix")
+    assert "inherits its source clip's duration" in " ".join(result["timing_notes"])
 
 
 def test_an_odd_length_is_snapped_to_what_sora_renders(seq):
@@ -482,63 +516,61 @@ def test_an_unreadable_image_is_named_in_the_result(seq, monkeypatch, tmp_path):
 
 def test_the_single_path_shorthand_still_works(seq, monkeypatch, tmp_path):
     paths = _panels(monkeypatch, tmp_path, 1)
-    _run_sequence(["a", "b"], reference_asset_path=paths[0])
+    _run_sequence(["a", "b"], reference_asset_path=paths[0], continuity="auto")
     assert seq["creates"][0]["reference"] is not None
     assert seq["creates"][1]["reference"] == b"tail-frame"
 
 
-# --- the agent is told how to get a reference worth passing ---------------------------- #
-# Sora has no seed, so a character nobody pinned down is a character it invents.
-# The routine — character sheet, then paint the opening frame of every cut with
-# the image tool, then hand those frames to the sequence — is expressible with
-# the tools as they are, so it lives in the prompt rather than in code.
+# --- what the agent is told about references, after the face rule --------------------- #
+# Reported: Sora blocks ANY input_reference showing a human face — including one
+# gpt-image-2 has just drawn. The earlier routine (character sheet -> paint the
+# opening frame of every cut -> hand those frames to the sequence) was therefore
+# advice to spend money on images that are refused on arrival. Identity lives in
+# `style`; continuity lives in remix.
 
-def test_the_prompt_describes_the_character_sheet_routine():
+def test_the_prompt_says_a_generated_image_is_refused_just_the_same():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "CHARACTER SHEET" in p
-    # Reuse before regeneration: attached file, then memory, then real pictures,
-    # and only then generate one.
-    assert "reference file" in p and "update_memory" in p
-    assert "generate_image" in p
+    assert "including an\n       image you just made with generate_image" in p
+    assert "Who drew it makes no difference" in p
 
 
-def test_the_prompt_says_to_paint_the_opening_frame_of_every_cut():
+def test_the_prompt_no_longer_asks_for_a_character_sheet():
+    """This is what sent runs off building sheets and painting frames."""
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "OPENING FRAME" in p
-    assert "every \"cut\" shot" in p
+    assert "do NOT build a character sheet" in p
+    assert "OPENING FRAME of shot 1" not in p
 
 
-def test_the_prompt_says_continuing_shots_need_no_image():
+def test_the_prompt_names_the_two_levers_that_do_work():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "SHOTS THAT CONTINUE" in p
+    assert "`style`, repeated identically in every shot" in p
+    assert "Every shot after the first is a REMIX" in p
 
 
-def test_the_prompt_still_warns_that_a_painted_frame_can_be_refused():
-    """The sheet does not remove Sora's face restriction, so `style` still has to
-    carry the character."""
+def test_the_prompt_keeps_references_for_material_without_people():
+    """The rule is about faces, not about references — a location still helps."""
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "refuse a painted frame" in p
-    assert "reference_notes" in p
+    assert "locations, objects, artwork, landscapes" in p
 
 
-def test_the_sequence_tool_points_at_the_image_tool():
-    """The agent reads the tool docstring at call time, not just the system prompt."""
+def test_the_sequence_tool_says_the_same_at_call_time():
+    """The agent reads the tool docstring when it calls it, not just the prompt."""
     import inspect
 
     source = inspect.getsource(sequence_tool)
-    assert "generate_image" in source
-    assert "opening frame" in source.lower()
+    assert "Only for material with NO people in it" in source
+    assert "do not paint\n                opening frames of people" in source
 
 
-def test_the_image_tool_mentions_the_character_sheet():
+def test_the_image_tool_no_longer_advertises_painting_video_frames():
     import inspect
 
     from aismm.tools import image_tool
 
     source = inspect.getsource(image_tool)
-    assert "CHARACTER SHEET" in source
-    assert "OPENING FRAME" in source
+    assert "Do NOT paint frames here to feed a video" in source
+    assert "CHARACTER SHEET" not in source

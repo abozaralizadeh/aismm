@@ -173,9 +173,12 @@ def test_every_scene_becomes_a_clip_and_they_are_merged(sora):
 
 
 def test_the_style_reaches_every_generated_prompt(sora):
+    """Including remix prompts — it is the one lever that survives everything."""
     _sequence()
-    assert len(sora["creates"]) == 3
-    assert all(STYLE in call["prompt"] for call in sora["creates"])
+    prompts = ([c["prompt"] for c in sora["creates"]]
+               + [r["prompt"] for r in sora["remixes"]])
+    assert len(prompts) == 3
+    assert all(STYLE in prompt for prompt in prompts)
 
 
 def test_the_last_frame_is_chained_into_later_shots(sora):
@@ -188,7 +191,7 @@ def test_the_last_frame_is_chained_into_later_shots(sora):
 
 def test_the_sequence_is_pinned_to_one_resource(sora):
     """GenBox rotated resources per clip, which makes remix impossible."""
-    _sequence()
+    _sequence(continuity="none")
     assert sora["failover"] == 1                     # only shot 1 picks a resource
     assert all(call["resource"] is RESOURCE_A for call in sora["creates"][1:])
 
@@ -210,7 +213,7 @@ def test_remix_mode_chains_each_shot_from_the_previous_one(sora):
 def test_a_remixed_shot_is_told_it_is_continuing_not_restating(sora):
     _sequence(continuity="remix")
     prompt = sora["remixes"][1]["prompt"]
-    assert "PREVIOUS shot" in prompt
+    assert "shot 2 of this sequence" in prompt        # which clip it is editing
     assert "NEXT moment, not another take" in prompt
 
 
@@ -241,7 +244,7 @@ def test_a_refused_reference_falls_back_to_remixing(faces_refused, sora):
     result = _sequence(scenes=["one", "two"], continuity="auto")
     assert result["clips_merged"] == 2               # nothing was lost
     assert sora["remixes"] and sora["remixes"][0]["base"] == "job-1"
-    assert result["shots"][1]["how"] == "remix(fallback)"
+    assert result["shots"][1]["how"] == "remix(shot 1)"
 
 
 def test_the_fallback_chain_never_replays_shot_one(faces_refused, sora):
@@ -295,7 +298,7 @@ def test_a_failing_first_shot_is_an_error_not_an_empty_video(monkeypatch, sora):
 
 
 def test_per_shot_lengths_are_honoured(sora):
-    _sequence(scenes=["a", "b"], scene_seconds=[4, 12])
+    _sequence(scenes=["a", "b"], scene_seconds=[4, 12], continuity="none")
     assert [call["seconds"] for call in sora["creates"]] == [4, 12]
 
 
@@ -345,15 +348,14 @@ def test_the_prompt_forbids_a_throwaway_clip_before_a_sequence():
     """A run generated a 12s clip, ignored it, built a sequence, and posted that."""
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS
 
-    assert "DECIDE THE SHAPE BEFORE" in MANAGER_INSTRUCTIONS
+    assert "decide the whole thing BEFORE you generate anything" in MANAGER_INSTRUCTIONS
     assert "to see how it looks" in MANAGER_INSTRUCTIONS
 
 
 def test_the_prompt_warns_that_shots_must_advance():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS
 
-    assert "NEXT step in the action" in MANAGER_INSTRUCTIONS
-    assert "repeats itself" in MANAGER_INSTRUCTIONS
+    assert "the NEXT moment, never a\n      restatement of the last" in MANAGER_INSTRUCTIONS
 
 
 def test_the_prompt_points_at_the_duration_warning():
@@ -429,3 +431,244 @@ def test_systemic_failure_stops_rather_than_grinding_through(monkeypatch, tmp_pa
     assert calls["attempts"] == sequence_tool._MAX_SHOT_FAILURES
     assert result["error"] == "video_generation_failed"
     assert "Every shot failed" in result["message"]
+
+
+# --- timing the shots from the words they carry --------------------------------------- #
+# Reported: "the videos are cut in the middle of speaking and the timings are not
+# good". Both come from picking a clip length first and writing the shot into it.
+# plan_shot_timing does it the other way round, and always rounds UP: an over-long
+# clip is a beat of silence, an under-long one is a cut-off word.
+
+from aismm.tools.sequence_tool import (          # noqa: E402
+    estimate_speech_seconds, plan_shot_lengths,
+)
+
+
+def test_a_longer_line_needs_a_longer_clip():
+    short = estimate_speech_seconds("I know.")
+    long = estimate_speech_seconds(" ".join(["word"] * 40))
+    assert short < long
+
+
+def test_silence_takes_no_time():
+    assert estimate_speech_seconds("") == 0
+    assert estimate_speech_seconds("   ") == 0
+
+
+def test_a_shot_with_too_much_dialogue_is_flagged_as_over():
+    """The clip length is fixed, so the LINE is what has to move."""
+    plan = plan_shot_lengths([{"dialogue": " ".join(["word"] * 40)}], 12)
+    assert plan["shots"][0]["fills"] == "over"
+    assert "cut off mid-sentence" in plan["note"]
+    assert "into the next shot" in plan["note"]
+
+
+def test_a_nearly_empty_shot_is_flagged_as_dead_air():
+    """The other half of the same failure: a clip with nothing in the back end."""
+    plan = plan_shot_lengths([{"dialogue": "Hi."}], 12)
+    assert plan["shots"][0]["fills"] == "under"
+    assert "dead air" in plan["note"]
+
+
+def test_a_well_filled_shot_is_left_alone():
+    plan = plan_shot_lengths([{"dialogue": " ".join(["word"] * 18)}], 12)
+    assert plan["shots"][0]["fills"] == "ok"
+    assert plan["note"] == ""
+
+
+def test_the_margin_is_a_band_not_the_clip_length():
+    """Writing to exactly 12s is what breaks a sentence when the delivery runs
+    slower than the arithmetic — the headroom IS the feature."""
+    exactly_full = plan_shot_lengths([{"dialogue": " ".join(["word"] * 25)}], 12)
+    assert exactly_full["shots"][0]["speech_seconds"] > 12 * 0.85
+    assert exactly_full["shots"][0]["fills"] == "over"
+
+
+def test_action_saves_a_silent_shot_from_being_called_empty():
+    """A shot can be full without anybody speaking."""
+    plan = plan_shot_lengths([{"action": "she crosses the room and opens the door"}], 12)
+    assert plan["shots"][0]["fills"] == "ok"
+
+
+def test_the_clip_length_applies_to_every_shot():
+    """A remixed chain cannot vary its length, so this does not choose lengths."""
+    plan = plan_shot_lengths([{"dialogue": "a"}, {"dialogue": "b"}], 8)
+    assert plan["scene_seconds"] == [8, 8]
+    assert plan["total_seconds"] == 16
+    assert plan["seconds_each"] == 8
+
+
+def test_the_target_fill_is_reported_so_the_agent_can_aim_at_it():
+    plan = plan_shot_lengths([{"dialogue": "a"}], 12)
+    assert "%" in plan["target_fill"]
+
+
+def test_more_shots_than_sora_allows_are_capped_with_a_note():
+    plan = plan_shot_lengths([{"action": "x"}] * 20, 12)
+    assert plan["clip_count"] == 12 and "cap" in plan["note"]
+
+
+def test_an_empty_plan_is_not_an_exception():
+    assert plan_shot_lengths([], 12)["clip_count"] == 0
+    assert plan_shot_lengths(None, 12)["clip_count"] == 0
+
+
+def test_the_timing_tool_is_registered_and_offered():
+    from aismm.tools.registry import registered_tool_names
+
+    assert "plan_shot_timing" in registered_tool_names()
+
+
+def test_the_prompt_tells_the_agent_to_fill_every_clip():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "FILL EVERY CLIP" in p
+    assert "plan_shot_timing" in p
+
+
+# --- remix is the chain, and the length follows it ------------------------------------ #
+# A remix takes only a prompt and inherits its source's duration, so a chained
+# sequence is uniform. That is accepted rather than worked around: rendering a
+# shot fresh to hit a length throws away the only continuity lever there is. The
+# video is n x seconds_each, and pacing is fixed in the WRITING.
+
+def test_remix_wins_over_a_requested_length(sora):
+    _sequence(scenes=["a", "b"], continuity="remix", scene_seconds=[12, 4])
+    assert len(sora["remixes"]) == 1                  # not re-created to hit 4s
+
+
+def test_varying_lengths_are_called_out_once_up_front(sora):
+    """Not discovered per shot after the money is spent."""
+    result = _sequence(scenes=["a", "b"], continuity="remix", scene_seconds=[12, 4])
+    note = " ".join(result["timing_notes"])
+    assert "inherits its source clip's duration" in note
+    assert "write each scene to fill it" in note.lower()
+
+
+def test_a_uniform_plan_says_nothing(sora):
+    """The note is a correction, so it must not fire on a correct plan."""
+    result = _sequence(scenes=["a", "b"], continuity="remix", scene_seconds=[12, 12])
+    assert "timing_notes" not in result
+
+
+# --- one face refusal switches the rest of the sequence to remix ----------------------- #
+# Sora refuses ANY input_reference showing a human face. The refusal is proof this
+# material has people in it, so paying for the same rejection on every remaining
+# shot is waste — and remix is the only continuity lever left.
+
+@pytest.fixture()
+def refuse_frames(monkeypatch, sora):
+    """Reject a create that carries a reference image, as Azure does for faces.
+
+    Wraps whatever `sora` installed, and records the refused attempts — the point
+    of the switch to remix is that there is exactly ONE of them per sequence.
+    """
+    import httpx
+
+    real_create = sequence_tool.create_clip
+    sora["refused"] = []
+
+    async def create(resource, prompt, seconds, size, reference=None):
+        if reference is not None:
+            sora["refused"].append({"prompt": prompt, "seconds": seconds})
+            request = httpx.Request("POST", "https://a.openai.azure.com/openai/v1/videos")
+            response = httpx.Response(400, request=request,
+                                      text="input_reference may not contain a human face")
+            raise httpx.HTTPStatusError("400", request=request, response=response)
+        return await real_create(resource, prompt, seconds, size, reference)
+
+    monkeypatch.setattr(sequence_tool, "create_clip", create)
+    return create
+
+
+def test_a_refused_frame_switches_the_rest_of_the_sequence_to_remix(sora, refuse_frames):
+    _sequence(scenes=["a", "b", "c", "d"], continuity="auto")
+    # Shot 2 pays for the discovery; shots 3 and 4 go straight to remix without
+    # re-offering a frame that is going to be refused for the same reason.
+    assert len(sora["refused"]) == 1
+    assert len(sora["remixes"]) == 3
+
+
+def test_the_refusal_is_reported_as_expected_not_as_a_failure(sora, refuse_frames):
+    result = _sequence(scenes=["a", "b", "c"], continuity="auto")
+    assert result["clips_merged"] == 3
+    assert not result.get("failed_shots")
+
+
+def test_a_refused_frame_remixes_the_chosen_source(sora, refuse_frames):
+    """The fallback is a remix of the shot the agent nominated, not always the
+    neighbour."""
+    _sequence(scenes=["a", "b", "c"], continuity="auto", scene_remix_from=[0, 0, 1])
+    assert [r["base"] for r in sora["remixes"]] == ["job-1", "job-1"]
+
+
+# --- one clip at a time, on one resource ----------------------------------------------- #
+# A job id exists only on the resource that created it, so a mid-sequence hop to
+# another endpoint leaves remix with nothing to remix. Load balancing happens
+# between RUNS, never inside one.
+
+def test_the_whole_sequence_stays_on_the_resource_that_served_shot_one(sora):
+    _sequence(scenes=["a", "b", "c", "d"], continuity="remix")
+    assert sora["failover"] == 1                       # only shot 1 may shop around
+    assert {id(c["resource"]) for c in sora["creates"]} == {id(RESOURCE_A)}
+    assert all(r["resource"] is RESOURCE_A for r in sora["remixes"])
+
+
+def test_shots_are_rendered_one_at_a_time_in_order(sora):
+    """Shot N+1 may need to remix N or chain from its final frame, so it cannot
+    start before N finishes."""
+    _sequence(scenes=["a", "b", "c"], continuity="none")
+    assert [c["prompt"].count("SHOT 1 of 3") for c in sora["creates"]] == [1, 0, 0]
+    assert "SHOT 3 of 3" in sora["creates"][2]["prompt"]
+
+
+# --- the video is n x seconds_each, and that is the plan -------------------------------- #
+
+def test_the_whole_video_is_the_clip_length_times_the_shot_count(sora):
+    """Three 12s shots IS 36 seconds. There is no other shape available once the
+    shots are chained, so the story has to be written to that total."""
+    _sequence(scenes=["a", "b", "c"], continuity="remix", seconds_each=12)
+    assert len(sora["creates"]) == 1 and len(sora["remixes"]) == 2
+
+
+def test_a_cut_is_remixed_too(sora):
+    """The source fixes the look across the jump; the prompt asks for a new
+    moment. Treating a cut as "no source" is what let the cast change at a cut."""
+    _sequence(scenes=["a", "b"], scene_continuity=["", "cut"])
+    assert len(sora["remixes"]) == 1
+    assert "ONLY to fix the look" in sora["remixes"][0]["prompt"]
+
+
+def test_the_remix_source_can_go_backwards_not_only_to_the_neighbour(sora):
+    """Every forward link drifts a little further; returning to an earlier shot
+    is how a sequence comes back to its opening framing."""
+    _sequence(scenes=["a", "b", "c", "d"], scene_remix_from=[0, 0, 1, 0])
+    assert [r["base"] for r in sora["remixes"]] == ["job-1", "job-1", "remix-2"]
+
+
+def test_a_forward_reference_falls_back_instead_of_failing_the_shot(sora):
+    """Shot 2 cannot be edited from shot 3 — it does not exist yet."""
+    result = _sequence(scenes=["a", "b", "c"], scene_remix_from=[0, 3, 0])
+    assert result["clips_merged"] == 3
+    assert [r["base"] for r in sora["remixes"]] == ["job-1", "remix-1"]
+    assert "not available" in " ".join(result["timing_notes"])
+
+
+def test_a_source_whose_shot_failed_is_not_used(monkeypatch, sora):
+    """A failed shot has no job id; remixing it would take the next shot down too."""
+    real_create = sequence_tool.create_clip
+
+    async def flaky(resource, prompt, seconds, size, reference=None):
+        if "SHOT 2 of 3" in prompt:
+            raise RuntimeError("shot 2 is unlucky")
+        return await real_create(resource, prompt, seconds, size, reference)
+
+    monkeypatch.setattr(sequence_tool, "create_clip", flaky)
+    # Every shot is created (continuity="none"), so shot 2 genuinely fails; shot 3
+    # then asks to be edited from it.
+    result = _sequence(scenes=["a", "b", "c"], continuity="none",
+                       scene_continuity=["", "", "remix"], scene_remix_from=[0, 0, 2])
+    assert result["clips_merged"] == 2
+    assert [row["shot"] for row in result["failed_shots"]] == [2]
+    # Shot 3 still rendered, from shot 1 rather than from the shot that failed.
+    assert [r["base"] for r in sora["remixes"]] == ["job-1"]

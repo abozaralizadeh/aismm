@@ -539,16 +539,50 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   out as another take of the same beat. `"cut"` gets its own prompt contract — *same film, new
   shot* — and is never remixed, since remix means "the previous shot, advanced". The tail frame is
   still extracted across a cut so a later shot can chain again.
-- **The opening frame of a cut should be PAINTED, not found** (prompt + both tool docstrings).
-  Character sheet first (attached file → memory → real pictures → `generate_image`), then
-  `generate_image` paints shot 1 and every `"cut"` shot with the sheet in its
-  `reference_asset_paths`, and those frames become the video's per-shot references; continuing
-  shots take `""` and chain from the previous tail frame. Image generation accepts 16 references and
-  has none of Sora's restrictions, so it is the only place the cast is actually controllable. It
-  needs no code — the tools already take all of this — so it lives in the prompt, and the sheet's
-  `asset_path` belongs in the instruction memory or it is rebuilt (differently) every run. It does
-  NOT remove the face refusal: a painted frame showing a face can still be rejected, which is why
-  `style` must carry the character description regardless.
+- **A generated image is refused by Sora exactly like any other — painting frames for video is
+  wasted money.** `input_reference` is rejected whenever it contains a human face, and *who drew it
+  is irrelevant*: a gpt-image-2 frame made specifically to seed a shot comes straight back. An
+  earlier version of this file told the agent to build a character sheet and paint the opening frame
+  of every cut; that advice is REMOVED from the prompt, `create_video_sequence`'s docstring and
+  `generate_image`'s docstring, because it spent a generation per cut on images that never reached
+  the model. With people on camera exactly two levers remain, and they are used together: `style`
+  repeated verbatim in every shot (identity), and **remix** (continuity). Reference images stay
+  useful for material with NO people in it — locations, objects, artwork, landscapes.
+- **`continuity="auto"` switches the REST of the sequence to remix after one refusal**
+  (`frames_refused` in [tools/sequence_tool.py](aismm/tools/sequence_tool.py)). The refusal is proof
+  this material has faces in it, so re-offering a frame on every remaining shot buys nothing and
+  costs a failed create each time; tail-frame extraction stops too. One shot pays for the discovery.
+- **EVERY chained shot is a remix, cuts included, and its SOURCE is a per-shot choice**
+  (`continuity` defaults to `"remix"`; `scene_remix_from`). Remix is the only continuity lever that
+  survives the face rule, so it is not reserved for "continuing" shots: on a **cut** the source
+  fixes the LOOK and `build_clip_prompt`'s cut wording asks for a new moment ("the video you are
+  editing is shot N … ONLY to fix the look"). Treating a cut as *no source* is what let the cast
+  change across a jump. `scene_remix_from` is a SEPARATE axis from `scene_continuity` — that one
+  says what the prompt asks for, this one says where the pixels come from. Default `0` = the
+  previous shot (the action advances), but every forward link drifts further, so a shot returning
+  to the opening framing names shot 1: `[0, 0, 1, 0, 1]`. **Forward for continuity, back for
+  recall.** An impossible source (forward reference, failed shot) falls back to the previous shot
+  and says so in `timing_notes` rather than costing the clip. A cut is only remixed when the
+  sequence is chaining at all — `continuity="none"` chains nothing.
+- **A remix inherits its source's duration, and that is ACCEPTED, not worked around.** An earlier
+  version rendered a shot fresh to honour its `scene_seconds`; that throws away the only continuity
+  lever there is. So the video is **n × `seconds_each`** — 3 shots at 12s IS 36 seconds — and
+  varying `scene_seconds` under a remix mode produces ONE up-front `timing_notes` entry rather than
+  per-shot surprises after the money is spent.
+- **Pacing is fixed in the WRITING, not in the lengths** (`plan_shot_timing` →
+  `estimate_speech_seconds` + `_FILL_FLOOR`/`_FILL_CEILING`). Since the length is fixed, the two
+  reported failures are both authoring errors: `over` (dialogue overruns → cut off mid-sentence)
+  and `under` (dead air at the back of the shot). The target is a **band, not a number** — writing
+  to exactly the clip length is what breaks a sentence when the model delivers it slower than the
+  arithmetic predicts, so the margin IS the feature. Deterministic arithmetic, hence a tool rather
+  than prompt advice; the prompt's job is to say every cut lands on a clip boundary and a scene
+  change inside a clip is described in that shot's own prompt.
+- **Shots render ONE AT A TIME on ONE resource; the pool balances between runs, not within one.**
+  Shot N+1 may need to remix N or chain from its final frame, so it cannot start before N finishes,
+  and a job id only exists on the resource that created it — `create_clip_with_failover` is used for
+  shot 1 alone, and everything after it goes through `create_clip(resource, …)` on the pinned
+  resource. Never parallelise the shot loop or add mid-sequence failover; the round-robin cursor
+  advancing per run is what spreads load.
 - **A supplied image is a LOOK, not a paused video** (`from_supplied_image` in `build_clip_prompt`).
   The continuity wording tells Sora to *resume* from the frame; applied to a panel the operator
   chose, that asks it to continue an action that never happened. A supplied image wins over the
