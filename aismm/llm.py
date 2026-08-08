@@ -20,8 +20,10 @@ routes through it too) and return one shared ``OpenAIResponsesModel``.
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 
+import openai
 from agents import OpenAIResponsesModel, set_default_openai_client
 from openai import AsyncAzureOpenAI
 
@@ -30,6 +32,77 @@ from .config import settings
 logger = logging.getLogger("aismm.llm")
 
 _LLM_TIMEOUT = 600.0  # generous; video/image tools have their own timeouts
+
+_PROVIDER = "the AI model provider (Azure OpenAI / APIM)"
+_5XX = {500: "Internal Server Error", 502: "Bad Gateway",
+        503: "Service Unavailable", 504: "Gateway Timeout"}
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_body(exc: object) -> str:
+    """A short, tag-stripped snippet of an API error body.
+
+    Azure/APIM return a full HTML 500 page on a timeout ("<html>…500 - The
+    request timed out.…"); that whole blob otherwise lands verbatim in
+    ``Run.error`` and the console, which is what made the failure unreadable.
+    Strip the markup, collapse whitespace, and cap the length.
+    """
+    text = ""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            text = resp.text or ""
+        except Exception:  # noqa: BLE001 - body may be gone/undecodable
+            text = ""
+    if not text:
+        text = getattr(exc, "message", "") or str(exc)
+    text = _TAG_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return (text[:200] + "…") if len(text) > 200 else text
+
+
+def describe_model_error(exc: BaseException) -> str | None:
+    """Human-readable summary of a failure from the LLM provider.
+
+    Returns ``None`` when ``exc`` is not a recognizable model/transport error, so
+    the caller can fall back to ``str(exc)``. The point is to record WHAT went
+    wrong and WHETHER retrying helps — a 5xx/timeout is transient and upstream,
+    not something the run's content caused — instead of a raw HTML error page.
+    """
+    if isinstance(exc, openai.APITimeoutError):
+        return (f"{_PROVIDER} timed out before responding. This is a transient upstream "
+                "problem, not your instruction or content — retry the run.")
+    if isinstance(exc, openai.APIConnectionError):
+        return (f"Could not reach {_PROVIDER} (network/connection error): {exc}. "
+                "Check connectivity to the endpoint and retry the run.")
+    if isinstance(exc, openai.APIStatusError):
+        code = getattr(exc, "status_code", None)
+        body = _clean_body(exc)
+        tail = f" Provider said: {body}" if body else ""
+        if code == 429:
+            return (f"{_PROVIDER} rate-limited this run (HTTP 429). Wait for the quota to "
+                    f"reset, then retry.{tail}")
+        if code in _5XX:
+            return (f"{_PROVIDER} returned HTTP {code} ({_5XX[code]}). This is a transient "
+                    f"failure on their side — retry the run; regenerating media or editing "
+                    f"the instruction will not help.{tail}")
+        if code == 401:
+            return (f"{_PROVIDER} rejected the credentials (HTTP 401). Check the API key / "
+                    f"APIM subscription key and the deployment name.{tail}")
+        if code == 403:
+            return (f"{_PROVIDER} denied access (HTTP 403). The key may lack access to this "
+                    f"deployment/region.{tail}")
+        if code == 404:
+            return (f"{_PROVIDER} returned HTTP 404 — the model deployment name is likely "
+                    f"wrong for this endpoint.{tail}")
+        if code == 400:
+            return (f"{_PROVIDER} rejected the request as invalid (HTTP 400).{tail}")
+        return f"{_PROVIDER} returned HTTP {code}.{tail}"
+    if isinstance(exc, openai.APIError):
+        # Base class for anything above we didn't special-case (e.g. malformed
+        # streaming response). Still clearly a provider-side problem.
+        return f"{_PROVIDER} returned an error: {_clean_body(exc) or exc}"
+    return None
 
 
 def _build_azure_client() -> AsyncAzureOpenAI:

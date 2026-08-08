@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from . import cooldown, engagement_ledger, logging_setup, publish_ledger, tokens
 from .config import settings
 from .agent import run_for_account
+from .llm import describe_model_error
 from .assets import exists as asset_exists
 from .assets import kind_from_path
 from .models import (
@@ -374,13 +375,19 @@ def _run_one(instruction: Instruction, account: Account, store,
         store.update_run(run)
         return {"account_id": account.id, "status": "failed", "error": message}
     except Exception as exc:  # noqa: BLE001
-        logger.exception("RUN FAILED %s | %.1fs | instruction='%s' account=%s",
+        # An LLM-provider failure (Azure/APIM 5xx, timeout, 429, bad key) arrives
+        # here as an openai.APIError whose str() is a raw HTML error page. Turn it
+        # into a message that says what broke and whether a retry helps, and keep
+        # the full traceback in the console (logger.exception) for diagnosis.
+        message = describe_model_error(exc) or str(exc)
+        logger.exception("RUN FAILED %s | %.1fs | instruction='%s' account=%s | %s",
                          run.id[:8], time.monotonic() - started, instruction.name,
-                         account.handle or account.external_id)
+                         account.handle or account.external_id, message)
         run.status = RunStatus.failed
-        run.error = str(exc)
+        run.error = message
+        run.log = (run.log + "\nFAILED: " + message).strip()
         store.update_run(run)
-        return {"account_id": account.id, "status": "failed", "error": str(exc)}
+        return {"account_id": account.id, "status": "failed", "error": message}
     finally:
         store.release_lock(lock_key)
         logging_setup.current_run_id.reset(log_token)
