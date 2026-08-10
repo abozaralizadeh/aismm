@@ -36,6 +36,7 @@ from ..platforms.registry import get_platform
 from ..schedules import describe as describe_schedule
 from ..auth import oauth
 from . import sso
+from .metrics_display import format_metrics as _format_metrics
 from .platform_icons import icon as platform_icon
 from .. import orchestrator, scheduler
 from ..store import get_store
@@ -212,6 +213,11 @@ def create_app() -> Flask:
     @app.template_global("platform_icon")
     def _platform_icon(name, size=14):
         return platform_icon(name, size=size)
+
+    @app.template_global("format_metrics")
+    def _format_metrics_global(metrics):
+        """A run's counters as ordered ``{label, value}`` pills for the templates."""
+        return _format_metrics(metrics or {})
 
     @app.template_global("media_url")
     def _media_url(asset_path, download=False):
@@ -845,6 +851,7 @@ def create_app() -> Flask:
         instr.schedule_start_at = _parse_datetime_local(f.get("schedule_start_at", ""))
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.task_type = InstructionTask(f.get("task_type", "publish"))
+        instr.engagement_targets = f.get("engagement_targets", "").strip()
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
@@ -1074,6 +1081,36 @@ def create_app() -> Flask:
             asset_url=public_url(run.asset_path) if run.asset_path else "",
         )
 
+    @app.route("/runs/<run_id>/refresh-metrics", methods=["POST"])
+    def refresh_run_metrics(run_id):
+        """Poll this one post's counters now, instead of waiting for the daily sweep.
+
+        One API call, operator-initiated — deliberately per-run rather than the
+        whole sweep, because some platforms (X) bill per call. Runs synchronously:
+        it is a single quick request and the operator is watching for the number.
+        """
+        store = get_store()
+        run = _owned(store.get_run(run_id))
+        if not run.external_id:
+            flash("This run has no published post id to check — nothing to refresh.",
+                  "error")
+            return redirect(url_for("run_detail", run_id=run_id))
+        try:
+            metrics = orchestrator.refresh_run_metrics(run_id, store)
+        except Exception:  # noqa: BLE001 - surface the failure, never 500 the page
+            app.logger.exception("Manual metrics refresh for run %s failed", run_id[:8])
+            metrics = None
+        if metrics:
+            flash("Performance refreshed.", "success")
+        elif metrics == {}:
+            flash("Checked — the platform reported no counters for this post yet.",
+                  "success")
+        else:
+            flash("Could not read this post's performance — the platform has no "
+                  "metrics API, the post is gone, or the token/credits are exhausted. "
+                  "See the log.", "error")
+        return redirect(url_for("run_detail", run_id=run_id))
+
     @app.route("/runs/<run_id>/republish", methods=["POST"])
     def republish_run(run_id):
         """Send this run's existing media again — no agent, no regeneration.
@@ -1211,16 +1248,20 @@ TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
      ("web_search", "browse_page", "save_media", "describe_image")),
     ("Media", "Generating images and video.",
      ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
-    ("Instagram", "Reading the feed and handling comments. Ignored on other platforms.",
+    ("Instagram", "Reading the feed, comments and DMs. Ignored on other platforms.",
      ("instagram_recent_posts", "instagram_comments", "instagram_recent_comments",
-      "instagram_reply_to_comment", "instagram_moderate_comment", "instagram_insights",
+      "instagram_reply_to_comment", "instagram_dms", "instagram_reply_to_dm",
+      "instagram_moderate_comment", "instagram_insights",
       "instagram_publishing_limit", "instagram_profile", "instagram_mentions")),
-    ("X (Twitter)", "Reading the timeline and replying. Ignored on other platforms; "
+    ("X (Twitter)", "Reading the timeline, replying and DMs. Ignored on other platforms; "
                     "every X call spends pay-per-use API credits.",
      ("x_recent_posts", "x_mentions", "x_replies", "x_reply_to_post", "x_like_post",
-      "x_post_metrics", "x_profile", "x_delete_post")),
+      "x_dms", "x_reply_to_dm", "x_post_metrics", "x_profile", "x_delete_post")),
     ("YouTube", "Reading and replying to comment threads. Ignored on other platforms.",
      ("youtube_comments", "youtube_reply_to_comment")),
+    ("Reddit", "Finding and replying to submissions and private messages. "
+               "Ignored on other platforms.",
+     ("reddit_search_posts", "reddit_reply", "reddit_dms", "reddit_reply_to_dm")),
 ]
 
 
@@ -1401,6 +1442,7 @@ def _next_run_info(instruction, store) -> dict:
 _ACTIVITY_DAYS = 14
 _INSIGHT_WINDOW_DAYS = 30
 _RECENT_RUN_SAMPLE = 500
+_PERFORMANCE_TOP = 5
 
 
 def _as_utc(value):
@@ -1501,6 +1543,38 @@ def _overview_insights(store, scope) -> dict:
                "account": acct_by_id.get(run.account_id)}
               for run in runs[:6]]
 
+    # Performance: the feedback loop made visible. The daily metrics sweep
+    # (orchestrator.refresh_metrics) records likes/views/comments on each live
+    # post; those numbers otherwise only appear per-run on /runs. Here they're
+    # summed across the window and the best posts surfaced, so the whole account's
+    # reach reads at a glance. Only countable integers are summed — a ratio
+    # (upvote_ratio) or a bool can't be added up, so it's left to the per-post pills.
+    published_runs = store.recent_published_runs(since=window_start, workspace_id=scope)
+    perf_totals: dict[str, int] = {}
+    scored: list[tuple[int, "object"]] = []
+    for run in published_runs:
+        metrics = run.metrics
+        if not metrics:
+            continue
+        score = 0
+        for key, value in metrics.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            perf_totals[key] = perf_totals.get(key, 0) + value
+            score += value
+        scored.append((score, run))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    perf_top = [{"run": run,
+                 "instruction": instr_by_id.get(run.instruction_id),
+                 "account": acct_by_id.get(run.account_id),
+                 "pills": _format_metrics(run.metrics)}
+                for score, run in scored[:_PERFORMANCE_TOP] if score > 0]
+    performance = {
+        "pills": _format_metrics(perf_totals),
+        "posts_measured": len(scored),
+        "top": perf_top,
+    }
+
     # What fires next, soonest first (only enabled, scheduled instructions).
     upcoming = []
     for instruction in instructions:
@@ -1528,6 +1602,7 @@ def _overview_insights(store, scope) -> dict:
         "outcomes": outcomes,
         "outcome_total": outcome_total,
         "platforms": platforms,
+        "performance": performance,
         "recent": recent,
         "upcoming": upcoming,
         "totals": totals,

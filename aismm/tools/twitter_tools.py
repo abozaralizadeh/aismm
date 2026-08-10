@@ -42,6 +42,9 @@ logger = logging.getLogger("aismm.tools.twitter")
 # (not "mention" vs "reply") means the read tools' already_answered flag and the
 # reply tool's recorded fingerprint always line up, and dedup actually works.
 _X_TARGET = "tweet"
+# DMs are a separate target kind: the ledger keys on the inbound MESSAGE id, and
+# a "dm" id never collides with a "tweet" id even if the numbers coincide.
+_X_DM = "dm"
 
 
 def _guard(state: dict) -> bool:
@@ -167,6 +170,51 @@ def _make_replies(state: dict):
     return x_replies
 
 
+def _make_search(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def x_search_posts(query: str = "", limit: int = 10) -> dict:
+        """Find OTHER people's recent posts to engage — the OUTREACH search.
+
+        Searches X's recent posts for ORIGINAL tweets (no retweets, no replies)
+        matching your query, so you can reply to or like strangers' posts and grow
+        the account's reach. Leave ``query`` empty to search the instruction's
+        configured outreach targets (its keywords + #hashtags); pass one to search
+        something specific you inferred from the brief. Items flagged
+        ``already_answered`` have already been engaged by this account — skip them.
+        Then reply with ``x_reply_to_post`` or acknowledge with ``x_like_post``.
+
+        Args:
+            query: X recent-search query. Empty = use the instruction's targets.
+            limit: How many posts to return (10–100, newest first).
+        """
+        q = (query or "").strip()
+        if not q:
+            from ..targets import x_query
+
+            instruction = state.get("instruction")
+            targets = instruction.parsed_targets if instruction is not None else None
+            q = x_query(targets) if targets else ""
+        if not q:
+            return {"error": "no_query",
+                    "message": ("No query given and the instruction has no outreach "
+                                "targets set. Infer a keyword or #hashtag from the brief "
+                                "and pass it as `query`.")}
+
+        async def call(platform, account, token):
+            posts = await platform.search_content(token, account, query=q, limit=limit)
+            for p in posts:
+                p["already_answered"] = engagement_ledger.answered(
+                    account, _X_TARGET, p.get("id"))
+            return {"query": q, "count": len(posts), "posts": posts}
+
+        return await _with_context(state, call)
+
+    return x_search_posts
+
+
 def _make_reply(state: dict):
     if not _guard(state):
         return None
@@ -196,6 +244,73 @@ def _make_reply(state: dict):
             target_excerpt=replying_to)
 
     return x_reply_to_post
+
+
+def _make_dms(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def x_dms(limit: int = 25) -> dict:
+        """Recent INBOUND direct messages to this account — private messages to answer.
+
+        The private counterpart of ``x_replies``: read new DMs and answer the ones
+        that need it with ``x_reply_to_dm``. Each item carries the ``id`` (the
+        message id — pass it back as ``message_id``), ``conversation_id`` (pass it
+        back as ``conversation_id`` so the reply lands in the same thread),
+        ``sender`` and ``text``. Items flagged ``already_answered`` have been
+        handled — skip them. Needs the ``dm.read`` scope; an account connected
+        before it was added must be reconnected. Best-effort: an empty list can
+        mean "no new DMs" or "the scope is missing".
+
+        Args:
+            limit: How many messages to return (1–100, newest first).
+        """
+        async def call(platform, account, token):
+            dms = await platform.list_dms(token, account, limit=limit)
+            for d in dms:
+                d["already_answered"] = engagement_ledger.answered(
+                    account, _X_DM, d.get("id"))
+            return {"count": len(dms), "dms": dms}
+
+        return await _with_context(state, call)
+
+    return x_dms
+
+
+def _make_reply_to_dm(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def x_reply_to_dm(message_id: str, conversation_id: str, text: str,
+                            replying_to: str = "") -> dict:
+        """Answer a direct message, in the account's voice.
+
+        The reply goes out through the instruction's publish mode, exactly like a
+        public reply: ``dry_run`` stages a preview, ``approval`` queues it for a
+        human, only ``live`` sends it now. A DM already answered (or already queued)
+        comes back "skipped" — move on. Be brief and helpful, never promise anything
+        on the account's behalf, and never send unsolicited DMs — only answer what
+        arrived.
+
+        Args:
+            message_id: The inbound message's ``id`` (from ``x_dms``) — what is
+                deduped so the same DM is never answered twice.
+            conversation_id: The message's ``conversation_id`` (from ``x_dms``) —
+                where the reply is delivered.
+            text: The reply to send.
+            replying_to: The text of the DM you are answering, shown to a human
+                reviewing the queue.
+        """
+        if not _guard(state):
+            return {"error": "not_available",
+                    "message": "This run does not target a connected X account."}
+        return await engagement.perform_reply(
+            state, target_type=_X_DM, target_id=message_id, text=text,
+            reply_to=conversation_id, target_excerpt=replying_to)
+
+    return x_reply_to_dm
 
 
 def _make_like(state: dict):
@@ -296,7 +411,10 @@ def _make_delete_post(state: dict):
 register_tool("x_recent_posts", _make_recent_posts)
 register_tool("x_mentions", _make_mentions)
 register_tool("x_replies", _make_replies)
+register_tool("x_search_posts", _make_search)
 register_tool("x_reply_to_post", _make_reply)
+register_tool("x_dms", _make_dms)
+register_tool("x_reply_to_dm", _make_reply_to_dm)
 register_tool("x_like_post", _make_like)
 register_tool("x_post_metrics", _make_post_metrics)
 register_tool("x_profile", _make_profile)

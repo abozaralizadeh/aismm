@@ -18,6 +18,10 @@ YOUR TOOLS
                      next) plus the OPERATOR NOTE, a standing correction from the
                      human. Read this SECOND, before deciding anything.
 - update_memory    : record where you got to and what the next run should do.
+- recent_performance : how THIS account's recent posts performed (likes, views,
+                     comments, …). A summary is already at the top of this message;
+                     call this for the full detail. Lean into the angles and
+                     formats that got traction. Counts refresh about once a day.
 - web_search       : research current, real, timely topics/trends before you write.
                      Prefer fresh, specific, verifiable angles over generic filler.
 - browse_page      : open a specific web page in a real browser and read its text,
@@ -322,7 +326,65 @@ def _context_blocks(instruction, state, files) -> tuple[str, str, str]:
     return attachments, continuity, operator
 
 
-def build_kickoff(*, account, instruction, platform_caps, state=None, files=None) -> str:
+def _format_metrics(metrics: dict) -> str:
+    """One post's counters as ``'1,200 views · 85 likes · ratio 0.95'``.
+
+    Renders whatever keys the platform recorded — the names differ (X has
+    impressions/reposts, Reddit a score and an upvote_ratio) — so the formatter
+    stays generic: ints get thousands separators, floats two decimals.
+    """
+    parts = []
+    for key, value in (metrics or {}).items():
+        label = key.replace("_", " ")
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            parts.append(f"{value:,} {label}")
+        elif isinstance(value, float):
+            parts.append(f"{label} {value:.2f}")
+        else:
+            parts.append(f"{label} {value}")
+    return " · ".join(parts)
+
+
+def build_performance_block(runs) -> str:
+    """A compact "how your last posts did" section, or "" when nothing has metrics.
+
+    Feeds the performance loop back to the agent from turn one: it sees which of
+    its own recent posts got traction and can lean into what works. Only runs that
+    actually carry polled counters are shown (a just-published post may have none
+    yet — metrics are refreshed about once a day).
+    """
+    lines = []
+    for run in runs:
+        summary = _format_metrics(getattr(run, "metrics", {}) or {})
+        if not summary:
+            continue
+        created = getattr(run, "created_at", None)
+        when = ""
+        if created is not None:
+            try:
+                when = created.strftime("%Y-%m-%d") + ": "
+            except Exception:  # noqa: BLE001 - a bad timestamp must not break the kickoff
+                when = ""
+        collapsed = " ".join((getattr(run, "caption", "") or "").split())
+        snippet = collapsed[:80] + ("…" if len(collapsed) > 80 else "")
+        line = f"- {when}{summary}"
+        if snippet:
+            line += f' — "{snippet}"'
+        lines.append(line)
+    if not lines:
+        return ""
+    return (
+        "RECENT PERFORMANCE (how your last posts on this account did — lean into the "
+        "angles and formats that got traction, learn from the ones that did not; "
+        "counts are approximate and refreshed about once a day):\n"
+        + "\n".join(lines) + "\n\n"
+    )
+
+
+def build_kickoff(*, account, instruction, platform_caps, state=None, files=None,
+                  performance="") -> str:
     """Compose the first user turn from the instruction + account context."""
     attachments, continuity, operator = _context_blocks(instruction, state, files)
 
@@ -331,6 +393,7 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
         f"{attachments}"
         f"{continuity}"
         f"{operator}"
+        f"{performance}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n"
         f"MEDIA PREFERENCE: {instruction.media_pref.value}.\n"
@@ -344,9 +407,10 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
 
 ENGAGEMENT_INSTRUCTIONS = """\
 You are the AI Social Media Manager for a single social account, running an
-ENGAGEMENT shift: your job this run is to read the account's NEW comments and
-mentions and reply to the ones worth answering, in the account's voice. You are
-NOT creating or publishing a post this run — there is no publish tool.
+ENGAGEMENT shift: your job this run is to read the account's NEW comments,
+mentions AND direct messages and reply to the ones worth answering, in the
+account's voice. You are NOT creating or publishing a post this run — there is no
+publish tool.
 
 WHAT YOU HAVE
 - get_context      : the brief (the account's persona and how it should sound),
@@ -360,6 +424,12 @@ WHAT YOU HAVE
                      shift continues instead of repeating.
 - the platform's READ tools (comments/replies/mentions) and its REPLY tool —
                      listed below for the account you are on.
+- DM tools, on the platforms that have a messaging API (X, Instagram, Reddit):
+                     a read tool for INBOUND direct messages and a reply tool for
+                     them. They appear below only when this account has them; when
+                     they do, answer new DMs the same shift as comments. Only ever
+                     answer a message someone SENT you — never start an unsolicited
+                     DM.
 - finish_engagement: end the shift. Call this EXACTLY ONCE at the end — including
                      when there was nothing new to answer, which is fine.
 - report_failure   : end WITHOUT replying, only when something stopped you from
@@ -387,12 +457,16 @@ HOW TO WORK
    comment on a reel are on different media. Read across your recent posts AND
    reels, not just the newest one: on Instagram, instagram_recent_comments sweeps
    them all in one call; on X, x_replies covers replies under your recent posts.
+   If a DM read tool is available, list INBOUND direct messages too — they are
+   private and often the ones most worth a prompt, personal answer.
 3. For EACH item worth a reply: write a brief, helpful, on-brand response and call
-   the reply tool. Do not stop after the first one — answer every new comment
-   across every post this run. Skip anything already answered/queued, anything
-   that needs no reply (a bare "nice!"), and anything you should not engage below.
-4. When you have worked through EVERY new item on EVERY recent post, update_memory
-   with what you did, then call finish_engagement.
+   the matching reply tool (the comment reply tool for a comment, the DM reply
+   tool for a message). Do not stop after the first one — answer every new comment
+   across every post, and every new DM, this run. Skip anything already
+   answered/queued, anything that needs no reply (a bare "nice!"), and anything
+   you should not engage below.
+4. When you have worked through EVERY new comment on EVERY recent post AND every
+   new DM, update_memory with what you did, then call finish_engagement.
 
 VOICE AND JUDGEMENT
 - Be brief, warm, and genuinely helpful. Answer the actual question.
@@ -428,8 +502,122 @@ def build_engagement_kickoff(*, account, instruction, platform_caps, state=None,
         f"{operator}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n\n"
-        f"Respond to new comments and mentions now. Start by calling get_context, then "
-        f"read_memory, then list the account's recent comments/mentions with the read tools. "
+        f"Respond to new comments, mentions and direct messages now. Start by calling "
+        f"get_context, then read_memory, then list the account's recent comments/mentions "
+        f"(and DMs, if a DM tool is available) with the read tools. "
+        f"Finish with finish_engagement."
+    )
+
+
+OUTREACH_INSTRUCTIONS = """\
+You are the AI Social Media Manager for a single social account, running an
+OUTREACH shift. This is the OUTBOUND mirror of an engagement shift: instead of
+answering people who came to YOUR account, you go and FIND other people's recent
+posts/comments on the topics this account cares about, and engage them there — a
+thoughtful reply or a like — to grow the account's reach. You are NOT creating or
+publishing a post this run; there is no publish tool.
+
+WHERE TO LOOK
+- The instruction may give you explicit TARGETS (keywords, #hashtags, subreddits,
+  @accounts) — they are at the top of this message. Search those first.
+- If there are no explicit targets, INFER them from the brief: what would this
+  account's ideal follower be searching for or talking about? Pick a few concrete
+  keywords/hashtags and search those.
+- Use the platform's SEARCH/READ tools (listed below for the account you are on)
+  to find recent, relevant posts from OTHER accounts. Prefer fresh items with real
+  engagement over old or dead threads.
+
+WHAT YOU HAVE
+- get_context      : the brief (the account's persona and how it should sound),
+                     the target account, and the platform's rules.
+- read_memory      : what YOU noted on previous outreach runs (whom you engaged,
+                     which searches worked, tone that landed) plus the OPERATOR
+                     NOTE, a standing instruction from the human. Read it first.
+- update_memory    : record whom/what you engaged and which searches were fruitful,
+                     so the next shift widens the net instead of repeating.
+- the platform's SEARCH/READ tools and its REPLY and LIKE tools — listed below for
+                     the account you are on.
+- finish_engagement: end the shift. Call this EXACTLY ONCE at the end — including
+                     when you found nothing worth engaging, which is fine.
+- report_failure   : end WITHOUT engaging, only when something stopped you from
+                     doing the job at all (search would not run, every read was
+                     refused). Not for "nothing good to engage" — that is
+                     finish_engagement.
+
+HOW YOUR ACTIONS GO OUT — YOU DO NOT CONTROL THIS
+Every reply is gated the same way a post is, by the instruction's publish mode:
+dry-run stages a preview, approval queues it for a human, live sends it now. You
+just call the reply tool with your text; the gate decides. A reply tool that
+returns "staged"/"pending_approval" DID its job — do not try to send it another
+way. A LIKE is immediate and not gated.
+
+DO NOT ENGAGE THE SAME THING TWICE
+This shift runs on a schedule and will surface the same posts again. A reply tool
+will tell you if a target was ALREADY engaged (or already queued) — when it does,
+skip that item. The search/read tools flag already-engaged items too; trust the
+flag and move on to something new.
+
+HOW TO WORK
+1. get_context, then read_memory.
+2. Work out your targets (explicit, else inferred from the brief) and SEARCH for
+   recent, relevant posts from other accounts. Cast a reasonable net; you do not
+   have to engage everything you find.
+3. For the BEST few — genuinely relevant, where this account has something useful
+   or interesting to add — write a brief, on-brand reply and call the reply tool.
+   A LIKE alone is the right move for something good you have nothing to add to.
+   Skip anything already engaged/queued, anything off-topic, and anything you
+   should not engage below. QUALITY OVER QUANTITY: a handful of genuine replies
+   beats spraying generic ones, which reads as spam and can get the account
+   limited.
+4. When you have engaged the worthwhile items, update_memory with what you did and
+   which searches worked, then call finish_engagement.
+
+VOICE AND JUDGEMENT
+- Add genuine value: answer a question, share a relevant experience, be generous.
+  You are a guest on someone else's post — never hijack it to advertise.
+- NEVER argue, moralise, or take bait. Do not engage harassment, trolling, or
+  obvious spam; just move on.
+- Do not invent facts, prices, dates, or promises. Do not impersonate a human or
+  hide that this is the account speaking.
+- Match the other person's language where you reasonably can.
+- No mass-identical replies, no follow-for-follow begging, no engagement bait.
+  Stay truthful and on-brand — you represent a real account to real people.
+
+RULES
+- No new post this run. There is no publish tool; do not try to create media.
+- End every run with EXACTLY ONE of finish_engagement or report_failure.
+- Engage each target at most once, ever. Respect the already-engaged flags.
+- Always update_memory before finishing, even when you engaged nothing.
+"""
+
+
+def build_outreach_kickoff(*, account, instruction, platform_caps, state=None,
+                           files=None) -> str:
+    """Compose the first user turn for an OUTREACH run."""
+    attachments, continuity, operator = _context_blocks(instruction, state, files)
+
+    targets = instruction.parsed_targets
+    if targets:
+        targets_block = (
+            f"OUTREACH TARGETS (search these first — the operator chose them):\n"
+            f"{targets.describe()}\n\n"
+        )
+    else:
+        targets_block = (
+            "OUTREACH TARGETS: none set — INFER a few concrete keywords/hashtags "
+            "from the brief and search those.\n\n"
+        )
+
+    return (
+        f"BRIEF (the account's persona and voice — engage in it):\n{instruction.brief}\n\n"
+        f"{attachments}"
+        f"{targets_block}"
+        f"{continuity}"
+        f"{operator}"
+        f"TARGET ACCOUNT: {account.handle or account.external_id} "
+        f"on {account.platform.value}.\n\n"
+        f"Find other people's recent, relevant posts and engage the best of them now. "
+        f"Start by calling get_context, then read_memory, then search with the read tools. "
         f"Finish with finish_engagement."
     )
 
@@ -440,8 +628,8 @@ This run you decide, YOURSELF, which of two jobs to do — and do exactly ONE of
 them:
 
   (A) PUBLISH — research, create media, and publish one new post; or
-  (B) ENGAGE  — read the account's NEW comments and mentions and reply to the ones
-      worth answering, in the account's voice.
+  (B) ENGAGE  — read the account's NEW comments, mentions and direct messages and
+      reply to the ones worth answering, in the account's voice.
 
 You have BOTH tool sets and BOTH endings this run: `publish` ends a publish job,
 `finish_engagement` ends an engagement job, and `report_failure` is the shared
@@ -454,10 +642,11 @@ HOW TO DECIDE (do this first, every run)
    run, do that.
 2. If the brief describes only one kind of work, do that kind.
 3. Otherwise look at the account: list recent comments/mentions with the read
-   tools. If there are NEW, unanswered comments or mentions from real people worth
-   a reply → ENGAGE. If there is nothing new to answer → PUBLISH the next thing the
-   brief calls for. When genuinely balanced, prefer answering real people who are
-   waiting over posting again.
+   tools, and inbound direct messages too where a DM tool is available. If there
+   are NEW, unanswered comments, mentions or DMs from real people worth a reply →
+   ENGAGE. If there is nothing new to answer → PUBLISH the next thing the brief
+   calls for. When genuinely balanced, prefer answering real people who are waiting
+   over posting again — an unanswered DM especially.
 
 ONCE YOU HAVE CHOSEN, follow that job's discipline:
 
@@ -465,7 +654,9 @@ IF YOU PUBLISH
 - One post per run; end with `publish` exactly once (the dry-run/approval/live
   gate is the human's, applied for you — just call publish).
 - Ground the post in something real and current (web_search, or browse_page when
-  the brief names a site). Do not invent facts. For video you are the director:
+  the brief names a site). Do not invent facts. A RECENT PERFORMANCE summary (if
+  any) is at the top of this message; recent_performance gives the full detail —
+  lean into the angles and formats that got traction. For video you are the director:
   write the shot list and the cuts first, time the shots from the dialogue with
   plan_shot_timing, and hold consistency with a repeated `style` plus
   continuity="remix" — Sora refuses any reference image showing a face.
@@ -483,6 +674,9 @@ IF YOU ENGAGE
   comments live per-post. Instagram: instagram_recent_comments sweeps them all in
   one call; X: x_replies covers replies under your recent posts. Work through every
   new item this run; do not stop after the first.
+- Answer new DIRECT MESSAGES too, where a DM read/reply tool is available (X,
+  Instagram, Reddit). Only ever answer a message someone sent you — never open an
+  unsolicited DM — and use the DM reply tool for those, not the comment one.
 - Every reply is gated the same way a post is (dry-run previews, approval queues,
   live sends). Just call the reply tool with your text; the gate decides. A reply
   that comes back "staged"/"pending_approval" DID its job.
@@ -506,7 +700,8 @@ ALWAYS
 """
 
 
-def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files=None) -> str:
+def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files=None,
+                       performance="") -> str:
     """Compose the first user turn for an AUTO run (agent decides publish vs engage)."""
     attachments, continuity, operator = _context_blocks(instruction, state, files)
 
@@ -515,6 +710,7 @@ def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files
         f"{attachments}"
         f"{continuity}"
         f"{operator}"
+        f"{performance}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n"
         f"MEDIA PREFERENCE: {instruction.media_pref.value}.\n"

@@ -25,6 +25,7 @@ Two rules this module follows, both learned the hard way:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -200,6 +201,14 @@ class Instagram(SocialPlatform):
         max_carousel_items=10,
         supports_comments=True,
         supports_insights=True,
+        # like_count/comments_count on the media object drive the feedback loop;
+        # reach/saved/shares come from insights as a best-effort top-up.
+        supports_metrics=True,
+        # The Instagram Messaging API (GET /{ig-user-id}/conversations, POST
+        # /{ig-user-id}/messages) reads and answers DMs — needs the App-Review
+        # gated `instagram_manage_messages` scope, kept OPTIONAL below so an app
+        # without it can still connect for publishing.
+        supports_dms=True,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
     token_endpoint = f"{GRAPH}/oauth/access_token"
@@ -226,6 +235,7 @@ class Instagram(SocialPlatform):
     OPTIONAL_SCOPES = (
         "instagram_manage_comments",   # reply/hide/delete comments
         "instagram_manage_insights",   # media + account metrics
+        "instagram_manage_messages",   # read + answer DMs
     )
     DEFAULT_SCOPES = REQUIRED_SCOPES + OPTIONAL_SCOPES
 
@@ -796,17 +806,85 @@ class Instagram(SocialPlatform):
         return await self._graph_post(access_token, f"{comment_id}/replies",
                                       {"message": message})
 
+    MESSAGE_FIELDS = "id,created_time,from,message"
+
+    async def list_dms(self, access_token: str, account: Account, *,
+                       limit: int = 25) -> list[dict]:
+        """Recent INBOUND direct messages awaiting a reply.
+
+        ``GET /{ig-user-id}/conversations?platform=instagram`` lists conversations,
+        and nesting ``messages{...}`` pulls each thread's recent messages in the
+        same call. We keep only messages whose ``from.id`` is NOT this account
+        (inbound), so the agent never answers its own outbound message. ``id`` is
+        the message id the ledger dedupes on; ``conversation_id`` is the sender's
+        IGSID, which is the RECIPIENT a reply is sent to (``POST /{ig-user-id}/
+        messages`` addresses the person, not a thread id). Needs the
+        ``instagram_manage_messages`` scope. Best-effort: a failure returns ``[]``.
+        """
+        try:
+            payload = await self._graph_get(
+                access_token, f"{account.external_id}/conversations",
+                {"platform": "instagram",
+                 "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
+                 "limit": max(1, min(limit, 50))})
+        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
+            logger.warning("Instagram DM read failed: %s", exc)
+            return []
+        me = str(account.external_id or "")
+        items: list[dict] = []
+        for convo in payload.get("data", []) or []:
+            for m in ((convo.get("messages") or {}).get("data")) or []:
+                frm = m.get("from") or {}
+                sender_id = str(frm.get("id") or "")
+                if not sender_id or (me and sender_id == me):   # skip our own outbound
+                    continue
+                items.append({
+                    "id": str(m.get("id") or ""),
+                    "conversation_id": sender_id,       # reply is addressed to the sender IGSID
+                    "sender": frm.get("username", ""),
+                    "sender_id": sender_id,
+                    "text": (m.get("message") or "")[:1000],
+                    "created_at": m.get("created_time"),
+                })
+        items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+        return items[:limit]
+
+    async def send_dm(self, access_token: str, account: Account, *,
+                      recipient_id: str, text: str) -> dict:
+        """Send a direct message to a user. Sends IMMEDIATELY.
+
+        ``POST /{ig-user-id}/messages`` with a ``recipient.id`` (the sender's IGSID
+        from :meth:`list_dms`) and a ``message.text``. Graph wants these as JSON
+        strings in the form body. Needs the ``instagram_manage_messages`` scope,
+        and Instagram only lets you message a user who messaged you first, within
+        the platform's standard messaging window.
+        """
+        return await self._graph_post(
+            access_token, f"{account.external_id}/messages",
+            {"recipient": json.dumps({"id": recipient_id}),
+             "message": json.dumps({"text": text})})
+
     async def reply_to_target(self, access_token: str, account: Account, *,
-                              target_type: str, target_id: str, text: str) -> dict:
-        """Reply to a comment (the mode-gated engagement path).
+                              target_type: str, target_id: str, text: str,
+                              reply_to: str = "") -> dict:
+        """Reply to a comment, or answer a DM (the mode-gated engagement path).
 
         Instagram replies live under a COMMENT, so ``comment`` and ``reply``
-        targets both go to ``reply_to_comment``. A ``mention`` is a media tag, not
-        a comment thread, and has no reply endpoint — refused rather than pretended.
-        Graph does not hand back a permalink for a reply, so ``url`` is empty and
-        the ledger keys on the id.
+        targets both go to ``reply_to_comment``. A ``dm`` is sent to the person:
+        ``reply_to`` carries the sender's IGSID from :meth:`list_dms` (``target_id``
+        is the inbound message id the ledger dedupes on, not a send destination). A
+        ``mention`` is a media tag, not a thread, and has no reply endpoint —
+        refused rather than pretended. Graph hands back no permalink for either, so
+        ``url`` is empty and the ledger keys on the id.
         """
-        if (target_type or "").lower() not in {"comment", "reply"}:
+        kind = (target_type or "").lower()
+        if kind == "dm":
+            if not reply_to:
+                raise RuntimeError(
+                    "Instagram needs the recipient's id to answer a DM — none was given.")
+            result = await self.send_dm(access_token, account, recipient_id=reply_to, text=text)
+            return {"id": str(result.get("message_id") or ""), "url": ""}
+        if kind not in {"comment", "reply"}:
             raise RuntimeError(
                 f"Instagram can only reply to a comment here, not a {target_type}.")
         result = await self.reply_to_comment(access_token, target_id, text)
@@ -832,6 +910,42 @@ class Instagram(SocialPlatform):
         payload = await self._graph_get(access_token, f"{media_id}/insights", {
             "metric": metrics or self.DEFAULT_MEDIA_METRICS})
         return payload.get("data", [])
+
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """Normalized per-post counters for the performance feedback loop.
+
+        Two sources, layered by reliability. ``like_count`` and ``comments_count``
+        are plain fields on the media object and stable across API versions, so
+        they are read first and are the metrics we count on. ``reach``, ``saved``
+        and ``shares`` come from the insights endpoint, whose metric names CHURN
+        per version and 400 on some media types — so that call is best-effort and
+        its failure only means those extra keys are missing, never that the whole
+        read fails. Returns ``None`` only when even the base fields are unreadable.
+        """
+        if not external_id:
+            return None
+        try:
+            fields = await self._graph_get(access_token, external_id,
+                                           {"fields": "like_count,comments_count"})
+        except Exception as exc:  # noqa: BLE001 - one bad post must not stop the sweep
+            logger.warning("Instagram metrics for %s failed: %s", external_id, exc)
+            return None
+        metrics = {
+            "likes": fields.get("like_count", 0),
+            "comments": fields.get("comments_count", 0),
+        }
+        try:
+            for row in await self.media_insights(access_token, external_id):
+                name = row.get("name", "")
+                values = row.get("values") or [{}]
+                value = values[0].get("value") if values else None
+                if name in ("reach", "saved", "shares") and value is not None:
+                    metrics[name if name != "saved" else "saves"] = value
+        except Exception as exc:  # noqa: BLE001 - insights are the optional top-up
+            logger.info("Instagram insights for %s unavailable (%s); likes/comments only",
+                        external_id, exc)
+        return metrics
 
     async def account_insights(self, access_token: str, account: Account, *,
                                metrics: str = "", period: str = "day") -> list[dict]:

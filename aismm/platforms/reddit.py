@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import re
+from datetime import datetime, timezone
 
 import httpx
 
@@ -90,10 +92,23 @@ class Reddit(SocialPlatform):
         notes="Posts to a subreddit (set one per account; defaults to your u_ profile). "
               "First line of the caption is the title (<=300 chars); the rest is the body. "
               "Single image or self/text posts.",
+        # A submission's score/comment count/upvote ratio are public via
+        # /api/info — the feedback loop reads them per post.
+        supports_metrics=True,
+        # Reddit is a natural OUTREACH surface: /search and /r/{sub}/new find
+        # other people's submissions by keyword/subreddit, and /api/comment
+        # replies to them. Both the existing `read` and `submit` scopes already
+        # cover this, so no reconnect is needed to turn it on.
+        supports_search=True,
+        supports_comments=True,
+        # /message/inbox reads private messages and /api/comment answers them —
+        # both need the `privatemessages` scope below, so an account connected
+        # before it was added must be reconnected.
+        supports_dms=True,
     )
     auth_endpoint = f"{WWW}/api/v1/authorize"
     token_endpoint = f"{WWW}/api/v1/access_token"
-    scopes = ["identity", "submit", "read"]
+    scopes = ["identity", "submit", "read", "privatemessages"]
     token_auth_style = "basic"          # client id/secret as HTTP Basic
     scope_sep = " "
     # Without duration=permanent Reddit issues NO refresh token and the access
@@ -196,6 +211,36 @@ class Reddit(SocialPlatform):
             raise RuntimeError(f"Reddit rejected the post: {detail}")
         return payload.get("data", {}) or {}
 
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """Normalized score/comment/upvote-ratio for one submission.
+
+        ``/api/info?id=t3_<id>`` returns the listing wrapper; the submission's
+        ``data`` carries ``score``, ``num_comments`` and ``upvote_ratio``. The
+        stored ``external_id`` is the bare id, so re-add the ``t3_`` fullname
+        prefix. Returns ``None`` on any failure so one bad post never stops a sweep.
+        """
+        if not external_id:
+            return None
+        fullname = external_id if external_id.startswith("t3_") else f"t3_{external_id}"
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{OAUTH}/api/info",
+                                     params={"id": fullname}, headers=_headers(access_token))
+                r.raise_for_status()
+                children = (r.json().get("data") or {}).get("children") or []
+        except Exception as exc:  # noqa: BLE001 - one bad post must not stop the sweep
+            logger.warning("Reddit metrics for %s failed: %s", external_id, exc)
+            return None
+        if not children:
+            return {}
+        data = children[0].get("data") or {}
+        return {
+            "score": data.get("score", 0),
+            "comments": data.get("num_comments", 0),
+            "upvote_ratio": data.get("upvote_ratio", 0),
+        }
+
     async def _upload_asset(self, client, token, path) -> str:
         """Lease an S3 slot, upload the bytes, return the object URL for submit."""
         data = read_bytes(path)
@@ -224,6 +269,170 @@ class Reddit(SocialPlatform):
         except httpx.HTTPStatusError as exc:
             _raise(exc)
         return f"{action}/{upload_fields['key']}"
+
+    # ------------------------------------------------------------------ #
+    # Outreach — find other people's submissions and comment on them
+    # ------------------------------------------------------------------ #
+    async def search_content(self, access_token: str, account: Account, *,
+                             query: str, limit: int = 10, subreddit: str = "") -> list[dict]:
+        """Recent submissions from OTHER redditors to engage — the outreach read.
+
+        Three shapes, picked by what the tool passes:
+
+        * ``subreddit`` + ``query`` -> ``/r/{sub}/search`` restricted to that sub;
+        * ``subreddit`` only        -> ``/r/{sub}/new`` (the sub's latest posts);
+        * ``query`` only            -> a site-wide ``/search`` for links.
+
+        Sorted newest-first, self-posts and NSFW submissions dropped (an outreach
+        bot should never auto-reply under either). Returns normalized items whose
+        ``id`` is the ``t3_`` fullname to pass straight to :meth:`reply_to_target`.
+        Best-effort: a failed search returns ``[]`` rather than killing the run.
+        """
+        sub = (subreddit or "").removeprefix("/r/").removeprefix("r/").strip("/")
+        q = (query or "").strip()
+        n = max(1, min(limit, 100))
+        if sub and q:
+            path, params = f"r/{sub}/search", {
+                "q": q, "restrict_sr": "1", "sort": "new", "limit": n, "type": "link"}
+        elif sub:
+            path, params = f"r/{sub}/new", {"limit": n}
+        elif q:
+            path, params = "search", {"q": q, "sort": "new", "limit": n, "type": "link"}
+        else:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{OAUTH}/{path}", params=params,
+                                     headers=_headers(access_token))
+                r.raise_for_status()
+                children = (r.json().get("data") or {}).get("children") or []
+        except Exception as exc:  # noqa: BLE001 - outreach search is best-effort
+            logger.warning("Reddit search (%s) failed: %s", path, exc)
+            return []
+        me = (account.handle or "").lstrip("@").lower()
+        items: list[dict] = []
+        for child in children:
+            data = child.get("data") or {}
+            if child.get("kind") != "t3":       # only submissions here
+                continue
+            if data.get("over_18"):             # never auto-engage NSFW
+                continue
+            author = (data.get("author") or "").lstrip("u/")
+            if me and author.lower() == me:     # never engage our own post
+                continue
+            fullname = data.get("name") or (f"t3_{data.get('id')}" if data.get("id") else "")
+            if not fullname:
+                continue
+            title = data.get("title") or ""
+            body = (data.get("selftext") or "").strip()
+            text = f"{title}\n\n{body}".strip() if body else title
+            items.append({
+                "id": fullname,
+                "text": text[:600],
+                "url": "https://www.reddit.com" + (data.get("permalink") or ""),
+                "author": f"u/{author}" if author else "",
+                "posted_at": _epoch_iso(data.get("created_utc")),
+                "subreddit": f"r/{data.get('subreddit')}" if data.get("subreddit") else "",
+                "score": data.get("score"),
+                "comments": data.get("num_comments"),
+            })
+        return items[:limit]
+
+    async def list_dms(self, access_token: str, account: Account, *,
+                       limit: int = 25) -> list[dict]:
+        """Recent INBOUND private messages awaiting a reply.
+
+        ``GET /message/inbox`` returns a Listing of ``t4`` things (private
+        messages) newest first. Reddit also drops COMMENT replies into the same
+        inbox (``was_comment=True``); those belong to the comment-engagement path,
+        so only true PMs are kept here. Messages this account itself authored are
+        excluded so it never answers itself. ``id`` is the message fullname
+        (``t4_…``) — both the ledger dedupe key AND the ``thing_id`` a reply is
+        addressed to, so no separate conversation id is needed. Needs the
+        ``privatemessages`` scope. Best-effort: a failure returns ``[]``.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{OAUTH}/message/inbox",
+                                     params={"limit": max(1, min(limit, 100))},
+                                     headers=_headers(access_token))
+                r.raise_for_status()
+                children = (r.json().get("data") or {}).get("children") or []
+        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
+            logger.warning("Reddit inbox read failed: %s", exc)
+            return []
+        me = (account.handle or "").lstrip("@").lower().removeprefix("u/")
+        items: list[dict] = []
+        for child in children:
+            data = child.get("data") or {}
+            if child.get("kind") != "t4":       # only private messages, not comment replies
+                continue
+            if data.get("was_comment"):
+                continue
+            author = (data.get("author") or "").lstrip("u/")
+            if me and author.lower() == me:     # never answer our own message
+                continue
+            fullname = data.get("name") or (f"t4_{data.get('id')}" if data.get("id") else "")
+            if not fullname:
+                continue
+            subject = (data.get("subject") or "").strip()
+            body = (data.get("body") or "").strip()
+            text = f"{subject}\n\n{body}".strip() if subject else body
+            items.append({
+                "id": fullname,
+                "conversation_id": "",          # Reddit addresses the reply by fullname
+                "sender": f"u/{author}" if author else "",
+                "sender_id": author,
+                "text": text[:1000],
+                "created_at": _epoch_iso(data.get("created_utc")),
+            })
+        return items[:limit]
+
+    async def reply_to_target(self, access_token: str, account: Account, *,
+                              target_type: str, target_id: str, text: str,
+                              reply_to: str = "") -> dict:
+        """Comment on a submission, reply to a comment, or answer a DM (mode-gated).
+
+        ``POST /api/comment`` takes a ``thing_id`` fullname — ``t3_`` for a
+        submission, ``t1_`` for a comment, ``t4_`` for a private message — and
+        Markdown ``text``. If ``target_id`` arrives without a prefix, one is added
+        from ``target_type`` (``comment`` -> ``t1_``, ``dm`` -> ``t4_``, anything
+        else -> ``t3_``). A DM's fullname IS the send destination, so ``reply_to``
+        is unused. Needs the ``submit`` scope (``privatemessages`` for a DM), which
+        the account has. Returns the new comment's id and permalink.
+        """
+        thing_id = str(target_id or "").strip()
+        if not re.match(r"^t[0-9]_", thing_id):
+            prefix = {"comment": "t1_", "dm": "t4_"}.get((target_type or "").lower(), "t3_")
+            thing_id = prefix + thing_id
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                f"{OAUTH}/api/comment",
+                data={"thing_id": thing_id, "text": text, "api_type": "json"},
+                headers=_headers(access_token))
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                _raise(exc)
+            payload = r.json().get("json", {}) if isinstance(r.json(), dict) else {}
+        errors = payload.get("errors") or []
+        if errors:
+            detail = "; ".join(e[1] if len(e) > 1 else str(e) for e in errors)
+            raise RuntimeError(f"Reddit rejected the comment: {detail}")
+        things = (payload.get("data") or {}).get("things") or []
+        data = things[0].get("data") if things else {}
+        data = data or {}
+        permalink = data.get("permalink") or ""
+        return {"id": data.get("name") or data.get("id") or "",
+                "url": ("https://www.reddit.com" + permalink) if permalink else ""}
+
+
+def _epoch_iso(value) -> str:
+    """Reddit's ``created_utc`` (epoch seconds, as a float) -> an ISO string, or ""."""
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return ""
 
 
 def _result(data: dict) -> PublishResult:

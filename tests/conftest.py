@@ -33,6 +33,9 @@ _TEST_ENV = {
     "AISMM_DATA_DIR": tempfile.mkdtemp(prefix="aismm-tests-"),
     # Sora failover attempts must not depend on a real pool being configured.
     "SORA_MAX_ATTEMPTS": "0",
+    # Metrics-refresh window is read at import; pin it so a developer's .env
+    # cannot change what the feedback-loop tests see.
+    "METRICS_REFRESH_DAYS": "30",
     # Never touch a real storage account — a SandBox-style .env shares one under
     # the lowercase `connection_string` name, which the store would pick up.
     "AZURE_STORAGE_CONNECTION_STRING": "",

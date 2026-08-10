@@ -236,6 +236,7 @@ def test_every_instagram_tool_is_registered():
     names = registered_tool_names()
     for expected in ("instagram_recent_posts", "instagram_comments",
                      "instagram_recent_comments", "instagram_reply_to_comment",
+                     "instagram_dms", "instagram_reply_to_dm",
                      "instagram_moderate_comment", "instagram_insights",
                      "instagram_publishing_limit", "instagram_profile",
                      "instagram_mentions"):

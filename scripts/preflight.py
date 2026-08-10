@@ -153,6 +153,112 @@ def _check_like_signatures() -> None:
         notes.append(f"Like contract: {checked} like-capable platform(s) OK")
 
 
+def _check_metrics_signatures() -> None:
+    """Every platform that declares ``supports_metrics`` must accept what
+    ``orchestrator.refresh_metrics`` sends to ``fetch_post_metrics`` — the same
+    drift guard as the publish / reply / like contracts."""
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.fetch_post_metrics)
+    checked = 0
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        if not getattr(cls.capabilities, "supports_metrics", False):
+            continue
+        checked += 1
+        actual = names(cls.fetch_post_metrics)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.fetch_post_metrics() is missing {', '.join(sorted(missing))} — "
+                f"refresh_metrics passes these on every call, so polling "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("fetch_post_metrics() is missing" in p for p in problems):
+        notes.append(f"Metrics contract: {checked} metrics-capable platform(s) OK")
+
+
+def _check_search_signatures() -> None:
+    """Every platform that declares ``supports_search`` must accept what the
+    outreach search tools send to ``search_content`` — the same drift guard as the
+    publish / reply / like / metrics contracts."""
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.search_content)
+    checked = 0
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        if not getattr(cls.capabilities, "supports_search", False):
+            continue
+        checked += 1
+        actual = names(cls.search_content)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.search_content() is missing {', '.join(sorted(missing))} — "
+                f"the outreach search tool passes these on every call, so searching "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("search_content() is missing" in p for p in problems):
+        notes.append(f"Search contract: {checked} search-capable platform(s) OK")
+
+
+def _check_dm_signatures() -> None:
+    """Every platform that declares ``supports_dms`` must accept what the DM read
+    tool sends to ``list_dms`` — the same drift guard as the other contracts. The
+    DM *reply* uses ``reply_to_target`` (with ``reply_to``), which the reply
+    contract already covers because every DM platform is also comment-capable."""
+    import inspect
+
+    from aismm.platforms.base import SocialPlatform
+    from aismm.platforms.registry import get_platform_class, registered_platforms
+
+    def names(func):
+        signature = inspect.signature(func)
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in signature.parameters.values()):
+            return set()
+        return {n for n in signature.parameters if n != "self"}
+
+    required = names(SocialPlatform.list_dms)
+    checked = 0
+    for platform in registered_platforms():
+        cls = get_platform_class(platform)
+        if not getattr(cls.capabilities, "supports_dms", False):
+            continue
+        checked += 1
+        actual = names(cls.list_dms)
+        missing = (required - actual) if actual else set()
+        if missing:
+            problems.append(
+                f"{cls.__name__}.list_dms() is missing {', '.join(sorted(missing))} — "
+                f"the DM read tool passes these on every call, so reading DMs on "
+                f"{platform.value} would raise TypeError."
+            )
+    if not any("list_dms() is missing" in p for p in problems):
+        notes.append(f"DM contract: {checked} DM-capable platform(s) OK")
+
+
 def _check_imports() -> None:
     """Import everything a worker imports at boot, minus the side effects."""
     import aismm.dashboard.app  # noqa: F401  - route + template wiring
@@ -180,7 +286,9 @@ def _check_config() -> None:
 
 def main() -> int:
     for check in (_check_store_backends, _check_imports, _check_publish_signatures,
-                  _check_reply_signatures, _check_like_signatures, _check_config):
+                  _check_reply_signatures, _check_like_signatures,
+                  _check_metrics_signatures, _check_search_signatures,
+                  _check_dm_signatures, _check_config):
         try:
             check()
         except Exception as exc:  # noqa: BLE001 - any failure here blocks the deploy

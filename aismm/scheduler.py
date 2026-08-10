@@ -186,6 +186,32 @@ def _schedule_housekeeping(sched) -> None:
         logger.warning("Could not schedule the asset prune: %s", exc)
     threading.Thread(target=_prune, name="prune-assets-boot", daemon=True).start()
 
+    _schedule_metrics_refresh(sched)
+
+
+def _schedule_metrics_refresh(sched) -> None:
+    """A daily poll of recent posts' performance counters — the feedback loop.
+
+    Unlike the asset prune there is deliberately NO boot sweep: a metrics poll is
+    an API call per post — pay-per-use on X — and running it on every gunicorn
+    restart would spend credits on each deploy. Once a day is enough for counts
+    that feed back into the next scheduled run; the CLI offers an on-demand sweep.
+    ``refresh_metrics`` is itself a no-op when ``METRICS_REFRESH_DAYS=0``.
+    """
+    from .orchestrator import refresh_metrics
+
+    def _refresh():
+        try:
+            refresh_metrics()
+        except Exception as exc:  # noqa: BLE001 - never let tidying stop the scheduler
+            logger.warning("Metrics refresh failed: %s", exc)
+
+    try:
+        sched.add_job(_refresh, CronTrigger.from_crontab("0 5 * * *"), id="housekeeping:metrics",
+                      replace_existing=True, misfire_grace_time=3600)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not schedule the metrics refresh: %s", exc)
+
 
 def _reap_stale_runs() -> None:
     """Close out runs abandoned by a previous process. Never fatal.

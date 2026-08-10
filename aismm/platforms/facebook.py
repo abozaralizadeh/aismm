@@ -91,6 +91,9 @@ class Facebook(SocialPlatform):
               "Up to 10 photos publish as a single album post.",
         supports_carousel=True,        # multi-photo album
         max_carousel_items=10,
+        # A Page post exposes like/comment/share counts (the Page's own token can
+        # read the .summary edges), so the feedback loop can poll them per post.
+        supports_metrics=True,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
     token_endpoint = f"{GRAPH}/oauth/access_token"
@@ -219,6 +222,33 @@ class Facebook(SocialPlatform):
         video_id = body.get("id", "")
         url = f"https://www.facebook.com/watch/?v={video_id}" if video_id else ""
         return PublishResult(url=url, external_id=video_id, raw=body)
+
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """Normalized like/comment/share counts for one Page post.
+
+        The ``.summary(true)`` edges return the totals without listing every
+        like/comment; ``shares`` is a plain object with a ``count``. Read with the
+        stored PAGE token. Returns ``None`` on any failure so a single unreadable
+        post never breaks the sweep.
+        """
+        if not external_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(
+                    f"{GRAPH}/{external_id}",
+                    params={"fields": "likes.summary(true),comments.summary(true),shares"},
+                    headers=_auth(access_token))
+                r.raise_for_status()
+                body = r.json()
+        except Exception as exc:  # noqa: BLE001 - one bad post must not stop the sweep
+            logger.warning("Facebook metrics for %s failed: %s", external_id, exc)
+            return None
+        likes = (body.get("likes") or {}).get("summary", {}).get("total_count", 0)
+        comments = (body.get("comments") or {}).get("summary", {}).get("total_count", 0)
+        shares = (body.get("shares") or {}).get("count", 0)
+        return {"likes": likes, "comments": comments, "shares": shares}
 
 
 def _post_url(post_id: str) -> str:

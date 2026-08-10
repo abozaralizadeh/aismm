@@ -20,11 +20,28 @@ from ..tools import build_tools
 from ..tools.browse_tool import close_browser
 from .memory import maybe_compact
 from .prompts import (AUTO_INSTRUCTIONS, ENGAGEMENT_INSTRUCTIONS, MANAGER_INSTRUCTIONS,
-                      build_auto_kickoff, build_engagement_kickoff, build_kickoff)
+                      OUTREACH_INSTRUCTIONS, build_auto_kickoff, build_engagement_kickoff,
+                      build_kickoff, build_outreach_kickoff, build_performance_block)
 
 logger = logging.getLogger("aismm.agent")
 
 MAX_TURNS = 30
+
+
+def _performance_block(store: Store, account: Account) -> str:
+    """Render the "how recent posts did" kickoff section for this account.
+
+    Best-effort: the feedback loop is a helpful nudge, never a precondition for a
+    run, so any store hiccup yields no block rather than failing the run.
+    """
+    try:
+        from ..tools.performance_tool import recent_performance_runs
+
+        return build_performance_block(recent_performance_runs(store, account.id))
+    except Exception as exc:  # noqa: BLE001 - a metrics read must never block a run
+        logger.warning("Could not build the performance summary for %s: %s",
+                       account.handle or account.external_id, exc)
+        return ""
 
 
 async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
@@ -42,6 +59,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     caps = get_platform(account.platform).capabilities
     task = instruction.task_type
     engage = task is InstructionTask.engage
+    outreach = task is InstructionTask.outreach
     auto = task is InstructionTask.auto
     state: dict = {
         "account": account,
@@ -58,6 +76,9 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     elif engage:
         agent_name, instructions, build = ("SocialEngager", ENGAGEMENT_INSTRUCTIONS,
                                            build_engagement_kickoff)
+    elif outreach:
+        agent_name, instructions, build = ("SocialOutreach", OUTREACH_INSTRUCTIONS,
+                                           build_outreach_kickoff)
     else:
         agent_name, instructions, build = "SocialManager", MANAGER_INSTRUCTIONS, build_kickoff
     agent = Agent(
@@ -67,10 +88,19 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         model=build_model(),
         model_settings=ModelSettings(temperature=0.8),
     )
-    kickoff = (prompt_override.strip() or
-               build(account=account, instruction=instruction,
-                     platform_caps=caps, state=instruction_state,
-                     files=attachments))
+    if prompt_override.strip():
+        # A retry sends exactly what the operator edited — no memory, note or
+        # performance is re-inlined, so what they read in the box is what runs.
+        kickoff = prompt_override.strip()
+    else:
+        build_kwargs = dict(account=account, instruction=instruction,
+                            platform_caps=caps, state=instruction_state, files=attachments)
+        # Close the feedback loop: a run that may PUBLISH sees how its recent posts
+        # performed, from turn one. Engage and outreach runs post nothing, so they
+        # are skipped (and their kickoff builders take no performance kwarg).
+        if not (engage or outreach):
+            build_kwargs["performance"] = _performance_block(store, account)
+        kickoff = build(**build_kwargs)
     # Keep the exact prompt on the Run: debugging a failure means seeing what the
     # agent was told, not what the instruction says now. run.prompt always stays
     # plain text even when the model also receives files natively.
@@ -135,6 +165,16 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                     "- report_failure, only if something stopped you from doing the job at "
                     "all (the account would not load, every read was refused)."
                 )
+            elif outreach:
+                nudge = (
+                    "You did not finish this run. " + memory_hint +
+                    "End it now with exactly one terminal call:\n"
+                    "- finish_engagement, once you have engaged (or staged replies for) the "
+                    "other accounts' posts worth engaging — including when you found nothing "
+                    "worth engaging, which is a normal, correct outcome.\n"
+                    "- report_failure, only if something stopped you from doing the job at "
+                    "all (search would not run, every read was refused)."
+                )
             else:
                 nudge = (
                     "You did not finish this run. " + memory_hint +
@@ -169,7 +209,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     # run, recorded as one — not a silent no-op the operator never sees.
     if auto:
         ending = "publish, finish_engagement or report_failure"
-    elif engage:
+    elif engage or outreach:
         ending = "finish_engagement or report_failure"
     else:
         ending = "publish or report_failure"

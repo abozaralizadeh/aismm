@@ -90,6 +90,7 @@
                 <option value="{{ t.value }}"
                   {% if (instruction and instruction.task_type == t) or (not instruction and t.value == 'publish') %}selected{% endif %}>
                   {% if t.value == 'engage' %}Respond to comments
+                  {% elif t.value == 'outreach' %}Reach out to others
                   {% elif t.value == 'auto' %}Auto (agent decides)
                   {% else %}Publish a post{% endif %}
                 </option>
@@ -110,9 +111,23 @@
           </span>
           <span class="hint">
             <strong>Publish a post</strong> researches and posts on the schedule.
-            <strong>Respond to comments</strong> reads new comments/mentions and replies in the
-            account's voice — no new post. <strong>Auto</strong> lets the agent decide each run.
-            Comments work on Instagram, X and YouTube (TikTok has no comment API).
+            <strong>Respond to comments</strong> reads new comments/mentions on your OWN posts and
+            replies in the account's voice — no new post. <strong>Reach out to others</strong> finds
+            OTHER people's posts on your topics and engages them, to grow reach — no new post.
+            <strong>Auto</strong> lets the agent decide (post vs reply) each run.
+            Comments work on Instagram, X and YouTube; outreach works on X and Reddit.
+          </span>
+        </label>
+
+        <label data-outreach-only hidden>
+          <span class="field-label">Outreach targets</span>
+          <textarea name="engagement_targets" rows="2"
+            placeholder="prompt engineering, #AI, r/MachineLearning, @openai">{{ instruction.engagement_targets if instruction else '' }}</textarea>
+          <span class="hint">
+            What to search for on a <strong>Reach out to others</strong> run — comma-separated
+            keywords, <code>#hashtags</code>, <code>r/subreddits</code> and <code>@accounts</code>.
+            Keywords &amp; hashtags drive X search; subreddits &amp; keywords drive Reddit. Leave it
+            empty to let the agent infer targets from the brief.
           </span>
         </label>
       </div>
@@ -454,20 +469,24 @@
 
 {% block scripts %}
 <script>
-// Task-driven conditional UI: the Auto caution appears only for Auto, and the
-// post-only fields (media preference, AI label) hide when the task is just
-// answering comments. Hidden controls still submit, so nothing is lost.
+// Task-driven conditional UI: the Auto caution appears only for Auto, the
+// post-only fields (media preference, AI label) hide when the task is a pure
+// engagement one (answering comments or reaching out — neither posts), and the
+// outreach targets box appears only for a reach-out run. Hidden controls still
+// submit, so nothing is lost.
 (function () {
   var form = document.querySelector('[data-instruction-form]');
   if (!form) { return; }
   var task = form.querySelector('[data-task]');
   var autoWarn = form.querySelector('[data-auto-warn]');
   var postOnly = Array.prototype.slice.call(form.querySelectorAll('[data-publish-only]'));
+  var outreachOnly = Array.prototype.slice.call(form.querySelectorAll('[data-outreach-only]'));
 
   function sync() {
     var v = task.value;
     if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
-    postOnly.forEach(function (el) { el.hidden = v === 'engage'; });
+    postOnly.forEach(function (el) { el.hidden = v === 'engage' || v === 'outreach'; });
+    outreachOnly.forEach(function (el) { el.hidden = v !== 'outreach'; });
   }
   task.addEventListener('change', sync);
   sync();

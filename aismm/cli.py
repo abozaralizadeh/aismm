@@ -264,6 +264,30 @@ def cmd_post(args) -> int:
     return 0
 
 
+def cmd_metrics(args) -> int:
+    """Poll recent published posts for fresh performance counters (feedback loop).
+
+    On-demand version of the daily housekeeping sweep. Defaults ``--days`` to a
+    positive window even when ``METRICS_REFRESH_DAYS=0`` disables the scheduled
+    job, since running this command IS the operator asking for a poll now.
+    """
+    from . import orchestrator
+    from .store import get_store
+
+    configure_logging()
+    store = get_store()
+    days = args.days if args.days is not None else (settings.metrics_refresh_days or 30)
+    result = orchestrator.refresh_metrics(store, max_age_days=days, apply=args.apply)
+    verb = "Updated" if args.apply else "Would update"
+    print(f"\n{verb} metrics on {result['updated']} run(s) "
+          f"({result['polled']} polled, {result['skipped']} skipped) "
+          f"of {result['candidates']} candidate(s) in the last {days} day(s).")
+    if not args.apply:
+        print("\nRe-run with --apply to write the counters.")
+    print()
+    return 0
+
+
 def cmd_reconcile(args) -> int:
     """Repair runs recorded as failed whose post is actually live on the account."""
     from . import reconcile
@@ -354,6 +378,15 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--apply", action="store_true",
                     help="write the changes (default is a dry run)")
     pr.set_defaults(func=cmd_reconcile)
+
+    pm = sub.add_parser("metrics",
+                        help="poll recent posts for fresh performance counters")
+    pm.add_argument("--apply", action="store_true",
+                    help="write the counters (default is a dry run)")
+    pm.add_argument("--days", type=int, default=None, metavar="DAYS",
+                    help="how far back to poll (default: METRICS_REFRESH_DAYS, "
+                         "or 30 when that is 0)")
+    pm.set_defaults(func=cmd_metrics)
 
     return p
 

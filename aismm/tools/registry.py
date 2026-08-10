@@ -44,6 +44,8 @@ def registered_tool_names() -> list[str]:
 # none (an engage run offered ``publish`` will publish a post it was never asked
 # to), so the sets are disjoint and picked by task type.
 ALWAYS_ON_PUBLISH = ("publish", "report_failure")
+# ENGAGE (answer my comments) and OUTREACH (engage others' content) share this
+# terminal set: both end by replying/liking or doing nothing, never by posting.
 ALWAYS_ON_ENGAGE = ("finish_engagement", "report_failure")
 # An AUTO run decides publish-vs-engage itself, so it keeps BOTH terminals — this
 # is the one case where the disjoint-set rule above is deliberately relaxed,
@@ -58,7 +60,7 @@ def always_on_for(task_type) -> tuple[str, ...]:
     """The terminal tools for a run of this ``InstructionTask`` (accepts the enum
     or its ``.value``)."""
     value = getattr(task_type, "value", task_type)
-    if value == "engage":
+    if value in ("engage", "outreach"):
         return ALWAYS_ON_ENGAGE
     if value == "auto":
         return ALWAYS_ON_AUTO

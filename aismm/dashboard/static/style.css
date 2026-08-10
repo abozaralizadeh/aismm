@@ -272,6 +272,19 @@ tr:hover .platform-icon { opacity: 1; }
 .badge-failed { background: rgba(240,97,109,.15); border-color: var(--danger); color: var(--danger); }
 .badge-off { color: var(--muted); }
 
+/* Performance counters — one pill per metric (likes / views / …). Wraps in the
+   runs table cell; a little larger on the run-detail page (.metric-lg). */
+.metrics { display: flex; flex-wrap: wrap; gap: .25rem .4rem; }
+.metric { display: inline-block; padding: .08rem .45rem; border-radius: 999px;
+          background: var(--panel-2); border: 1px solid var(--border);
+          font-size: .74rem; color: var(--muted); white-space: nowrap; }
+.metric b { color: var(--text); font-weight: 700; }
+.metrics-cell { min-width: 9rem; }
+.metrics-detail { margin: .3rem 0 .5rem; }
+.metric-lg { font-size: .9rem; padding: .2rem .6rem; }
+.perf-totals { margin-bottom: .6rem; }
+.perf-sub { margin: .2rem 0 .4rem; text-transform: uppercase; letter-spacing: .04em; }
+
 .form { display: flex; flex-direction: column; gap: 1.1rem; max-width: 680px; }
 .form label { display: flex; flex-direction: column; gap: .35rem; font-weight: 600; }
 .form input[type=text], .form input[type=password], .form input[type=datetime-local],

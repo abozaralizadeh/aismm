@@ -210,6 +210,148 @@ def test_the_preflight_like_check_agrees():
     assert preflight.problems == []
 
 
+# --- every metrics-capable platform must honour the fetch_post_metrics contract ------ #
+# Same failure mode as publish/reply/like: `orchestrator.refresh_metrics` polls
+# every supports_metrics platform through `fetch_post_metrics(..., external_id=...)`,
+# so a narrower override would raise TypeError only during the daily sweep.
+
+_METRICS_PLATFORMS = [
+    n for n in _registered_platforms()
+    if getattr(_get_platform_class(n).capabilities, "supports_metrics", False)
+]
+
+
+@_pytest.mark.parametrize("name", _METRICS_PLATFORMS, ids=lambda n: n.value)
+def test_metrics_accepts_every_argument_the_sweep_sends(name):
+    required = _publish_kwargs(_SocialPlatform.fetch_post_metrics)
+    actual = _publish_kwargs(_get_platform_class(name).fetch_post_metrics)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.fetch_post_metrics() is missing {sorted(missing)} — "
+        f"refresh_metrics passes these on every call, so the sweep would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _METRICS_PLATFORMS, ids=lambda n: n.value)
+def test_metrics_is_callable_with_the_full_keyword_set(name):
+    signature = _inspect.signature(_get_platform_class(name).fetch_post_metrics)
+    signature.bind_partial(None, access_token="t", account=None, external_id="123")
+
+
+def test_the_preflight_metrics_check_agrees():
+    """The deploy gate and the suite must not disagree about the metrics contract."""
+    from scripts import preflight
+
+    preflight.problems.clear()
+    preflight.notes.clear()
+    preflight._check_metrics_signatures()
+    assert preflight.problems == []
+
+
+# --- every search-capable platform must honour the search_content contract ----------- #
+# Same failure mode as publish/reply/like/metrics: the outreach search tools call
+# `search_content(..., query=..., limit=..., subreddit=...)` on every supports_search
+# platform, so a narrower override would raise TypeError only on an outreach run.
+
+_SEARCH_PLATFORMS = [
+    n for n in _registered_platforms()
+    if getattr(_get_platform_class(n).capabilities, "supports_search", False)
+]
+
+
+@_pytest.mark.parametrize("name", _SEARCH_PLATFORMS, ids=lambda n: n.value)
+def test_search_accepts_every_argument_the_outreach_tool_sends(name):
+    required = _publish_kwargs(_SocialPlatform.search_content)
+    actual = _publish_kwargs(_get_platform_class(name).search_content)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.search_content() is missing {sorted(missing)} — "
+        f"the outreach search tool passes these on every call, so it would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _SEARCH_PLATFORMS, ids=lambda n: n.value)
+def test_search_is_callable_with_the_full_keyword_set(name):
+    signature = _inspect.signature(_get_platform_class(name).search_content)
+    signature.bind_partial(None, access_token="t", account=None,
+                           query="q", limit=10, subreddit="r/x")
+
+
+def test_search_platforms_are_x_and_reddit_only():
+    """Only X and Reddit expose a genuine third-party content-search API; the others
+    declare supports_search=False on purpose (IG hashtag search is gated, YouTube
+    search burns 100 quota units + is spam-filtered, TikTok has no such API)."""
+    assert {n.value for n in _SEARCH_PLATFORMS} == {"twitter", "reddit"}
+
+
+def test_the_preflight_search_check_agrees():
+    """The deploy gate and the suite must not disagree about the search contract."""
+    from scripts import preflight
+
+    preflight.problems.clear()
+    preflight.notes.clear()
+    preflight._check_search_signatures()
+    assert preflight.problems == []
+
+
+# --- every DM-capable platform must honour the list_dms contract --------------------- #
+# Same failure mode as the others: the DM read tool calls `list_dms(..., limit=...)` on
+# every supports_dms platform, so a narrower override would raise TypeError only on a
+# live DM sweep. The DM *reply* rides reply_to_target (widened with reply_to), which the
+# reply contract already covers because every DM platform is also comment-capable.
+
+_DM_PLATFORMS = [
+    n for n in _registered_platforms()
+    if getattr(_get_platform_class(n).capabilities, "supports_dms", False)
+]
+
+
+@_pytest.mark.parametrize("name", _DM_PLATFORMS, ids=lambda n: n.value)
+def test_list_dms_accepts_every_argument_the_dm_tool_sends(name):
+    required = _publish_kwargs(_SocialPlatform.list_dms)
+    actual = _publish_kwargs(_get_platform_class(name).list_dms)
+    if not actual:
+        return                # **kwargs
+    missing = required - actual
+    assert not missing, (
+        f"{name.value}.list_dms() is missing {sorted(missing)} — "
+        f"the DM read tool passes these on every call, so it would raise TypeError")
+
+
+@_pytest.mark.parametrize("name", _DM_PLATFORMS, ids=lambda n: n.value)
+def test_list_dms_is_callable_with_the_full_keyword_set(name):
+    signature = _inspect.signature(_get_platform_class(name).list_dms)
+    signature.bind_partial(None, access_token="t", account=None, limit=25)
+
+
+@_pytest.mark.parametrize("name", _DM_PLATFORMS, ids=lambda n: n.value)
+def test_dm_reply_accepts_reply_to(name):
+    """reply_to_target must take the reply_to send-destination keyword — perform_reply
+    passes it on every DM, and a DM sends nowhere without it (X conversation, IG
+    recipient)."""
+    signature = _inspect.signature(_get_platform_class(name).reply_to_target)
+    signature.bind_partial(None, access_token="t", account=None,
+                           target_type="dm", target_id="m1", text="hi", reply_to="c1")
+
+
+def test_dm_platforms_are_x_ig_reddit():
+    """Only X, Instagram and Reddit expose a DM API we use; YouTube and TikTok have
+    none, so they declare supports_dms=False and never build DM tools."""
+    assert {n.value for n in _DM_PLATFORMS} == {"twitter", "instagram", "reddit"}
+
+
+def test_the_preflight_dm_check_agrees():
+    """The deploy gate and the suite must not disagree about the DM contract."""
+    from scripts import preflight
+
+    preflight.problems.clear()
+    preflight.notes.clear()
+    preflight._check_dm_signatures()
+    assert preflight.problems == []
+
+
 # --- new engagement columns round-trip through both backends ------------------------- #
 # `task_type` on Instruction and action_type/target_* on StagedPost are additive
 # columns (LocalStore ALTER TABLE, Azure schemaless). A backend that dropped them
@@ -241,6 +383,25 @@ def test_task_type_round_trips(label, store):
 
 
 @_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_outreach_task_and_targets_round_trip(label, store):
+    """An outreach instruction persists its task_type and its engagement_targets
+    column in both backends — a backend that dropped the column would silently make
+    every outreach run search nothing but the inferred brief."""
+    store.init()
+    instr = store.upsert_instruction(_Instruction(
+        name="O", task_type=_InstructionTask.outreach,
+        engagement_targets="prompt engineering, #AI, r/MachineLearning, @openai"))
+    got = store.get_instruction(instr.id)
+    assert got.task_type is _InstructionTask.outreach
+    assert got.engagement_targets == "prompt engineering, #AI, r/MachineLearning, @openai"
+    targets = got.parsed_targets
+    assert "prompt engineering" in targets.keywords
+    assert "AI" in targets.hashtags
+    assert "MachineLearning" in targets.subreddits
+    assert "openai" in targets.accounts
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
 def test_staged_reply_columns_round_trip(label, store):
     store.init()
     staged = store.add_staged(_StagedPost(
@@ -252,6 +413,23 @@ def test_staged_reply_columns_round_trip(label, store):
     assert got.target_type == "comment"
     assert got.target_id == "c42"
     assert got.target_excerpt == "a comment we answer"
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_staged_dm_conversation_round_trips(label, store):
+    """A staged DM reply persists target_conversation (the send destination) in BOTH
+    backends — AzureStore uses an explicit whitelist, so a dropped column would send
+    the approved reply nowhere. target_id is the inbound message (ledger key); the
+    conversation id is where the reply actually goes."""
+    store.init()
+    staged = store.add_staged(_StagedPost(
+        instruction_id="i", account_id="a", caption="answer", media_kind="text",
+        action_type="reply", target_type="dm", target_id="msg_99",
+        target_conversation="conv_abc", target_excerpt="an inbound DM"))
+    got = store.get_staged(staged.id)
+    assert got.target_type == "dm"
+    assert got.target_id == "msg_99"          # what the ledger dedupes on
+    assert got.target_conversation == "conv_abc"   # where the reply is sent
 
 
 @_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
@@ -272,3 +450,59 @@ def test_open_staged_reply_keys_finds_open_replies_only(label, store):
     assert "comment:open1" in keys
     assert "comment:rejected1" not in keys       # rejected is not "open"
     assert "comment:otheracct" not in keys       # different account
+
+
+# --- Run metrics columns + recent_published_runs round-trip through both backends ---- #
+# metrics_json/metrics_updated_at are additive columns (LocalStore ALTER TABLE,
+# Azure schemaless). recent_published_runs is what the metrics sweep iterates, so
+# both backends must agree on which runs it surfaces.
+
+from datetime import datetime as _datetime, timedelta as _timedelta, timezone as _timezone  # noqa: E402
+
+from aismm.models import PlatformName as _PN, Run as _Run, RunStatus as _RunStatus  # noqa: E402
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_run_metrics_round_trip(label, store):
+    store.init()
+    run = store.add_run(_Run(instruction_id="i", account_id="a",
+                             platform=_PN.twitter, status=_RunStatus.published,
+                             external_id="tw123"))
+    when = _datetime(2026, 8, 1, 12, 0, tzinfo=_timezone.utc)
+    run.set_metrics({"likes": 12, "impressions": 3400, "upvote_ratio": 0.95})
+    run.metrics_updated_at = when
+    store.update_run(run)
+    got = store.get_run(run.id)
+    assert got.metrics == {"likes": 12, "impressions": 3400, "upvote_ratio": 0.95}
+    assert got.metrics_updated_at is not None
+    assert got.external_id == "tw123"
+
+
+@_pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_recent_published_runs_filters_by_id_status_and_age(label, store):
+    store.init()
+    now = _datetime.now(_timezone.utc)
+    old = now - _timedelta(days=90)
+    # Published, has an id, recent — the one case that should be polled.
+    keep = store.add_run(_Run(instruction_id="i", account_id="a", platform=_PN.twitter,
+                              status=_RunStatus.published, external_id="keep"))
+    # No external id: nothing to poll.
+    store.add_run(_Run(instruction_id="i", account_id="a", platform=_PN.twitter,
+                       status=_RunStatus.published, external_id=""))
+    # Failed run with an id: not published, never polled.
+    store.add_run(_Run(instruction_id="i", account_id="a", platform=_PN.twitter,
+                       status=_RunStatus.failed, external_id="failed"))
+    # Published + id but older than the cutoff.
+    stale = store.add_run(_Run(instruction_id="i", account_id="a", platform=_PN.twitter,
+                               status=_RunStatus.published, external_id="stale"))
+    stale.created_at = old
+    store.update_run(stale)
+
+    ids = {r.external_id for r in store.recent_published_runs(
+        since=now - _timedelta(days=30), limit=200)}
+    assert "keep" in ids
+    assert "" not in ids
+    assert "failed" not in ids
+    assert "stale" not in ids
+
+    _ = keep  # created for clarity; asserted above via its external_id

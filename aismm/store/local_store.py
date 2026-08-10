@@ -19,7 +19,7 @@ from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
     Account, Instruction, InstructionFile, InstructionState, Lock, PlatformApp, Run,
-    StagedPost, StagedStatus, Workspace, WorkspaceMember,
+    RunStatus, StagedPost, StagedStatus, Workspace, WorkspaceMember,
 )
 from .base import Store
 
@@ -325,6 +325,23 @@ class LocalStore(Store):
                 s, status=status, instruction_id=instruction_id,
                 account_id=account_id, workspace_id=workspace_id, search=search))
             return int(s.exec(stmt).one())
+
+    def recent_published_runs(self, *, since=None, limit=200, workspace_id=None):
+        """SQL variant of the base scan — published runs with a post id to poll.
+
+        Filters ``external_id != ''`` and ``created_at >= since`` in SQL so the
+        limit counts only pollable rows, rather than the base method's post-filter
+        which could return fewer than ``limit`` after dropping id-less rows.
+        """
+        with Session(self._engine) as s:
+            stmt = select(Run).where(
+                Run.status == RunStatus.published, Run.external_id != "")
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(Run.workspace_id, workspace_id))
+            if since is not None:
+                stmt = stmt.where(Run.created_at >= since)
+            stmt = stmt.order_by(Run.created_at.desc()).limit(limit)
+            return list(s.exec(stmt).all())
 
     # --- staged posts ------------------------------------------------------ #
     def add_staged(self, staged):

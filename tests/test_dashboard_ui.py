@@ -514,3 +514,46 @@ def test_overview_metrics_count_only_real_outcomes(dash, store, account):
     assert insights["published_window"] == 3
     assert insights["totals"]["failed"] == 1
     assert insights["success_rate"] == 75        # 3 / (3 + 1)
+
+
+def test_overview_sums_engagement_and_ranks_top_posts(dash, store, account):
+    """The performance feedback loop, summed for the whole account: the daily
+    metrics sweep records likes/views per live post, and the overview adds them up
+    and names the best posts instead of leaving them scattered one-per-run."""
+    instruction = _instruction(store, "Reels")
+    big = Run(instruction_id=instruction.id, account_id=account.id,
+              status=RunStatus.published, external_id="p1", asset_path="/x/big.jpg",
+              caption="the hit")
+    big.set_metrics({"views": 1000, "likes": 50})
+    store.add_run(big)
+    small = Run(instruction_id=instruction.id, account_id=account.id,
+                status=RunStatus.published, external_id="p2", asset_path="/x/small.jpg",
+                caption="the flop")
+    small.set_metrics({"views": 100, "likes": 5})
+    store.add_run(small)
+
+    insights = app_module._overview_insights(store, "")
+    perf = insights["performance"]
+    assert perf["posts_measured"] == 2
+    # Countable integers are summed across every measured post.
+    assert {p["label"]: p["value"] for p in perf["pills"]} == {"views": "1,100", "likes": "55"}
+    # Ranked by engagement, the bigger post leads.
+    assert [item["run"].external_id for item in perf["top"]] == ["p1", "p2"]
+
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert "Performance" in page
+    assert "1,100" in page          # the summed headline number is rendered
+    assert "Top posts" in page
+
+
+def test_overview_performance_is_empty_until_a_post_is_measured(dash, store, account):
+    """A live post whose counters were never polled contributes nothing — the panel
+    shows its empty hint rather than a fabricated zero."""
+    instruction = _instruction(store, "Fresh")
+    store.add_run(Run(instruction_id=instruction.id, account_id=account.id,
+                      status=RunStatus.published, external_id="p9", asset_path="/x/a.jpg"))
+    insights = app_module._overview_insights(store, "")
+    assert insights["performance"]["pills"] == []
+    assert insights["performance"]["top"] == []
+    page = dash.test_client().get("/").get_data(as_text=True)
+    assert "No engagement data yet" in page

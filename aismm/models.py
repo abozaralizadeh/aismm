@@ -81,11 +81,20 @@ class InstructionTask(str, enum.Enum):
     This deliberately relaxes the disjoint-terminal safety rule the other two
     rely on: the operator has explicitly asked the agent to choose, so offering
     ``publish`` on a run that turns out to be engagement is the intent, not a leak.
+
+    ``outreach`` is the OUTBOUND mirror of ``engage``: rather than answering
+    comments on the account's OWN posts, it goes and finds OTHER people's content
+    (by keyword / hashtag / subreddit / @account, from ``engagement_targets`` or
+    inferred from the brief) and engages with it — a reply or a like, through the
+    same ``publish_mode`` gate. It gets its own prompt, its own search tools, and
+    the ``finish_engagement`` terminal (the outcome shape is the same: replied /
+    staged / skipped). ``engage`` and ``outreach`` never both run in one job.
     """
 
-    publish = "publish"   # create + publish one post (the default)
-    engage = "engage"     # respond to comments/mentions on the account
-    auto = "auto"         # agent decides publish vs engage per run
+    publish = "publish"     # create + publish one post (the default)
+    engage = "engage"       # respond to comments/mentions on the account's own posts
+    outreach = "outreach"   # find and engage OTHERS' content (the follower engine)
+    auto = "auto"           # agent decides publish vs engage per run
 
 
 class RunStatus(str, enum.Enum):
@@ -194,6 +203,12 @@ class Instruction(SQLModel, table=True):
     # both — for an engage run it gates how replies go out (preview / approval /
     # live), the same three-way gate posts use.
     task_type: InstructionTask = InstructionTask.publish
+    # Where an OUTREACH run looks for others' content to engage with: a free-text
+    # list of keywords, #hashtags, r/subreddits and @accounts (comma- or
+    # newline-separated). Empty is fine — an outreach run then infers targets from
+    # the brief. Ignored by publish/engage/auto runs. Parsed by
+    # aismm/targets.py into typed buckets the per-platform search tools consume.
+    engagement_targets: str = ""
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
     # Label this instruction's posts as AI-generated. On by default (EU AI Act
@@ -225,6 +240,12 @@ class Instruction(SQLModel, table=True):
     def set_tools(self, names: list[str]) -> None:
         self.tools_json = json.dumps(list(names or []))
 
+    @property
+    def parsed_targets(self):
+        """``engagement_targets`` split into typed buckets (see aismm/targets.py)."""
+        from .targets import parse_targets
+        return parse_targets(self.engagement_targets)
+
 
 class Run(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
@@ -241,6 +262,15 @@ class Run(SQLModel, table=True):
     asset_paths_json: str = "[]"
     placement: str = "feed"
     external_url: str = ""                    # published permalink, when live
+    # The platform's own id for the published post (tweet id, IG media id, YouTube
+    # video id, …). external_url is for a human to click; this is what the
+    # performance feedback loop polls the platform's metrics API with later.
+    external_id: str = ""
+    # How the published post has performed, refreshed after the fact by
+    # orchestrator.refresh_metrics. A normalized dict (likes/comments/…); the exact
+    # keys depend on the platform. metrics_updated_at is None until first polled.
+    metrics_json: str = "{}"
+    metrics_updated_at: datetime | None = None
     error: str = ""
     log: str = ""                            # short human-readable trace of the run
     # The kickoff prompt this run actually received — brief + memory + note +
@@ -259,6 +289,16 @@ class Run(SQLModel, table=True):
 
     def set_asset_paths(self, paths: list[str]) -> None:
         self.asset_paths_json = json.dumps(list(paths or []))
+
+    @property
+    def metrics(self) -> dict:
+        try:
+            return json.loads(self.metrics_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    def set_metrics(self, value: dict) -> None:
+        self.metrics_json = json.dumps(value or {})
 
 
 class StagedPost(SQLModel, table=True):
@@ -280,7 +320,13 @@ class StagedPost(SQLModel, table=True):
     # a single approval queue and one Approve/Reject path (orchestrator).
     action_type: str = "post"                # post | reply
     target_type: str = ""                    # comment | mention | reply | dm
-    target_id: str = ""                      # id of the comment/post being answered
+    target_id: str = ""                      # id of the comment/post/message being answered
+    # Where a reply is SENT when that differs from what it answers. For a comment
+    # the two are the same (reply to the comment id), so this stays "". For a DM
+    # they differ: target_id is the inbound MESSAGE id (the ledger dedupe key) and
+    # this is the CONVERSATION / RECIPIENT id the reply is delivered to — so the
+    # Approve button (orchestrator) knows where to send it. See engagement.py.
+    target_conversation: str = ""
     target_excerpt: str = ""                 # what we're replying to, shown to the reviewer
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""

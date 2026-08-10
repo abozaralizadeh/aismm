@@ -237,6 +237,68 @@ def test_detail_page_survives_deleted_instruction_and_account(dash, store):
     assert "deleted" in response.get_data(as_text=True)
 
 
+# --- performance metrics display ----------------------------------------------------- #
+
+def _published_run_with_metrics(store, seeded, metrics):
+    acct = seeded["accounts"][1]                 # the X account
+    instr = seeded["instructions"][1]
+    run = store.add_run(Run(instruction_id=instr.id, account_id=acct.id,
+                            platform=PlatformName.twitter, status=RunStatus.published,
+                            external_id="tw-metrics", caption="a post with numbers",
+                            external_url="https://x.com/p/1",
+                            created_at=BASE + timedelta(hours=100)))
+    run.set_metrics(metrics)
+    run.metrics_updated_at = BASE + timedelta(hours=101)
+    store.update_run(run)
+    return run
+
+
+def test_runs_list_shows_metric_pills(dash, store, seeded):
+    _published_run_with_metrics(store, seeded, {"likes": 42, "impressions": 900})
+    page = dash.test_client().get("/runs?per_page=100").get_data(as_text=True)
+    assert "class=\"metric\"" in page
+    assert "42" in page and "900" in page and "impressions" in page
+
+
+def test_detail_page_shows_the_performance_section_and_refresh_button(dash, store, seeded):
+    run = _published_run_with_metrics(store, seeded, {"likes": 7, "impressions": 1200})
+    page = dash.test_client().get(f"/runs/{run.id}").get_data(as_text=True)
+    assert "Performance" in page
+    assert "1,200" in page                       # thousands separator, from format_metrics
+    assert "Last checked" in page                # metrics_updated_at rendered
+    assert f"/runs/{run.id}/refresh-metrics" in page   # the button is present
+
+
+def test_refresh_metrics_route_polls_and_redirects(dash, store, seeded, monkeypatch):
+    run = _published_run_with_metrics(store, seeded, {})
+    from aismm import orchestrator
+
+    called = {}
+
+    def fake_refresh(run_id, s, **kw):
+        called["run_id"] = run_id
+        return {"likes": 99}
+
+    monkeypatch.setattr(orchestrator, "refresh_run_metrics", fake_refresh)
+    resp = dash.test_client().post(f"/runs/{run.id}/refresh-metrics", follow_redirects=True)
+    assert resp.status_code == 200
+    assert called["run_id"] == run.id
+    assert "Performance refreshed." in resp.get_data(as_text=True)
+
+
+def test_refresh_metrics_route_without_a_post_id_says_so(dash, store, seeded):
+    instr = seeded["instructions"][0]
+    acct = seeded["accounts"][0]
+    run = store.add_run(Run(instruction_id=instr.id, account_id=acct.id,
+                            status=RunStatus.published, external_id=""))
+    resp = dash.test_client().post(f"/runs/{run.id}/refresh-metrics", follow_redirects=True)
+    assert "no published post id" in resp.get_data(as_text=True)
+
+
+def test_refresh_metrics_route_unknown_run_is_404(dash, seeded):
+    assert dash.test_client().post("/runs/nope/refresh-metrics").status_code == 404
+
+
 # --- approval bookkeeping ------------------------------------------------------------ #
 
 def test_approving_updates_the_right_run_however_old(store, seeded, monkeypatch):
@@ -303,7 +365,8 @@ def test_approving_a_reply_flashes_success_not_an_error(dash, store, seeded, mon
     monkeypatch.setattr("aismm.tokens.valid_access_token_sync", lambda *a, **k: "tok")
 
     class _Platform:
-        async def reply_to_target(self, access_token, account, *, target_type, target_id, text):
+        async def reply_to_target(self, access_token, account, *, target_type, target_id, text,
+                                  reply_to=""):
             return {"id": "r1", "url": "https://x.com/abo0zar/status/2085"}
 
     monkeypatch.setattr("aismm.orchestrator.get_platform", lambda name: _Platform())

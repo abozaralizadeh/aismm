@@ -43,11 +43,35 @@ class Capabilities:
     max_carousel_items: int = 10
     supports_comments: bool = False          # read/reply/moderate
     supports_insights: bool = False
+    # Can we poll how a PUBLISHED post performed (likes, views, …) after the fact?
+    # This drives the performance feedback loop: orchestrator.refresh_metrics
+    # polls fetch_post_metrics for recent published runs. X/Instagram/YouTube/
+    # Facebook/Reddit expose public per-post counters; TikTok and LinkedIn gate
+    # theirs behind audits/partnerships, so they declare False and are skipped.
+    supports_metrics: bool = False
     # Can the account LIKE a comment/post it is engaging with? Only some
     # platforms expose this over their API — X does (POST /2/users/:id/likes);
     # Instagram's Graph API, YouTube's Data API and TikTok's app API offer no
     # like-a-comment endpoint at all, so their tools do not pretend to.
     supports_liking: bool = False
+    # Can the account SEARCH the platform for OTHER people's content to engage —
+    # the outreach / follower-engine flow (find posts by keyword/#hashtag/
+    # subreddit, then reply/like)? Only some APIs expose public content search: X
+    # (GET /2/tweets/search/recent) and Reddit (/search, /r/{sub}/new) do.
+    # Instagram's hashtag search is deprecated/review-gated, YouTube search costs
+    # 100 quota units a call and commenting on strangers' videos is heavily
+    # spam-filtered, and TikTok has no such API — so they declare False and no
+    # search tool is offered.
+    supports_search: bool = False
+    # Can the account read and answer DIRECT MESSAGES over the API? The private
+    # counterpart of ``supports_comments``: an engage run reads new inbound DMs
+    # and replies to them, gated by ``publish_mode`` exactly like a comment reply.
+    # X (dm.read/dm.write), Instagram (instagram_manage_messages, App-Review
+    # gated) and Reddit (privatemessages) each expose one; YouTube and TikTok have
+    # NO DM API, so they declare False and no DM tool is offered. A DM's send
+    # destination (conversation / recipient id) is NOT the id we dedupe on (the
+    # inbound message id) — see ``reply_to_target``'s ``reply_to``.
+    supports_dms: bool = False
 
     image_formats: tuple[str, ...] = ()      # () = anything
     max_image_bytes: int | None = None
@@ -199,23 +223,59 @@ class SocialPlatform(ABC):
         """
 
     async def reply_to_target(self, access_token: str, account: Account, *,
-                              target_type: str, target_id: str, text: str) -> dict:
-        """Reply to a comment / mention / reply — the engagement counterpart of
-        :meth:`publish`, and the one method the mode-gated engagement flow
+                              target_type: str, target_id: str, text: str,
+                              reply_to: str = "") -> dict:
+        """Reply to a comment / mention / reply / DM — the engagement counterpart
+        of :meth:`publish`, and the one method the mode-gated engagement flow
         (:mod:`aismm.engagement`) calls once a live reply is due.
 
-        ``target_type`` is ``comment`` / ``mention`` / ``reply`` (later ``dm``);
+        ``target_type`` is ``comment`` / ``mention`` / ``reply`` / ``dm``;
         ``target_id`` is the platform id of the thing being answered. Returns a
         dict that SHOULD carry a ``url`` (the reply's permalink where one exists)
         and/or an ``id`` — :mod:`aismm.engagement` records the url in the ledger.
 
-        The default refuses: a platform without a comment API declares
-        ``supports_comments=False`` and never reaches here (the gate checks
+        ``reply_to`` is the SEND DESTINATION when it differs from ``target_id``.
+        For a comment they are the same thing (you reply to the comment id), so
+        ``reply_to`` is empty and platforms ignore it. For a **DM** they differ:
+        ``target_id`` is the inbound MESSAGE id (what the ledger dedupes on — reply
+        once per message) while ``reply_to`` is the CONVERSATION / RECIPIENT id the
+        message must be sent to (X ``dm_conversation_id``, Instagram sender IGSID).
+        Reddit is the exception even for DMs — a private-message reply is addressed
+        by the message fullname itself, so it derives the destination from
+        ``target_id`` and leaves ``reply_to`` empty. Accepting the keyword on every
+        override is the ``publish``-signature lesson: perform_reply always passes it.
+
+        The default refuses: a platform without a comment/DM API declares the
+        matching capability ``False`` and never reaches here (the gate checks
         capabilities first), but a defensive message beats an ``AttributeError``
         if it does — the same lesson as ``publish`` growing ``asset_paths``.
         """
         raise RuntimeError(
             f"{self.name.value} does not support replying to a {target_type} here.")
+
+    async def list_dms(self, access_token: str, account: Account, *,
+                       limit: int = 25) -> list[dict]:
+        """Recent INBOUND direct messages awaiting a reply — the DM read half.
+
+        The private counterpart of the "read my own comments" tools. Returns a
+        list of NORMALIZED items, newest first, each a dict with:
+
+        * ``id``              — the inbound MESSAGE id (what the ledger dedupes on
+                                and what perform_reply passes back as ``target_id``);
+        * ``conversation_id`` — the id a reply must be SENT to (perform_reply passes
+                                it back as ``reply_to``); may equal the sender id;
+        * ``sender``          — the other party's handle/username (never this
+                                account), for the agent and the human reviewer;
+        * ``sender_id``       — the other party's platform id;
+        * ``text``            — the message body, for the agent to judge;
+        * ``created_at``      — ISO timestamp where the API gives one.
+
+        Only a platform declaring ``supports_dms=True`` implements this; the
+        default refuses, mirroring :meth:`search_content`, because the tool layer
+        gates on the flag before ever calling here. A platform's own inbound
+        messages must be excluded so the agent never answers itself.
+        """
+        raise RuntimeError(f"{self.name.value} has no direct-message API here.")
 
     async def like_target(self, access_token: str, account: Account, *,
                           target_type: str, target_id: str, like: bool = True) -> dict:
@@ -251,3 +311,47 @@ class SocialPlatform(ABC):
         a platform without an implementation keeps the ledger-only behaviour.
         """
         return None
+
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """How a PUBLISHED post has performed — likes, views, comments, …
+
+        Returns a NORMALIZED dict of integer counters (``likes``, ``comments``,
+        ``shares``, ``views``, ``impressions``, … — a platform fills in what its
+        API exposes), or ``None`` when metrics could not be read (unsupported,
+        rate-limited, network, or the post is gone). ``{}`` means "asked, got
+        nothing" and is distinct from ``None``.
+
+        This is the read half of the performance feedback loop
+        (orchestrator.refresh_metrics polls it for recent published runs and
+        stores the result on ``Run.metrics``). Only a platform declaring
+        ``supports_metrics=True`` implements it; the default returns ``None`` so an
+        un-instrumented platform is simply skipped, never a crash.
+        """
+        return None
+
+    async def search_content(self, access_token: str, account: Account, *,
+                             query: str, limit: int = 10, subreddit: str = "") -> list[dict]:
+        """Find OTHER accounts' recent posts to engage — the outreach read half.
+
+        The follower-engine counterpart of the "read my own comments" tools: this
+        goes OUTWARD, surfacing strangers' recent posts on the topics the account
+        cares about so the agent can reply to or like them. Returns a list of
+        NORMALIZED items, each a dict with:
+
+        * ``id``        — the id to reply to / like (a platform id or fullname);
+        * ``text``      — the post's text (or title), for the agent to judge;
+        * ``url``       — the permalink, for the human reviewing a staged reply;
+        * ``author``    — the poster's handle/username (never this account);
+        * ``posted_at`` — ISO timestamp where the API gives one;
+        * plus whatever public engagement counts the platform exposes (``likes``,
+          ``score``, …), which help the agent pick the worthwhile few.
+
+        ``query`` is the search string (built by the tool from the instruction's
+        targets); ``subreddit`` is a Reddit-only scoping hint, ignored elsewhere
+        (kept in the shared signature so every caller passes the same keyword set,
+        the ``publish`` lesson). Only a platform declaring ``supports_search=True``
+        implements this; the default refuses, mirroring :meth:`reply_to_target`,
+        because the tool layer gates on the flag before ever calling here.
+        """
+        raise RuntimeError(f"{self.name.value} has no content-search API here.")

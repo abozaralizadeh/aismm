@@ -55,12 +55,15 @@ def _counters(state: dict) -> dict:
 
 
 async def perform_reply(state: dict, *, target_type: str, target_id: str, text: str,
-                        target_excerpt: str = "") -> dict:
+                        target_excerpt: str = "", reply_to: str = "") -> dict:
     """Gate + stage/send one reply. Returns a status dict for the agent.
 
-    ``target_type`` is ``comment`` / ``mention`` / ``reply`` (and, in a later
-    phase, ``dm``). ``target_id`` is the platform id of the thing being answered;
-    ``text`` is the reply the agent wrote.
+    ``target_type`` is ``comment`` / ``mention`` / ``reply`` / ``dm``.
+    ``target_id`` is the platform id of the thing being answered — for a DM that
+    is the inbound MESSAGE id, which is what the ledger dedupes on (reply once per
+    message). ``text`` is the reply the agent wrote. ``reply_to`` is the SEND
+    destination when it differs from ``target_id`` — for a DM the conversation /
+    recipient id — and is empty for a comment (you reply to the comment id).
     """
     account = state["account"]
     instruction = state["instruction"]
@@ -70,16 +73,22 @@ async def perform_reply(state: dict, *, target_type: str, target_id: str, text: 
 
     text = (text or "").strip()
     target_id = str(target_id or "").strip()
+    reply_to = str(reply_to or "").strip()
     target_type = (target_type or "comment").strip().lower()
     if not target_id:
-        return {"error": "no_target", "message": "Pass the id of the comment/post to reply to."}
+        return {"error": "no_target", "message": "Pass the id of the comment/message to reply to."}
     if not text:
         return {"error": "empty_reply", "message": "The reply text is empty — write a reply first."}
 
     from .platforms.registry import get_platform  # lazy
 
     platform = get_platform(account.platform)
-    if not platform.capabilities.supports_comments:
+    # A DM is gated by its own capability; a comment/mention/reply by supports_comments.
+    if target_type == "dm":
+        if not platform.capabilities.supports_dms:
+            return {"error": "unsupported",
+                    "message": f"{account.platform.value} does not support direct messages here."}
+    elif not platform.capabilities.supports_comments:
         return {"error": "unsupported",
                 "message": f"{account.platform.value} does not support replying to comments here."}
 
@@ -105,7 +114,7 @@ async def perform_reply(state: dict, *, target_type: str, target_id: str, text: 
         workspace_id=instruction.workspace_id,
         caption=text, media_kind="text",
         action_type="reply", target_type=target_type, target_id=target_id,
-        target_excerpt=(target_excerpt or "")[:500],
+        target_conversation=reply_to, target_excerpt=(target_excerpt or "")[:500],
     )
 
     # --- dry-run: preview only -------------------------------------------- #
@@ -134,7 +143,8 @@ async def perform_reply(state: dict, *, target_type: str, target_id: str, text: 
         if not access_token:
             raise RuntimeError("account has no stored access token — reconnect it in the dashboard.")
         result = await platform.reply_to_target(
-            access_token, account, target_type=target_type, target_id=target_id, text=text)
+            access_token, account, target_type=target_type, target_id=target_id,
+            text=text, reply_to=reply_to)
     except Exception as exc:  # noqa: BLE001 - surface the platform's own message
         # A volume refusal (Instagram RateLimited) pauses the account, like a post.
         from .platforms.instagram import RateLimited

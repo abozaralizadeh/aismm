@@ -150,6 +150,34 @@
       <p class="small muted mono">{{ run.asset_path }}</p>
     {% endif %}
 
+    {% if run.external_id or run.metrics %}
+      <h2>Performance</h2>
+      {% set pills = format_metrics(run.metrics) %}
+      {% if pills %}
+        <div class="metrics metrics-detail">
+          {% for p in pills %}
+            <span class="metric metric-lg"><b>{{ p.value }}</b> {{ p.label }}</span>
+          {% endfor %}
+        </div>
+        <p class="small muted">
+          {% if run.metrics_updated_at %}
+            Last checked {{ run.metrics_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC.
+          {% endif %}
+          Counts are approximate and refreshed about once a day.
+        </p>
+      {% else %}
+        <p class="muted">No performance recorded yet — a post's counters are polled
+          about once a day after it goes live. Use <em>Refresh now</em> to check
+          this one immediately.</p>
+      {% endif %}
+      {% if run.external_id %}
+        <form method="post" action="{{ url_for('refresh_run_metrics', run_id=run.id) }}"
+              class="inline-form">
+          <button class="btn small" type="submit">Refresh now</button>
+        </form>
+      {% endif %}
+    {% endif %}
+
     {% if staged %}
       <h2>Staged posts</h2>
       <div class="table-scroll">
@@ -159,7 +187,10 @@
         {% for s in staged %}
           <tr>
             <td><span class="badge badge-{{ s.status.value }}">{{ s.status.value }}</span></td>
-            <td class="small">{{ s.media_kind }}</td>
+            <td class="small">
+              {%- if s.action_type == 'reply' -%}
+                reply ({{ 'DM' if s.target_type == 'dm' else 'comment' }})
+              {%- else -%}{{ s.media_kind }}{%- endif -%}</td>
             <td class="small">{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
             <td class="actions-cell">
               <div class="actions">
@@ -168,7 +199,7 @@
                    asking you to judge it from memory. #}
                 {% if s.status.value == 'pending_approval' %}
                   <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
-                    <button class="btn btn-primary small">Approve &amp; publish</button>
+                    <button class="btn btn-primary small">{% if s.action_type == 'reply' %}Approve &amp; reply{% else %}Approve &amp; publish{% endif %}</button>
                   </form>
                   <form method="post" action="{{ url_for('reject', staged_id=s.id) }}"
                         onsubmit="return confirm('Reject this post? It will not be published.');">

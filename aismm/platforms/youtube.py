@@ -13,6 +13,7 @@ The caption's first line becomes the title; the remainder becomes the descriptio
 """
 from __future__ import annotations
 
+import logging
 import os
 
 import httpx
@@ -22,6 +23,8 @@ from ..assets import read_bytes
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
+
+logger = logging.getLogger("aismm.platforms.youtube")
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
@@ -41,6 +44,9 @@ class YouTube(SocialPlatform):
         # Comment threads on the channel's videos are readable and answerable via
         # the Data API (needs the youtube.force-ssl scope — reconnect to grant it).
         supports_comments=True,
+        # videos.list?part=statistics returns view/like/comment counts per video —
+        # the feedback loop reads them (youtube.readonly, already requested).
+        supports_metrics=True,
     )
     auth_endpoint = "https://accounts.google.com/o/oauth2/v2/auth"
     token_endpoint = "https://oauth2.googleapis.com/token"
@@ -114,6 +120,42 @@ class YouTube(SocialPlatform):
         return PublishResult(url=f"https://youtu.be/{video_id}" if video_id else "",
                              external_id=video_id, raw=data)
 
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """Normalized view/like/comment counts for one video.
+
+        ``videos.list?part=statistics`` returns the counts as STRINGS, so coerce
+        them to ints. Returns ``None`` on any failure so one bad video never stops
+        the sweep.
+        """
+        if not external_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(f"{DATA_API}/videos",
+                                     params={"part": "statistics", "id": external_id},
+                                     headers={"Authorization": f"Bearer {access_token}"})
+                r.raise_for_status()
+                items = r.json().get("items", [])
+        except Exception as exc:  # noqa: BLE001 - one bad video must not stop the sweep
+            logger.warning("YouTube metrics for %s failed: %s", external_id, exc)
+            return None
+        if not items:
+            return {}
+        stats = items[0].get("statistics") or {}
+
+        def _int(key: str) -> int:
+            try:
+                return int(stats.get(key, 0))
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            "views": _int("viewCount"),
+            "likes": _int("likeCount"),
+            "comments": _int("commentCount"),
+        }
+
     # ------------------------------------------------------------------ #
     # Reading and engagement (comment threads)
     # ------------------------------------------------------------------ #
@@ -162,12 +204,15 @@ class YouTube(SocialPlatform):
             return r.json()
 
     async def reply_to_target(self, access_token: str, account: Account, *,
-                              target_type: str, target_id: str, text: str) -> dict:
+                              target_type: str, target_id: str, text: str,
+                              reply_to: str = "") -> dict:
         """Reply to a comment (the mode-gated engagement path).
 
         ``target_id`` is a top-level comment id from ``list_comment_threads``. The
         Data API returns no watch-page anchor for a reply, so ``url`` is empty and
-        the ledger keys on the id.
+        the ledger keys on the id. ``reply_to`` is unused — YouTube has no DM API,
+        and for a comment the reply target IS ``target_id``; the keyword is
+        accepted only so the shared ``perform_reply`` call never raises TypeError.
         """
         result = await self.reply_to_comment(access_token, target_id, text)
         return {"id": result.get("id", ""), "url": ""}

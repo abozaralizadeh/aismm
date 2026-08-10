@@ -350,11 +350,42 @@ A *rejected* reply is neither, so it can be reconsidered next run. The read tool
 non-failure ending: it reads the per-run tally on `state["engagement"]` (kept in code by
 `perform_reply`, not reported by the model) and sets the run status published/staged/skipped.
 
+**`outreach` is the OTHER-directed engagement task: find strangers' posts and engage them, to grow
+reach.** engage answers people on your OWN posts; outreach goes looking. It reuses the whole
+engagement pipeline unchanged — same terminal set (`always_on_for("outreach")` returns
+`ALWAYS_ON_ENGAGE`, so an outreach run cannot `publish` either), same `perform_reply` gate, same
+`engagement_ledger` (keyed `tweet:` on X, `submission:` on Reddit, so the search read's
+`already_answered` flag and the reply's recorded fingerprint line up). `manager_agent` picks
+`OUTREACH_INSTRUCTIONS` + `build_outreach_kickoff`; the recovery nudge and `no_terminal_call`
+fallback treat outreach exactly like engage. It gets NO `performance` block (it posts nothing to
+have metrics on). What the operator types goes in `Instruction.engagement_targets` (a free-text
+column, `parse_targets` → typed buckets in [targets.py](aismm/targets.py): keywords, `#hashtags`,
+`r/subreddits`, `@accounts`); the kickoff inlines them, or tells the agent to INFER a few from the
+brief when empty.
+
+**Outreach is X + Reddit ONLY, because those are the only two with a genuine third-party
+content-search API** — the "best way per platform" is *not* to fake it on the others.
+`Capabilities.supports_search` + `SocialPlatform.search_content(access_token, account, *, query,
+limit, subreddit)` (base raises; `subreddit` is Reddit-only but stays in the shared signature per the
+`publish` full-keyword-set lesson). Only X (`GET /2/tweets/search/recent`, narrowed to
+`-is:retweet -is:reply -from:{me}` and excluding own posts by `author_id`) and Reddit
+(`/r/{sub}/search` · `/r/{sub}/new` · site-wide `/search`, dropping NSFW and own posts) declare it.
+Instagram hashtag search is deprecated/gated, YouTube search costs 100 quota units/call and is
+spam-filtered, TikTok has no such API — all three declare `supports_search=False`, documented in the
+base.py comment. `search_content` has the same drift guard as publish/reply/like/metrics
+(`scripts/preflight.py` + `tests/test_store_interface.py` bind it against every `supports_search`
+platform). The search tools (`x_search_posts`, `reddit_search_posts`) fall back to the instruction's
+targets when called with no query, annotate each hit `already_answered`, and gate on platform like
+every other per-platform tool; `reddit_reply` routes through `perform_reply`. Reddit needs NO
+reconnect — its existing `read`/`submit` scopes already cover search + comment. Azure's
+`_instruction_to_entity`/`_from_entity` whitelist must carry `engagement_targets` (it is an explicit
+whitelist, not a dump — a new Instruction column silently vanishes on Azure otherwise).
+
 **`supports_comments` gates a platform in or out.** Instagram/X/YouTube declare it; **TikTok does
 NOT** — its comment API is audit-gated for third-party apps, so `tiktok_tools` factories return
 `None` and log once rather than pretending. Adding a comment-capable platform means implementing
-`reply_to_target(access_token, account, *, target_type, target_id, text)` (base raises) — and
-`scripts/preflight.py` + `tests/test_store_interface.py` bind that call against every
+`reply_to_target(access_token, account, *, target_type, target_id, text, reply_to="")` (base
+raises) — and `scripts/preflight.py` + `tests/test_store_interface.py` bind that call against every
 `supports_comments` platform, the same drift guard as `publish`. X has no "comments" endpoint, so
 `twitter.list_replies` searches recent replies under the account's own posts by `conversation_id`.
 **`list_replies` MUST exclude the account's OWN replies by numeric `author_id`, not just the
@@ -367,9 +398,30 @@ nested under the top-level comment, so `list_comments` never surfaces them as ne
 on `author_id == account.external_id` (from the `expansions=author_id` the search already requests)
 can't slip that way; the same pass de-duplicates by tweet id. The ledger prevents a repeat of the
 *same* id — the author-id filter is what stops a *new* self-reply id from ever being offered.
-**DMs are phase 2** — the `target_type` axis on `StagedPost` and the ledger already accept `dm`;
-YouTube/TikTok have no DM API. No AI-disclosure suffix on a reply (it is conversational, not a
-labelled post).
+**DMs are the ENGAGE task, not a new task type** — answering incoming messages on your own account
+is engagement, so the DM read/reply tools ride the same engage/auto tool sets and the same
+`perform_reply` gate as comments (`dry_run` previews, `approval` queues, `live` sends). `supports_dms`
+gates a platform in: **X, Instagram and Reddit declare it; YouTube and TikTok have no DM API** and
+inherit the refusing base `list_dms`/`reply_to_target`. `scripts/preflight.py` +
+`tests/test_store_interface.py` bind `list_dms` against every `supports_dms` platform (the DM *reply*
+rides `reply_to_target`, already covered because every DM platform is comment-capable). No
+AI-disclosure suffix on a reply or a DM (it is conversational, not a labelled post).
+
+**A DM carries TWO ids, and confusing them double-answers or misdelivers.** `target_id` is the
+inbound MESSAGE id — the ledger dedupe key (reply once per message, keyed on `dm:<id>`) and the
+open-staged guard key. The SEND destination is separate and travels as the new optional `reply_to`
+on `reply_to_target`/`perform_reply`, persisted on `StagedPost.target_conversation` so the Approve
+button knows where to send: **X** `dm_conversation_id`, **Instagram** the sender's IGSID (you message
+the *person*, not a thread). **Reddit is the exception** — a PM reply is addressed by the message
+fullname (`t4_<id>`) itself, so `reply_to` stays empty and the destination derives from `target_id`.
+`list_dms` normalizes every platform to `{id, conversation_id, sender, sender_id, text, created_at}`;
+the read tools annotate `already_answered` from the `dm` ledger, and each platform's `list_dms`
+**excludes the account's own outbound messages** (by `sender_id`/author) so the agent never answers
+itself. New scopes gate this and need a **reconnect**: X `dm.read`/`dm.write`, Reddit
+`privatemessages`, Instagram `instagram_manage_messages` (App-Review gated, so it lives in
+`OPTIONAL_SCOPES` — an app without approval strips it via `INSTAGRAM_SCOPES` rather than failing the
+whole dialog). All three platforms only permit answering a message someone sent you, within their
+messaging window — never an unsolicited DM; the prompts say so.
 
 **Comments live PER POST on Instagram, so an engage run must sweep every recent post, not just the
 latest.** `instagram_comments` reads ONE `media_id`; a run that only checked the newest post left the

@@ -64,7 +64,7 @@ MAX_PROPERTY_CHARS = 32_000
 
 _DATETIME_FIELDS = {
     "expires_at", "created_at", "updated_at", "memory_updated_at", "note_updated_at",
-    "acquired_at",
+    "acquired_at", "metrics_updated_at",
 }
 # RowKey forbids / \ # ? and control chars — lock keys contain ':'.
 _ROWKEY_UNSAFE = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
@@ -204,6 +204,7 @@ class AzureStore(Store):
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
             "tools_json": i.tools_json,
             "task_type": i.task_type.value,
+            "engagement_targets": i.engagement_targets,
             "publish_mode": i.publish_mode.value,
             "media_pref": i.media_pref.value, "enabled": i.enabled,
             "disclose_ai": i.disclose_ai,
@@ -219,6 +220,7 @@ class AzureStore(Store):
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
             tools_json=e.get("tools_json", "[]"),
             task_type=InstructionTask(e.get("task_type", "publish")),
+            engagement_targets=e.get("engagement_targets", ""),
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
             media_pref=MediaPref(e.get("media_pref", "auto")),
             enabled=bool(e.get("enabled", True)),
@@ -234,7 +236,9 @@ class AzureStore(Store):
             "instruction_id": r.instruction_id, "account_id": r.account_id,
             "status": r.status.value, "caption": r.caption, "asset_path": r.asset_path,
             "asset_paths_json": r.asset_paths_json, "placement": r.placement,
-            "external_url": r.external_url, "error": r.error, "log": r.log,
+            "external_url": r.external_url, "external_id": r.external_id,
+            "metrics_json": r.metrics_json, "metrics_updated_at": r.metrics_updated_at,
+            "error": r.error, "log": r.log,
             "prompt": r.prompt, "created_at": r.created_at,
         }
 
@@ -247,7 +251,10 @@ class AzureStore(Store):
             caption=e.get("caption", ""), asset_path=e.get("asset_path", ""),
             asset_paths_json=e.get("asset_paths_json", "[]"),
             placement=e.get("placement", "feed"),
-            external_url=e.get("external_url", ""), error=e.get("error", ""),
+            external_url=e.get("external_url", ""), external_id=e.get("external_id", ""),
+            metrics_json=e.get("metrics_json", "{}"),
+            metrics_updated_at=_parse_dt(e.get("metrics_updated_at")),
+            error=e.get("error", ""),
             log=e.get("log", ""), prompt=e.get("prompt", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),
         )
@@ -260,7 +267,8 @@ class AzureStore(Store):
             "caption": s.caption, "asset_path": s.asset_path, "media_kind": s.media_kind,
             "asset_paths_json": s.asset_paths_json, "placement": s.placement,
             "action_type": s.action_type, "target_type": s.target_type,
-            "target_id": s.target_id, "target_excerpt": s.target_excerpt,
+            "target_id": s.target_id, "target_conversation": s.target_conversation,
+            "target_excerpt": s.target_excerpt,
             "status": s.status.value, "external_url": s.external_url, "created_at": s.created_at,
         }
 
@@ -277,6 +285,7 @@ class AzureStore(Store):
             action_type=e.get("action_type", "post"),
             target_type=e.get("target_type", ""),
             target_id=e.get("target_id", ""),
+            target_conversation=e.get("target_conversation", ""),
             target_excerpt=e.get("target_excerpt", ""),
             status=StagedStatus(e.get("status", "preview")),
             external_url=e.get("external_url", ""),

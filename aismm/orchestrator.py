@@ -287,6 +287,142 @@ def prune_asset_cache(store=None, *, older_than_days: int | None = None,
     return assets.prune_local(days, apply=apply, keep=keep)
 
 
+# A ceiling on how many posts one metrics sweep polls, so a large publish history
+# cannot turn the daily job into thousands of API calls. Newest first (see
+# recent_published_runs), so the freshest posts — the ones still gathering
+# engagement — always win the budget.
+_METRICS_MAX_RUNS = 200
+
+
+def refresh_metrics(store=None, *, max_age_days: int | None = None,
+                    limit: int = _METRICS_MAX_RUNS, apply: bool = True) -> dict:
+    """Poll recent published posts for fresh performance counters. Returns a summary.
+
+    The READ half of the performance feedback loop: for every published run
+    carrying a platform post id, ask the platform how that post has performed and
+    store the counters on the run (:attr:`Run.metrics`). The kickoff and the
+    dashboard read them back — the agent sees what landed last time, the operator
+    sees it too.
+
+    Best-effort throughout, so one bad account never stops the sweep: a platform
+    with no metrics API is skipped, a missing token is skipped, and any per-post
+    failure (deleted post, rate limit, network) is logged and skipped. Tokens are
+    resolved once per account and reused across that account's posts.
+
+    ``max_age_days`` defaults to ``settings.metrics_refresh_days``; ``0`` there
+    turns the scheduled refresh off, but an explicit call (the CLI) may still pass
+    a positive value. ``apply=False`` polls and reports without writing.
+    """
+    days = settings.metrics_refresh_days if max_age_days is None else max_age_days
+    if days <= 0:
+        return {"applied": False, "candidates": 0, "polled": 0, "updated": 0, "skipped": 0,
+                "skipped_reason": "METRICS_REFRESH_DAYS=0 — the metrics refresh is off."}
+
+    store = store or get_store()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    runs = store.recent_published_runs(since=since, limit=limit)
+
+    account_cache: dict[str, Account | None] = {}
+    token_cache: dict[str, str | None] = {}
+    polled = updated = skipped = 0
+    for run in runs:
+        if run.account_id in account_cache:
+            account = account_cache[run.account_id]
+        else:
+            account = store.get_account(run.account_id)
+            account_cache[run.account_id] = account
+        if not account:
+            skipped += 1
+            continue
+        platform = get_platform(account.platform)
+        if not platform.capabilities.supports_metrics:
+            skipped += 1
+            continue
+        # Resolve (and refresh) the token once per account. valid_access_token_sync
+        # opens its own event loop, so it must NOT run inside one — this whole
+        # function is sync (scheduler thread / CLI), which is why it can.
+        if run.account_id not in token_cache:
+            try:
+                token_cache[run.account_id] = tokens.valid_access_token_sync(account, store)
+            except Exception as exc:  # noqa: BLE001 - a token failure skips the account, not the sweep
+                logger.warning("Metrics: no token for %s (%s): %s",
+                               account.handle or account.external_id,
+                               account.platform.value, exc)
+                token_cache[run.account_id] = None
+        access_token = token_cache[run.account_id]
+        if not access_token:
+            skipped += 1
+            continue
+
+        polled += 1
+        try:
+            metrics = _run_async(platform.fetch_post_metrics(
+                access_token, account, external_id=run.external_id))
+        except Exception as exc:  # noqa: BLE001 - one bad post must never stop the sweep
+            logger.warning("Metrics fetch failed for run %s (%s): %s",
+                           run.id[:8], account.platform.value, exc)
+            continue
+        if metrics is None:
+            continue                       # asked, could not read — leave the last values alone
+        if apply:
+            run.set_metrics(metrics)
+            run.metrics_updated_at = datetime.now(timezone.utc)
+            store.update_run(run)
+        updated += 1
+
+    logger.info("Metrics refresh: %d updated of %d polled (%d skipped) across %d candidate run(s)",
+                updated, polled, skipped, len(runs))
+    return {"applied": apply, "candidates": len(runs), "polled": polled,
+            "updated": updated, "skipped": skipped}
+
+
+def refresh_run_metrics(run_id: str, store=None, *, apply: bool = True) -> dict | None:
+    """Poll ONE published run's post for fresh counters — the dashboard button.
+
+    Unlike :func:`refresh_metrics` (the daily sweep, gated by
+    ``METRICS_REFRESH_DAYS``) this is operator-initiated for a single post, so it
+    always runs and costs exactly one platform call. Returns the metrics dict on
+    success, ``{}`` when the platform reported nothing, or ``None`` when the post
+    could not be read (no id, no token, no metrics API, deleted post) — the caller
+    distinguishes those to word the flash message.
+
+    Sync like ``refresh_metrics``: ``valid_access_token_sync`` opens its own event
+    loop, so this must not run inside one (a Flask sync view / CLI is fine).
+    """
+    store = store or get_store()
+    run = store.get_run(run_id)
+    if not run or not run.external_id:
+        return None
+    account = store.get_account(run.account_id)
+    if not account:
+        return None
+    platform = get_platform(account.platform)
+    if not platform.capabilities.supports_metrics:
+        return None
+    try:
+        access_token = tokens.valid_access_token_sync(account, store)
+    except Exception as exc:  # noqa: BLE001 - a token failure is "could not read", not a crash
+        logger.warning("Metrics: no token for run %s (%s): %s",
+                       run.id[:8], account.platform.value, exc)
+        return None
+    if not access_token:
+        return None
+    try:
+        metrics = _run_async(platform.fetch_post_metrics(
+            access_token, account, external_id=run.external_id))
+    except Exception as exc:  # noqa: BLE001 - one bad read must not 500 the page
+        logger.warning("Metrics fetch failed for run %s (%s): %s",
+                       run.id[:8], account.platform.value, exc)
+        return None
+    if metrics is None:
+        return None
+    if apply:
+        run.set_metrics(metrics)
+        run.metrics_updated_at = datetime.now(timezone.utc)
+        store.update_run(run)
+    return metrics
+
+
 def close_stale_runs(store, runs, *, minutes: int = 0) -> int:
     """Mark the given abandoned runs failed, saying why. Returns how many."""
     for run in runs:
@@ -465,7 +601,7 @@ def approve_staged(staged_id: str) -> dict:
     staged.status = StagedStatus.published
     staged.external_url = result.url
     store.update_staged(staged)
-    _record_published_run(store, staged, result.url)
+    _record_published_run(store, staged, result.url, external_id=result.external_id)
     return {"status": "published", "url": result.url}
 
 
@@ -485,7 +621,8 @@ def _approve_staged_reply(store, staged: StagedPost, account: Account, platform,
     try:
         result = _run_async(platform.reply_to_target(
             access_token, account, target_type=staged.target_type,
-            target_id=staged.target_id, text=staged.caption))
+            target_id=staged.target_id, text=staged.caption,
+            reply_to=staged.target_conversation))
     except RateLimited as exc:
         held = cooldown.start(account, store, exc.retry_after_seconds,
                               reason="approval reply was rate-limited")
@@ -522,11 +659,14 @@ def reject_staged(staged_id: str) -> dict:
     return {"status": "rejected"}
 
 
-def _record_published_run(store, staged: StagedPost, url: str) -> None:
+def _record_published_run(store, staged: StagedPost, url: str, *, external_id: str = "") -> None:
     """Attach the published permalink to the originating run (best-effort).
 
     Fetches the run by id: scanning the most recent N runs used to miss anything
-    approved after enough newer runs had piled up.
+    approved after enough newer runs had piled up. ``external_id`` is the platform
+    post id — recorded here so an approval-mode post is pollable by the metrics
+    feedback loop, exactly like a live one (a live run gets it in
+    ``perform_publish``).
     """
     run = store.get_run(staged.run_id) if staged.run_id else None
     if not run:
@@ -534,5 +674,7 @@ def _record_published_run(store, staged: StagedPost, url: str) -> None:
         return
     run.status = RunStatus.published
     run.external_url = url
+    if external_id:
+        run.external_id = external_id
     run.log = (run.log + f"\nApproved & published: {url}").strip()
     store.update_run(run)

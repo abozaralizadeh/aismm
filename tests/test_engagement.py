@@ -82,8 +82,10 @@ def test_approval_queues_for_a_human_and_calls_no_platform(env, monkeypatch):
 def test_live_sends_and_records_the_ledger(env, monkeypatch):
     sent = {}
 
-    async def _fake_reply(access_token, account, *, target_type, target_id, text):
-        sent.update(target_type=target_type, target_id=target_id, text=text)
+    async def _fake_reply(access_token, account, *, target_type, target_id, text,
+                          reply_to=""):
+        sent.update(target_type=target_type, target_id=target_id, text=text,
+                    reply_to=reply_to)
         return {"id": "r99", "url": "https://example.com/r/99"}
 
     monkeypatch.setattr("aismm.tokens.valid_access_token",
@@ -135,6 +137,61 @@ def test_empty_reply_and_missing_target_are_refused(env):
     assert _reply(env, target_id="")["error"] == "no_target"
 
 
+# --- DMs ride the same gate, with a second id for the send destination -------------- #
+
+def test_dm_dry_run_stages_the_message_id_and_the_conversation_id(env, monkeypatch):
+    """A DM stages like a comment, but keeps TWO ids: target_id is the inbound
+    message (the ledger dedupe key), target_conversation is where the reply is sent
+    (X conversation / IG recipient). Dry-run must never touch the platform."""
+    monkeypatch.setattr("aismm.tokens.valid_access_token",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no API in dry_run")))
+    result = _reply(env, target_type="dm", target_id="msg_1", reply_to="conv_1",
+                    target_excerpt="hey, are you open?")
+    assert result["status"] == "staged"
+    s = env["store"].list_staged(pending_only=False)[0]
+    assert s.action_type == "reply" and s.target_type == "dm"
+    assert s.target_id == "msg_1"                 # what the ledger dedupes on
+    assert s.target_conversation == "conv_1"      # where the reply will be sent
+
+
+def test_dm_live_send_passes_the_conversation_id_and_dedupes_on_the_message(env, monkeypatch):
+    sent = {}
+
+    async def _fake_reply(access_token, account, *, target_type, target_id, text, reply_to=""):
+        sent.update(target_type=target_type, target_id=target_id, reply_to=reply_to)
+        return {"id": "dm99", "url": ""}
+
+    monkeypatch.setattr("aismm.tokens.valid_access_token", lambda *a, **k: _async("tok"))
+    monkeypatch.setattr("aismm.platforms.registry.get_platform",
+                        lambda name: _FakePlatform(_fake_reply))
+    env["instruction"].publish_mode = PublishMode.live
+
+    result = _reply(env, target_type="dm", target_id="msg_1", reply_to="conv_1")
+    assert result["status"] == "replied"
+    assert sent == {"target_type": "dm", "target_id": "msg_1", "reply_to": "conv_1"}
+    # The ledger keys on the MESSAGE id under the dm target type, never the conversation.
+    assert engagement_ledger.answered(env["account"], "dm", "msg_1")
+    assert not engagement_ledger.answered(env["account"], "dm", "conv_1")
+
+
+def test_a_platform_without_a_dm_api_refuses_a_dm(store):
+    """YouTube supports comments but has no DM API — a DM there is refused by
+    capability before anything is staged or sent."""
+    account = store.upsert_account(
+        Account(platform=PlatformName.youtube, handle="yt", external_id="yt1"),
+        access_token="tok")
+    instruction = store.upsert_instruction(
+        Instruction(name="E", task_type=InstructionTask.engage,
+                    publish_mode=PublishMode.dry_run))
+    run = store.add_run(Run(instruction_id=instruction.id, account_id=account.id))
+    state = {"account": account, "instruction": instruction, "store": store,
+             "run": run, "assets": []}
+    result = _run(engagement.perform_reply(
+        state, target_type="dm", target_id="m1", text="hi", reply_to="c1"))
+    assert result["error"] == "unsupported"
+    assert store.list_staged(pending_only=False) == []
+
+
 # --- auto mode: the agent decides publish vs engage --------------------------------- #
 
 def test_auto_kickoff_asks_the_agent_to_decide():
@@ -170,7 +227,9 @@ class _FakePlatform:
 
     class capabilities:  # noqa: N801 - matches attribute access platform.capabilities.x
         supports_comments = True
+        supports_dms = True
 
-    async def reply_to_target(self, access_token, account, *, target_type, target_id, text):
+    async def reply_to_target(self, access_token, account, *, target_type, target_id, text,
+                              reply_to=""):
         return await self._reply(access_token, account, target_type=target_type,
-                                 target_id=target_id, text=text)
+                                 target_id=target_id, text=text, reply_to=reply_to)

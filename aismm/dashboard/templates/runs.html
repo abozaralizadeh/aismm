@@ -38,10 +38,12 @@
     {% if s.action_type == 'reply' %}
       {# An engagement reply: no media. Show what we're answering (target_excerpt)
          above the proposed reply so the reviewer judges the pair, not a caption
-         floating on its own. #}
+         floating on its own. A DM is private — label it so the reviewer knows this
+         reply is a direct message, not a public comment. #}
       <div class="staged-media staged-reply-target">
-        <div class="muted small">Replying to</div>
-        <blockquote>{{ s.target_excerpt or '(comment)' }}</blockquote>
+        <div class="muted small">
+          {% if s.target_type == 'dm' %}Replying to DM{% else %}Replying to comment{% endif %}</div>
+        <blockquote>{{ s.target_excerpt or ('(direct message)' if s.target_type == 'dm' else '(comment)') }}</blockquote>
       </div>
     {% else %}
       <div class="staged-media">
@@ -123,6 +125,7 @@
     <th>{{ sort_header('account_id', 'Account', filters, runs_url) }}</th>
     <th>{{ sort_header('status', 'Status', filters, runs_url) }}</th>
     <th>Caption / error</th>
+    <th>Performance</th>
     <th></th>
   </tr></thead>
   <tbody>
@@ -161,6 +164,16 @@
       </td>
       <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value }}</span></td>
       <td class="small">{{ (r.caption or r.error or '')[:90] }}</td>
+      <td class="small metrics-cell">
+        {# How the published post did — the performance feedback loop, visible at a
+           glance. Empty until the daily sweep (or the run-detail button) polls it. #}
+        {% set pills = format_metrics(r.metrics) %}
+        {% if pills %}
+          <span class="metrics">
+            {% for p in pills %}<span class="metric"><b>{{ p.value }}</b> {{ p.label }}</span>{% endfor %}
+          </span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
       <td class="nowrap">
         <a class="small" href="{{ url_for('run_detail', run_id=r.id) }}">details →</a>
         {% if r.external_url %} <a class="small" href="{{ r.external_url }}" target="_blank">open ↗</a>{% endif %}

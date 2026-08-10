@@ -7,10 +7,11 @@ rest of the app never touches ciphertext or the Fernet key.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 
 from ..models import (
-    Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, StagedPost,
-    StagedStatus, Workspace, WorkspaceMember,
+    Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, RunStatus,
+    StagedPost, StagedStatus, Workspace, WorkspaceMember,
 )
 
 
@@ -140,6 +141,36 @@ class Store(ABC):
                    search: str = "") -> int:
         """How many runs match these filters (for pagination)."""
 
+    def recent_published_runs(self, *, since: datetime | None = None, limit: int = 200,
+                              workspace_id: str | None = None) -> list[Run]:
+        """Published runs carrying a platform post id, newest first — for metrics.
+
+        The performance feedback loop (:func:`aismm.orchestrator.refresh_metrics`)
+        polls each returned run's ``external_id`` for fresh counters. Only runs
+        that actually went live carry an id, so runs without one are skipped (older
+        posts published before this field existed simply can't be polled). ``since``
+        bounds the sweep to recent posts — a months-old post's counts barely move,
+        and polling them forever wastes API calls.
+
+        A concrete method rather than ``@abstractmethod``: the default filters
+        ``list_runs`` so a backend without a specialised query still works, and
+        :class:`LocalStore` overrides it with SQL. Kept next to the run queries so
+        both backends stay in step.
+        """
+        candidates = self.list_runs(status=RunStatus.published, workspace_id=workspace_id,
+                                    limit=limit, sort="created_at", descending=True)
+        cutoff = _as_utc(since)
+        result: list[Run] = []
+        for run in candidates:
+            if not run.external_id:
+                continue
+            if cutoff is not None:
+                created = _as_utc(run.created_at)
+                if created is not None and created < cutoff:
+                    continue
+            result.append(run)
+        return result
+
     # --- staged posts ------------------------------------------------------ #
     @abstractmethod
     def add_staged(self, staged: StagedPost) -> StagedPost: ...
@@ -233,3 +264,15 @@ class Store(ABC):
 
     @abstractmethod
     def release_lock(self, key: str) -> None: ...
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalize a datetime to tz-aware UTC so naive/aware values compare safely.
+
+    Run timestamps can come back naive (SQLite drops the tzinfo), while the
+    ``since`` cutoff is aware — comparing them directly raises. Treat a naive value
+    as UTC, which is what everything in this app is stored as.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

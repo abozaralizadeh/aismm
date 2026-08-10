@@ -219,6 +219,74 @@ def _make_reply(state: dict):
     return instagram_reply_to_comment
 
 
+def _make_dms(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def instagram_dms(limit: int = 25) -> dict:
+        """Recent INBOUND direct messages to this account — private messages to answer.
+
+        The private counterpart of ``instagram_recent_comments``: read new DMs and
+        answer the ones that need it with ``instagram_reply_to_dm``. Each item
+        carries the ``id`` (the message id — pass it back as ``message_id``),
+        ``conversation_id`` (the sender's id — pass it back as ``recipient_id`` so
+        the reply reaches them), ``sender`` and ``text``. Items flagged
+        ``already_answered`` have been handled — skip them. Needs the
+        ``instagram_manage_messages`` scope (App Review); an account connected
+        before it was granted must be reconnected. Best-effort: an empty list can
+        mean "no new DMs" or "the scope is missing".
+
+        Args:
+            limit: How many messages to return (1–50, newest first).
+        """
+        async def call(platform, account, token):
+            dms = await platform.list_dms(token, account, limit=limit)
+            for d in dms:
+                d["already_answered"] = engagement_ledger.answered(
+                    account, "dm", d.get("id"))
+            return {"count": len(dms), "dms": dms}
+
+        return await _with_context(state, call)
+
+    return instagram_dms
+
+
+def _make_reply_to_dm(state: dict):
+    if not _guard(state):
+        return None
+
+    @function_tool
+    async def instagram_reply_to_dm(message_id: str, recipient_id: str, message: str,
+                                    dm_excerpt: str = "") -> dict:
+        """Answer a direct message, in the account's voice.
+
+        The reply goes out through the instruction's publish mode, exactly like a
+        comment reply: ``dry_run`` stages a preview, ``approval`` queues it for a
+        human, only ``live`` sends it now. A DM already answered (or already queued)
+        comes back "skipped" — move on. Instagram only lets you message someone who
+        messaged you first, within its standard window, so only ever answer an
+        inbound DM — never send an unsolicited one. Be helpful and brief; never
+        promise anything on the brand's behalf.
+
+        Args:
+            message_id: The inbound message's ``id`` (from ``instagram_dms``) — what
+                is deduped so the same DM is never answered twice.
+            recipient_id: The message's ``conversation_id`` (from ``instagram_dms``)
+                — the person the reply is delivered to.
+            message: The reply text.
+            dm_excerpt: The DM you are answering, shown to a human reviewing the queue.
+        """
+        if not _guard(state):
+            return {"error": "not_available",
+                    "message": "This run does not target a connected Instagram account."}
+        return await engagement.perform_reply(
+            state, target_type="dm", target_id=message_id, text=message,
+            reply_to=recipient_id, target_excerpt=dm_excerpt)
+
+    return instagram_reply_to_dm
+
+
 def _make_moderate(state: dict):
     if not _guard(state):
         return None
@@ -360,6 +428,8 @@ register_tool("instagram_recent_posts", _make_recent_posts)
 register_tool("instagram_comments", _make_comments)
 register_tool("instagram_recent_comments", _make_recent_comments)
 register_tool("instagram_reply_to_comment", _make_reply)
+register_tool("instagram_dms", _make_dms)
+register_tool("instagram_reply_to_dm", _make_reply_to_dm)
 register_tool("instagram_moderate_comment", _make_moderate)
 register_tool("instagram_insights", _make_insights)
 register_tool("instagram_publishing_limit", _make_publishing_limit)

@@ -256,6 +256,12 @@ class Settings:
     # The local folder is a CACHE when blob is configured; without pruning a VM
     # fills up and the next run fails trying to write its media. 0 disables it.
     asset_retention_days: int = 14
+    # How many days back the performance feedback loop keeps polling a published
+    # post for fresh metrics (likes/views/…). A months-old post's counts barely
+    # move, and every poll is an API call — pay-per-use on X — so the window is
+    # bounded. 0 turns the metrics refresh OFF entirely (same "zeroing switches it
+    # off" convention as asset_retention_days); the on-demand CLI sweep still runs.
+    metrics_refresh_days: int = 30
     run_timeout_seconds: int = 7200
     # How long ONE Sora job may take before it is abandoned and retried elsewhere.
     sora_job_timeout_seconds: int = 1800
@@ -419,6 +425,7 @@ def load_settings() -> Settings:
         enable_scheduler=_bool(os.getenv("AISMM_ENABLE_SCHEDULER"), True),
         memory_max_chars=int(os.getenv("MEMORY_MAX_CHARS", "6000") or 6000),
         asset_retention_days=int(os.getenv("ASSET_RETENTION_DAYS", "14") or 0),
+        metrics_refresh_days=int(os.getenv("METRICS_REFRESH_DAYS", "30") or 0),
         run_timeout_seconds=int(os.getenv("RUN_TIMEOUT_SECONDS", "7200") or 0),
         sora_job_timeout_seconds=int(
             os.getenv("SORA_JOB_TIMEOUT_SECONDS", "1800") or 1800),

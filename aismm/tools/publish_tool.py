@@ -438,6 +438,9 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     store.add_staged(staged)
     run.status = RunStatus.published
     run.external_url = result.url
+    # The platform's own post id — what the performance feedback loop later polls
+    # fetch_post_metrics with. external_url is for a human; this is for the API.
+    run.external_id = result.external_id
     run.log = (run.log + f"\nPublished {kind} post: {result.url}"
                + (f"\nRECONCILED: Instagram reported an error ({publish_error}) but the post "
                   f"is live. Publishing paused so the next run does not knock again."

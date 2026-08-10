@@ -202,11 +202,21 @@ class Twitter(SocialPlatform):
         # X is the one platform whose API lets the account LIKE a tweet
         # (POST /2/users/:id/likes). Needs the like.write scope below.
         supports_liking=True,
+        # public_metrics on a tweet carries likes/reposts/replies/quotes/
+        # impressions — the performance feedback loop reads them per post.
+        supports_metrics=True,
+        # Recent search (GET /2/tweets/search/recent) finds OTHER people's posts
+        # by keyword/#hashtag — the outreach flow's read half.
+        supports_search=True,
+        # GET /2/dm_events reads inbound DMs, POST /2/dm_conversations/:id/messages
+        # answers them — needs the dm.read / dm.write scopes below, so an account
+        # connected before they were added must be reconnected.
+        supports_dms=True,
     )
     auth_endpoint = "https://x.com/i/oauth2/authorize"
     token_endpoint = f"{API}/oauth2/token"
     scopes = ["tweet.read", "tweet.write", "users.read", "media.write",
-              "like.write", "offline.access"]
+              "like.write", "dm.read", "dm.write", "offline.access"]
     use_pkce = True
     token_auth_style = "basic"
 
@@ -502,6 +512,31 @@ class Twitter(SocialPlatform):
                                   {"tweet.fields": self.TWEET_FIELDS})
         return payload.get("data", {}) or {}
 
+    async def fetch_post_metrics(self, access_token: str, account: Account, *,
+                                 external_id: str) -> dict | None:
+        """Normalized per-post counters for the performance feedback loop.
+
+        ``public_metrics`` on a tweet carries the counters anyone can see; map them
+        onto the shared metric names. Returns ``None`` on any failure so a single
+        unreadable post never breaks the sweep — the caller just leaves last
+        known metrics in place.
+        """
+        if not external_id:
+            return None
+        try:
+            data = await self.post_metrics(access_token, external_id)
+        except Exception as exc:  # noqa: BLE001 - one bad post must not stop the sweep
+            logger.warning("X metrics for %s failed: %s", external_id, exc)
+            return None
+        pm = data.get("public_metrics") or {}
+        return {
+            "likes": pm.get("like_count", 0),
+            "reposts": pm.get("retweet_count", 0),
+            "replies": pm.get("reply_count", 0),
+            "quotes": pm.get("quote_count", 0),
+            "impressions": pm.get("impression_count", 0),
+        }
+
     async def profile(self, access_token: str) -> dict:
         """Follower and post counts for the connected account."""
         payload = await self._get(access_token, "users/me", {
@@ -560,6 +595,120 @@ class Twitter(SocialPlatform):
             replies.append(p)
         return replies
 
+    async def search_content(self, access_token: str, account: Account, *,
+                             query: str, limit: int = 10, subreddit: str = "") -> list[dict]:
+        """Recent posts from OTHER accounts matching ``query`` — the outreach read.
+
+        Runs one ``GET /2/tweets/search/recent`` for the agent to find strangers'
+        posts to reply to or like. The query is narrowed to ORIGINAL posts worth
+        engaging: ``-is:retweet -is:reply`` (a retweet is not the author's words
+        and a reply is buried in a thread), and ``-from:{handle}`` so the account
+        never surfaces its own posts. ``subreddit`` is ignored (Reddit-only).
+
+        Best-effort and small — recent search spends credits on the pay-per-use
+        API and needs project access some apps lack, so a failure returns ``[]``
+        rather than killing the run. Returns normalized items with ``author`` (the
+        poster's ``@handle``) so the agent can see it is engaging someone else.
+        """
+        q = (query or "").strip()
+        if not q:
+            return []
+        me = (account.handle or "").lstrip("@")
+        full = f"({q}) -is:retweet -is:reply" + (f" -from:{me}" if me else "")
+        try:
+            payload = await self._get(access_token, "tweets/search/recent", {
+                "query": full, "max_results": max(10, min(limit, 100)),
+                "tweet.fields": f"{self.TWEET_FIELDS},author_id",
+                "expansions": "author_id", "user.fields": "username"})
+        except Exception as exc:  # noqa: BLE001 - outreach search is best-effort
+            logger.warning("X content search failed (%s); returning no results", exc)
+            return []
+        users = {u.get("id"): u.get("username")
+                 for u in (payload.get("includes", {}) or {}).get("users", []) or []}
+        my_id = str(account.external_id or "")
+        items: list[dict] = []
+        for p in payload.get("data", []) or []:
+            author_id = str(p.get("author_id") or "")
+            if my_id and author_id == my_id:      # never engage our own post
+                continue
+            username = users.get(p.get("author_id"), "")
+            metrics = p.get("public_metrics", {}) or {}
+            items.append({
+                "id": str(p.get("id") or ""),
+                "text": (p.get("text") or "")[:600],
+                "url": f"https://x.com/{username or 'i'}/status/{p.get('id')}",
+                "author": f"@{username}" if username else "",
+                "posted_at": p.get("created_at"),
+                "likes": metrics.get("like_count"),
+                "reposts": metrics.get("retweet_count"),
+                "replies": metrics.get("reply_count"),
+            })
+        return items[:limit]
+
+    # ------------------------------------------------------------------ #
+    # Direct messages
+    # ------------------------------------------------------------------ #
+    DM_FIELDS = "id,text,created_at,sender_id,dm_conversation_id,event_type"
+
+    async def list_dms(self, access_token: str, account: Account, *,
+                       limit: int = 25) -> list[dict]:
+        """Recent INBOUND direct messages awaiting a reply.
+
+        ``GET /2/dm_events`` returns the account's most recent DM events across all
+        conversations, newest first. We keep only ``MessageCreate`` events (a join/
+        leave is not a message) NOT sent by this account (``sender_id`` !=
+        ``external_id`` — the same self-exclusion the reply search uses), so the
+        agent never answers its own outbound message. ``id`` is the inbound message
+        (event) id the ledger dedupes on; ``conversation_id`` is where a reply is
+        sent. Needs the ``dm.read`` scope. Best-effort: DMs are pay-per-use and the
+        scope may be missing on an old connection, so a failure returns ``[]``.
+        """
+        try:
+            payload = await self._get(access_token, "dm_events", {
+                "max_results": max(1, min(limit, 100)),
+                "dm_event.fields": self.DM_FIELDS,
+                "expansions": "sender_id", "user.fields": "username"})
+        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
+            logger.warning("X DM read failed (%s); returning no DMs", exc)
+            return []
+        users = {u.get("id"): u.get("username")
+                 for u in (payload.get("includes", {}) or {}).get("users", []) or []}
+        me = str(account.external_id or "")
+        items: list[dict] = []
+        for ev in payload.get("data", []) or []:
+            if ev.get("event_type") != "MessageCreate":
+                continue
+            sender_id = str(ev.get("sender_id") or "")
+            if me and sender_id == me:            # skip our own outbound messages
+                continue
+            username = users.get(ev.get("sender_id"), "")
+            items.append({
+                "id": str(ev.get("id") or ""),
+                "conversation_id": str(ev.get("dm_conversation_id") or ""),
+                "sender": f"@{username}" if username else "",
+                "sender_id": sender_id,
+                "text": (ev.get("text") or "")[:1000],
+                "created_at": ev.get("created_at"),
+            })
+        return items[:limit]
+
+    async def send_dm(self, access_token: str, conversation_id: str, text: str) -> dict:
+        """Send a message into an existing DM conversation. Sends IMMEDIATELY.
+
+        ``POST /2/dm_conversations/{id}/messages`` — the conversation id comes from
+        the inbound message's ``dm_conversation_id`` (:meth:`list_dms`), so we reply
+        into the same thread. Needs the ``dm.write`` scope.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{API}/dm_conversations/{conversation_id}/messages",
+                headers={"Authorization": f"Bearer {access_token}",
+                         "Content-Type": "application/json"},
+                json={"text": text})
+            if r.status_code >= 400:
+                raise self._api_error(r)
+            return r.json().get("data", {}) or {}
+
     async def reply(self, access_token: str, post_id: str, text: str) -> dict:
         """Reply to a post, in the account's voice. Posts IMMEDIATELY."""
         async with httpx.AsyncClient(timeout=30) as client:
@@ -574,12 +723,22 @@ class Twitter(SocialPlatform):
             return r.json().get("data", {})
 
     async def reply_to_target(self, access_token: str, account: Account, *,
-                              target_type: str, target_id: str, text: str) -> dict:
-        """Reply to a post/mention/reply (the mode-gated engagement path).
+                              target_type: str, target_id: str, text: str,
+                              reply_to: str = "") -> dict:
+        """Reply to a post/mention/reply, or answer a DM (the mode-gated path).
 
-        Every X target is a tweet id, so this delegates to :meth:`reply` and
-        builds the reply's public url from the account handle and the new id.
+        A ``dm`` target is sent into its conversation: ``reply_to`` carries the
+        ``dm_conversation_id`` from :meth:`list_dms` (``target_id`` is the inbound
+        message id the ledger dedupes on, which is NOT a send destination), and DMs
+        have no public permalink so ``url`` is empty. Every other X target is a
+        tweet id, so this delegates to :meth:`reply` and builds the reply's public
+        url from the account handle and the new id.
         """
+        if (target_type or "").lower() == "dm":
+            if not reply_to:
+                raise RuntimeError("X needs the DM conversation id to reply — none was given.")
+            data = await self.send_dm(access_token, reply_to, text)
+            return {"id": str(data.get("dm_event_id") or ""), "url": ""}
         data = await self.reply(access_token, target_id, text)
         new_id = data.get("id", "")
         handle = (account.handle or "i").lstrip("@")

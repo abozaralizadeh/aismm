@@ -63,8 +63,9 @@
 </section>
 
 {% else %}
-{# Connected: real, honest operational metrics. We don't collect reach/followers,
-   so every number here comes from runs, schedules and the approval queue. #}
+{# Connected: operational KPIs from runs, schedules and the approval queue, plus
+   real engagement (likes/views/comments) polled from each live post by the daily
+   metrics sweep and summed in the Performance panel below. #}
 <div class="cards kpis">
   <div class="card">
     <div class="card-num">{{ accounts|length }}</div>
@@ -98,6 +99,58 @@
     <span class="muted small">provider: {{ settings.llm.provider }}</span>
   </div>
 </div>
+
+{# Performance: engagement on the posts that actually went live. Empty until the
+   daily sweep (or a run-detail "Refresh") polls a live post's counters. #}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Performance</h2>
+    <span class="muted small">
+      {% if performance.posts_measured %}across {{ performance.posts_measured }} live post{{ '' if performance.posts_measured == 1 else 's' }} · last {{ window_days }} days{% else %}last {{ window_days }} days{% endif %}
+    </span>
+  </div>
+  {% if performance.pills %}
+  <div class="metrics perf-totals">
+    {% for p in performance.pills %}<span class="metric metric-lg"><b>{{ p.value }}</b> {{ p.label }}</span>{% endfor %}
+  </div>
+  {% if performance.top %}
+  <h3 class="perf-sub muted small">Top posts</h3>
+  <ul class="feed">
+    {% for item in performance.top %}
+    {% set r = item.run %}
+    {% set file = r.asset_path.split('/')[-1] if r.asset_path else '' %}
+    <li>
+      <a class="feed-thumb" href="{{ url_for('run_detail', run_id=r.id) }}">
+        {% if file and file.lower().endswith(('.mp4', '.mov', '.webm')) %}
+          <video class="thumb" src="{{ media_url(file) }}#t=0.5" preload="metadata" muted playsinline></video>
+        {% elif file %}
+          <img class="thumb" src="{{ media_url(file) }}" alt="" loading="lazy">
+        {% else %}
+          <span class="thumb thumb-empty" aria-hidden="true">
+            <img src="{{ url_for('static', filename='brand/mark-dark-sm.svg') }}" alt="">
+          </span>
+        {% endif %}
+      </a>
+      <div class="feed-body">
+        <div class="feed-line">
+          <a href="{{ url_for('run_detail', run_id=r.id) }}">
+            {{ item.instruction.name if item.instruction else 'deleted instruction' }}</a>
+          {% if item.account %}<span class="feed-meta small muted">{{ platform_icon(item.account.platform.value, 14) }}
+            {{ item.account.handle or item.account.external_id }}</span>{% endif %}
+        </div>
+        <div class="metrics">
+          {% for p in item.pills %}<span class="metric"><b>{{ p.value }}</b> {{ p.label }}</span>{% endfor %}
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% else %}
+  <p class="empty-hint">No engagement data yet. Once posts go live the daily sweep records their
+    likes, views and comments — or hit <em>Refresh</em> on a run to poll now.</p>
+  {% endif %}
+</section>
 
 <section class="panel-grid panel-grid-2">
   <div class="panel">
