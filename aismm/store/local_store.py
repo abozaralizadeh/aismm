@@ -7,6 +7,7 @@ lock acquisition, and a row older than the TTL is reclaimed.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -18,11 +19,13 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, ENV_LLM_ID, Instruction, InstructionFile, InstructionState, LLMConfig, Lock,
-    PlatformApp, Run, RunStatus, StagedPost, StagedStatus, UserProfile, Workspace,
-    WorkspaceMember,
+    Account, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction, InstructionFile,
+    InstructionState, LLMConfig, Lock, PlatformApp, ProviderConfig, Run, RunStatus,
+    StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember,
 )
-from .base import Store, build_llm_settings
+from .base import (
+    Store, build_image_settings, build_llm_settings, build_sora_settings,
+)
 
 
 logger = logging.getLogger("aismm.store.local")
@@ -217,6 +220,69 @@ class LocalStore(Store):
             azure_api_key=decrypt(cfg.azure_api_key_enc),
             apim_subscription_key=decrypt(cfg.apim_subscription_key_enc),
         )
+
+    # --- provider connections (image / video) ------------------------------- #
+    def upsert_provider_config(self, config, *, secrets=None):
+        with Session(self._engine) as s:
+            existing = s.get(ProviderConfig, config.id)
+            if secrets is not None:
+                config.secrets_enc = encrypt(json.dumps(secrets))
+            elif existing is not None:
+                config.secrets_enc = config.secrets_enc or existing.secrets_enc
+            merged = s.merge(config)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def get_provider_config(self, config_id):
+        with Session(self._engine) as s:
+            return s.get(ProviderConfig, config_id)
+
+    def list_provider_configs(self, *, kind=None, workspace_id=None):
+        with Session(self._engine) as s:
+            stmt = select(ProviderConfig)
+            if kind is not None:
+                stmt = stmt.where(ProviderConfig.kind == kind)
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(ProviderConfig.workspace_id, workspace_id))
+            return list(s.exec(stmt.order_by(ProviderConfig.created_at)).all())
+
+    def delete_provider_config(self, config_id):
+        with Session(self._engine) as s:
+            obj = s.get(ProviderConfig, config_id)
+            if obj:
+                s.delete(obj)
+                s.commit()
+
+    def _decrypt_provider_secrets(self, cfg) -> dict:
+        raw = decrypt(cfg.secrets_enc) if cfg.secrets_enc else ""
+        try:
+            got = json.loads(raw) if raw else {}
+            return got if isinstance(got, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def resolve_image_settings(self, config_id):
+        cfg = self.get_provider_config(config_id)
+        if cfg is None:
+            return settings.image if config_id == ENV_IMAGE_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.image
+        secrets = self._decrypt_provider_secrets(cfg)
+        return build_image_settings(cfg, api_key=secrets.get("api_key", ""))
+
+    def resolve_sora_settings(self, config_id):
+        cfg = self.get_provider_config(config_id)
+        if cfg is None:
+            return settings.sora if config_id == ENV_VIDEO_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.sora
+        secrets = self._decrypt_provider_secrets(cfg)
+        return build_sora_settings(cfg, keys=secrets.get("keys_csv", ""))
 
     # --- user profiles ------------------------------------------------------ #
     def record_login(self, email, display_name=""):

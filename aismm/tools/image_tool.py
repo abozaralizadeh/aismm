@@ -23,15 +23,15 @@ that guidance is in the tool docstring so the model actually does it.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import logging
-from functools import lru_cache
 
 from agents import function_tool
 from openai import AsyncAzureOpenAI
 
 from ..assets import public_url, read_bytes, save_bytes
-from ..config import settings
+from ..config import ImageSettings, settings
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.image")
@@ -99,15 +99,30 @@ def resolve_size(size: str, orientation: str, model: str) -> tuple[str, str]:
     return f"{width}x{height}", "; ".join(notes)
 
 
-@lru_cache(maxsize=1)
-def _client() -> AsyncAzureOpenAI:
-    img = settings.image
-    return AsyncAzureOpenAI(
-        api_key=img.api_key,
-        api_version=img.api_version,
-        azure_endpoint=img.endpoint,
-        timeout=600.0,
-    )
+# One client per distinct image connection, keyed by a fingerprint (secret
+# hashed, never stored raw) so concurrent runs with DIFFERENT image configs never
+# clobber each other — the same rationale as ``llm.build_model_for``'s cache. A
+# per-instruction ``ImageSettings`` arrives on ``state["image_settings"]``.
+_clients: dict[str, AsyncAzureOpenAI] = {}
+
+
+def _image_fingerprint(img: ImageSettings) -> str:
+    secret = hashlib.sha256((img.api_key or "").encode()).hexdigest()[:16]
+    return "|".join([img.endpoint, img.api_version, img.model, secret])
+
+
+def _client_for(img: ImageSettings) -> AsyncAzureOpenAI:
+    key = _image_fingerprint(img)
+    client = _clients.get(key)
+    if client is None:
+        client = AsyncAzureOpenAI(
+            api_key=img.api_key,
+            api_version=img.api_version,
+            azure_endpoint=img.endpoint,
+            timeout=600.0,
+        )
+        _clients[key] = client
+    return client
 
 
 def _build_kwargs(*, model: str, size: str, quality: str, output_format: str,
@@ -135,7 +150,8 @@ async def perform_generate_image(
     compression: int | None = None, reference_asset_paths: list[str] | None = None,
 ) -> dict:
     """Generate (or edit, when references are given) one image. Extracted for tests."""
-    model = settings.image.model
+    img = state.get("image_settings") or settings.image
+    model = img.model
     resolved_size, note = resolve_size(size, orientation, model)
     kwargs = _build_kwargs(model=model, size=resolved_size, quality=quality,
                            output_format=output_format, background=background,
@@ -151,10 +167,10 @@ async def perform_generate_image(
                 stream.name = f"image{index}.png"    # the SDK needs a filename
                 files.append(stream)
             logger.info("Editing with %d reference image(s): %s", len(files), kwargs)
-            response = await _client().images.edit(image=files, prompt=prompt, **kwargs)
+            response = await _client_for(img).images.edit(image=files, prompt=prompt, **kwargs)
         else:
             logger.info("Generating image: %s", kwargs)
-            response = await _client().images.generate(prompt=prompt, **kwargs)
+            response = await _client_for(img).images.generate(prompt=prompt, **kwargs)
         data = base64.b64decode(response.data[0].b64_json)
     except Exception as exc:  # noqa: BLE001
         state["image_failures"] = state.get("image_failures", 0) + 1
@@ -174,7 +190,9 @@ async def perform_generate_image(
 
 
 def _make_generate_image(state: dict):
-    if not settings.image.enabled:
+    # The per-instruction image connection (or the .env default) decides whether
+    # this tool exists for the run — an unconfigured connection just disables it.
+    if not (state.get("image_settings") or settings.image).enabled:
         return None
 
     @function_tool

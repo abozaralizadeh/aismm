@@ -203,6 +203,12 @@ class Instruction(SQLModel, table=True):
     # Resolved + access-checked per run in agent/manager_agent; a run whose
     # selected connection is not accessible fails with a clear "no LLM" error.
     llm_config_id: str = ""
+    # Which image / video (Sora) generation connection this instruction's runs use
+    # (``ProviderConfig.id``). Empty means the deployment default (the ``.env``
+    # sentinel). Unlike the LLM these are OPTIONAL: an unconfigured default just
+    # leaves the generation tool absent, so there is no "no connection" failure.
+    image_config_id: str = ""
+    video_config_id: str = ""
     # What this instruction's runs DO. ``publish`` (default) creates a post;
     # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
     # both — for an engage run it gates how replies go out (preview / approval /
@@ -397,6 +403,13 @@ class PlatformApp(SQLModel, table=True):
 # user-created connection — its credentials still come from ``settings.llm``.
 ENV_LLM_ID = "env"
 
+# The deployment ``.env`` image and video (Sora) connections are single sentinel
+# rows too, mirroring ENV_LLM_ID: their config/secret fields are empty and
+# resolution reads ``settings.image`` / ``settings.sora``. Owner-owned, so nobody
+# else can reshare them. See ``ProviderConfig`` and ``llm_access.env_provider_config``.
+ENV_IMAGE_ID = "env-image"
+ENV_VIDEO_ID = "env-video"
+
 
 class LLMConfig(SQLModel, table=True):
     """A user-managed LLM connection (Azure OpenAI or an APIM gateway).
@@ -459,6 +472,85 @@ class LLMConfig(SQLModel, table=True):
     def label(self) -> str:
         return self.name or (f"Deployment default" if self.is_env
                              else f"{self.provider} · {self.model or '?'}")
+
+
+# The sentinel id for each provider kind's ``.env`` default, keyed by ``kind``.
+_ENV_PROVIDER_IDS = {"image": ENV_IMAGE_ID, "video": ENV_VIDEO_ID}
+
+
+class ProviderConfig(SQLModel, table=True):
+    """A user-managed IMAGE or VIDEO (Sora) generation connection.
+
+    The same sharing model as :class:`LLMConfig` (own / workspace-shared /
+    owner-people-shared, ``.env`` sentinel as the deployment default), but for the
+    two generation providers instead of the chat model. One table serves both
+    ``kind`` values because their shapes differ — image is a single endpoint/key/
+    model, video is a *pool* of them — so the non-secret fields live in a
+    ``config_json`` blob and the secret(s) in a single Fernet-encrypted
+    ``secrets_enc`` blob rather than fixed columns. ``llm_access.is_owned`` /
+    ``can_select`` operate on this unchanged (they only touch the sharing fields).
+
+    Unlike the LLM, image/video are OPTIONAL: an instruction that selects none
+    falls back to the deployment default, and an unconfigured default just leaves
+    the generation tool absent — there is no "no connection" run failure.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)   # where it was created
+    created_by: str = Field(default="", index=True)     # lowercased identity that owns it
+    kind: str = "image"                      # "image" | "video"
+    name: str = ""                           # label shown to everyone with access
+    config_json: str = "{}"                  # non-secret settings (endpoint, model, …)
+    secrets_enc: str = ""                    # Fernet-encrypted JSON of secret fields
+    # Sharing (identical to LLMConfig, so the shared ACL helpers work unchanged)
+    shared_with_workspace: bool = False      # any creator may set (name-only to members)
+    shared_with_json: str = "[]"             # list of emails; ONLY the owner may set
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def shared_with(self) -> list[str]:
+        try:
+            got = json.loads(self.shared_with_json or "[]")
+            return [str(e).strip().lower() for e in got if str(e).strip()]
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def set_shared_with(self, emails: list[str]) -> None:
+        cleaned = sorted({str(e).strip().lower() for e in (emails or []) if str(e).strip()})
+        self.shared_with_json = json.dumps(cleaned)
+
+    @property
+    def config(self) -> dict:
+        try:
+            got = json.loads(self.config_json or "{}")
+            return got if isinstance(got, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_config(self, values: dict) -> None:
+        self.config_json = json.dumps(values or {})
+
+    @property
+    def is_env(self) -> bool:
+        return self.id == _ENV_PROVIDER_IDS.get(self.kind)
+
+    @property
+    def provider(self) -> str:
+        """A stable string for the shared ACL helpers' ``is_env`` duck-typing.
+
+        ``llm_access`` checks ``config.is_env`` (a property here), so this only
+        needs to exist for parity; it reports ``"env"`` for a sentinel row.
+        """
+        return "env" if self.is_env else self.kind
+
+    @property
+    def label(self) -> str:
+        if self.name:
+            return self.name
+        if self.is_env:
+            return "Deployment default"
+        return f"{self.kind} · {self.config.get('model') or '?'}"
 
 
 class UserProfile(SQLModel, table=True):

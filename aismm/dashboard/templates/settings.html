@@ -147,13 +147,147 @@ edit <code>.env</code> and restart to change it.</p>
   </div>
 {% endif %}
 
-<h2>Media tools</h2>
-<div class="table-scroll">
-<table class="kv">
-  <tr><td>Sora 2 video</td><td>{{ "✓ enabled" if sora_enabled else "— not configured" }}</td></tr>
-  <tr><td>Image (gpt-image-2)</td><td>{{ "✓ enabled" if image_enabled else "— not configured" }}</td></tr>
-</table>
-</div>
+{# --- shared sharing form (identical fields for llm/image/video) --------- #}
+{% macro share_form(cfg, endpoint) %}
+  <form class="form" method="post" action="{{ url_for(endpoint, config_id=cfg.id) }}">
+    {% if not cfg.is_env %}
+      <label class="check">
+        <input type="checkbox" name="shared_with_workspace"
+               {% if cfg.shared_with_workspace %}checked{% endif %}>
+        Share with everyone in this workspace (they see the name only)
+      </label>
+    {% endif %}
+    {% if is_site_owner %}
+      <label>Share with specific people (name only)
+        <select name="shared_with" multiple size="4">
+          {% for email in share_people %}
+            <option value="{{ email }}" {% if email in cfg.shared_with %}selected{% endif %}>{{ email }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endif %}
+    <div class="actions"><button class="btn small" type="submit">Update sharing</button></div>
+  </form>
+{% endmacro %}
+
+{% macro image_fields(cfg) %}
+  {% set c = cfg.config if cfg else {} %}
+  <label>Name
+    <input type="text" name="name" value="{{ cfg.name if cfg else '' }}"
+           placeholder="e.g. My gpt-image-2" required>
+  </label>
+  <label>Azure endpoint
+    <input type="text" name="endpoint" value="{{ c.endpoint if cfg else '' }}"
+           placeholder="https://your-resource.openai.azure.com" required>
+  </label>
+  <label>Model / deployment
+    <input type="text" name="model" value="{{ c.model if cfg else 'gpt-image-2' }}" required>
+  </label>
+  <label>API version
+    <input type="text" name="api_version"
+           value="{{ c.api_version if cfg else '2025-04-01-preview' }}">
+  </label>
+  <label>API key
+    <input type="password" name="api_key" autocomplete="new-password"
+           placeholder="{{ 'leave blank to keep the stored key' if cfg else '' }}">
+  </label>
+  <label class="check">
+    <input type="checkbox" name="enabled" {% if not cfg or cfg.enabled %}checked{% endif %}>
+    Enabled
+  </label>
+{% endmacro %}
+
+{% macro video_fields(cfg) %}
+  {% set c = cfg.config if cfg else {} %}
+  <label>Name
+    <input type="text" name="name" value="{{ cfg.name if cfg else '' }}"
+           placeholder="e.g. My Sora pool" required>
+  </label>
+  <label>Endpoints (comma-separated for a pool)
+    <input type="text" name="endpoints_csv" value="{{ c.endpoints_csv if cfg else '' }}"
+           placeholder="https://a.openai.azure.com, https://b.openai.azure.com" required>
+  </label>
+  <label>Models (comma-separated, aligned to endpoints)
+    <input type="text" name="models_csv" value="{{ c.models_csv if cfg else 'sora-2' }}">
+  </label>
+  <label>API version
+    <input type="text" name="api_version" value="{{ c.api_version if cfg else 'preview' }}">
+  </label>
+  <label>Max attempts (0 = auto)
+    <input type="number" name="max_attempts" min="0" value="{{ c.max_attempts if cfg else '0' }}">
+  </label>
+  <label>API keys (comma-separated, aligned to endpoints)
+    <input type="password" name="keys_csv" autocomplete="new-password"
+           placeholder="{{ 'leave blank to keep the stored keys' if cfg else '' }}">
+  </label>
+  <label class="check">
+    <input type="checkbox" name="enabled" {% if not cfg or cfg.enabled %}checked{% endif %}>
+    Enabled
+  </label>
+{% endmacro %}
+
+{# --- one owned/shared/add section for an image or video kind ------------ #}
+{% macro provider_section(title, kind, fields, owned, shared, save_ep, delete_ep, share_ep, env_note) %}
+  <h2>{{ title }} connections</h2>
+  <p class="muted">Add your own {{ title|lower }} generation connection and pick it per instruction.
+    Keys are encrypted at rest and never shown back to you. Instructions left on
+    <strong>Deployment default</strong> use the <code>.env</code> {{ env_note }}.</p>
+
+  <h3>Your connections</h3>
+  {% if owned %}
+    {% for cfg in owned %}
+      <div class="panel">
+        <h4>{{ cfg.label }} {% if cfg.is_env %}<span class="badge">.env</span>{% endif %}
+          {% if not cfg.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h4>
+        {% if not cfg.is_env %}
+          <form class="form" method="post" action="{{ url_for(save_ep, kind=kind) }}">
+            <input type="hidden" name="id" value="{{ cfg.id }}">
+            {{ fields(cfg) }}
+            <div class="actions"><button class="btn btn-primary" type="submit">Save</button></div>
+          </form>
+          <form class="form" method="post" action="{{ url_for(delete_ep, config_id=cfg.id) }}"
+                onsubmit="return confirm('Delete this connection?');">
+            <button class="btn btn-danger small" type="submit">Delete</button>
+          </form>
+        {% else %}
+          <p class="muted">The deployment default is configured from <code>.env</code> and cannot be
+            edited here. Share it with specific people below.</p>
+        {% endif %}
+        {{ share_form(cfg, share_ep) }}
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted">You have no {{ title|lower }} connections yet.</p>
+  {% endif %}
+
+  <h3>Add a connection</h3>
+  <div class="panel">
+    <form class="form" method="post" action="{{ url_for(save_ep, kind=kind) }}">
+      {{ fields(none) }}
+      <div class="actions"><button class="btn btn-primary" type="submit">Add connection</button></div>
+    </form>
+  </div>
+
+  {% if shared %}
+    <h3>Shared with you</h3>
+    <div class="table-scroll">
+    <table class="kv">
+      {% for cfg in shared %}
+        <tr><td>{{ cfg.name or 'Shared connection' }}</td>
+            <td><span class="muted">shared — name only</span></td></tr>
+      {% endfor %}
+    </table>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{{ provider_section("Image", "image", image_fields, image_owned, image_shared,
+                    "save_provider_config", "delete_provider_config", "share_provider_config",
+                    "image model above") }}
+
+{{ provider_section("Video (Sora)", "video", video_fields, video_owned, video_shared,
+                    "save_provider_config", "delete_provider_config", "share_provider_config",
+                    "Sora pool above") }}
 
 <h2>Platform apps</h2>
 <div class="table-scroll">

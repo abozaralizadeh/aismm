@@ -23,7 +23,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .config import settings
-from .models import ENV_LLM_ID, LLMConfig
+from .models import (
+    ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, LLMConfig, ProviderConfig,
+)
+
+_ENV_PROVIDER_IDS = {"image": ENV_IMAGE_ID, "video": ENV_VIDEO_ID}
 
 
 def env_config() -> LLMConfig:
@@ -83,6 +87,41 @@ def visible_configs(
     member_ids = set(member_workspace_ids)
     selectable = [
         c for c in store.list_llm_configs()
+        if can_select(c, email, member_ids, is_owner=is_owner)
+    ]
+    selectable.sort(key=lambda c: (not is_owned(c, email), c.label.lower()))
+    return selectable
+
+
+# --- image / video (ProviderConfig) share the same ACL --------------------- #
+# is_owned/can_select are duck-typed (they only touch the sharing fields), so
+# ProviderConfig rows pass through them unchanged. Only the env sentinel and the
+# list source differ per kind.
+
+def env_provider_config(kind: str) -> ProviderConfig:
+    """The deployment ``.env`` sentinel for an image/video ``kind``, synthesised
+    when its row is absent (created lazily when the owner first opens Settings).
+    Owner-owned, so ``can_select`` grants it to the owner and to anyone the owner
+    people-shares it with — and nobody else."""
+    owner = (settings.auth.owner_emails[0].strip().lower()
+             if settings.auth.owner_emails else "")
+    return ProviderConfig(id=_ENV_PROVIDER_IDS.get(kind, ""), kind=kind,
+                          name="Deployment default", created_by=owner)
+
+
+def visible_provider_configs(
+    store,
+    kind: str,
+    email: str,
+    member_workspace_ids: Iterable[str],
+    *,
+    is_owner: bool,
+) -> list[ProviderConfig]:
+    """Every image/video connection of ``kind`` this identity may select, own
+    first then shared — the Settings list and the instruction picker."""
+    member_ids = set(member_workspace_ids)
+    selectable = [
+        c for c in store.list_provider_configs(kind=kind)
         if can_select(c, email, member_ids, is_owner=is_owner)
     ]
     selectable.sort(key=lambda c: (not is_owned(c, email), c.label.lower()))

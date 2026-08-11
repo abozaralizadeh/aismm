@@ -12,13 +12,16 @@ import logging
 from agents import Agent, ModelSettings, Runner
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
-from ..config import settings
+from ..config import SoraSettings, settings
 from ..llm import build_model_for
-from ..llm_access import can_select, env_config
-from ..models import ENV_LLM_ID, Account, Instruction, InstructionTask, Run, RunStatus
+from ..llm_access import can_select, env_config, env_provider_config
+from ..models import (
+    ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Account, Instruction, InstructionTask, Run,
+    RunStatus,
+)
 from ..platforms.registry import get_platform
 from ..store.base import Store
-from ..tools import build_tools
+from ..tools import build_tools, sora_config
 from ..tools.browse_tool import close_browser
 from .memory import maybe_compact
 from .prompts import (AUTO_INSTRUCTIONS, ENGAGEMENT_INSTRUCTIONS, MANAGER_INSTRUCTIONS,
@@ -83,6 +86,35 @@ def _resolve_model(instruction: Instruction, store: Store):
     return build_model_for(llm)
 
 
+def _resolve_provider(instruction: Instruction, store: Store, kind: str):
+    """Resolve the image/video (Sora) connection this instruction may use, or ``None``.
+
+    Mirrors ``_resolve_model``'s access gate, but image/video are OPTIONAL: ``None``
+    just leaves the generation tool absent (an unconfigured, deleted or inaccessible
+    connection is not a run failure — unlike the mandatory LLM). Empty selection
+    resolves to the deployment ``.env`` sentinel, gated like any other connection.
+    """
+    env_id = ENV_IMAGE_ID if kind == "image" else ENV_VIDEO_ID
+    selected = (instruction.image_config_id if kind == "image"
+                else instruction.video_config_id)
+    cfg_id = selected or env_id
+    cfg = store.get_provider_config(cfg_id)
+    if cfg is None:
+        # The env sentinel resolves even before its row exists; any other missing
+        # id means the connection was deleted — no fallback, just disable the tool.
+        if cfg_id != env_id:
+            return None
+        cfg = env_provider_config(kind)
+    workspace = store.get_workspace(instruction.workspace_id)
+    creator = workspace.created_by if workspace else ""
+    is_owner = (not settings.auth.enabled) or settings.auth.is_owner(creator)
+    member_ids = {instruction.workspace_id, ""}
+    if not can_select(cfg, creator, member_ids, is_owner=is_owner):
+        return None
+    return (store.resolve_image_settings(cfg_id) if kind == "image"
+            else store.resolve_sora_settings(cfg_id))
+
+
 async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
                           prompt_override: str = "") -> dict:
     """Run the agent once for one account. Returns the terminal result dict.
@@ -120,6 +152,16 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         store.update_run(run)
         return {"error": "no_llm", "message": _NO_LLM_MESSAGE}
     state["model"] = model
+    # Image/video connections are OPTIONAL — None just disables the generation
+    # tool. Resolve BEFORE build_tools (which gates those tools) and make the Sora
+    # pool active for the whole run via the ContextVar; an empty SoraSettings when
+    # None means "no accessible video connection", so the Sora tools stay off
+    # rather than silently falling back to the .env pool. Reset in the finally.
+    state["image_settings"] = _resolve_provider(instruction, store, "image")
+    sora_settings = _resolve_provider(instruction, store, "video")
+    state["sora_settings"] = sora_settings
+    sora_token = sora_config._ACTIVE.set(
+        sora_settings if sora_settings is not None else SoraSettings())
     instruction_state = store.get_state(instruction.id)
     attachments = store.list_instruction_files(instruction.id)
     state["attachments"] = attachments
@@ -246,6 +288,8 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         # Tear the browser down inside THIS event loop (the AIBlog lesson): a
         # Chromium subprocess finalized later by GC raises "Event loop is closed".
         await close_browser(state)
+        # Drop the per-run Sora pool so it never bleeds into the next run's context.
+        sora_config._ACTIVE.reset(sora_token)
 
     if not state.get("memory_written"):
         logger.warning("Agent did NOT update memory for instruction %s — the next run "

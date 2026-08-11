@@ -106,4 +106,33 @@
 </table>
 </div>
 
+<h2>Image &amp; video connections</h2>
+<p class="hint">Names and counts only — no endpoints, no keys.</p>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Creator</th><th>Connection</th><th>Kind</th><th>Enabled</th><th>Sharing</th></tr>
+  </thead>
+  <tbody>
+    {% for creator, rows in provider_by_creator.items() %}
+      {% for c in rows %}
+        <tr>
+          <td class="small">{% if loop.first %}{{ creator or '—' }}{% endif %}</td>
+          <td>{{ c.label }}{% if c.is_env %} <span class="badge">.env</span>{% endif %}</td>
+          <td>{{ c.kind }}</td>
+          <td>{{ '✓' if c.enabled else '—' }}</td>
+          <td class="small">
+            {% if c.shared_workspace %}workspace{% endif %}
+            {% if c.shared_people %}{% if c.shared_workspace %} · {% endif %}{{ c.shared_people }} {{ 'person' if c.shared_people == 1 else 'people' }}{% endif %}
+            {% if not c.shared_workspace and not c.shared_people %}private{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" class="muted">No image or video connections.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
 {% endblock %}

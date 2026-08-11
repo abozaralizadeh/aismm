@@ -9,10 +9,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
-from ..config import LLMSettings
+from ..config import ImageSettings, LLMSettings, SoraSettings
 from ..models import (
-    Account, Instruction, InstructionFile, InstructionState, LLMConfig, PlatformApp, Run,
-    RunStatus, StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember,
+    Account, Instruction, InstructionFile, InstructionState, LLMConfig, PlatformApp,
+    ProviderConfig, Run, RunStatus, StagedPost, StagedStatus, UserProfile, Workspace,
+    WorkspaceMember,
 )
 
 
@@ -31,6 +32,41 @@ def build_llm_settings(config: LLMConfig, *, azure_api_key: str,
         apim_subscription_key=apim_subscription_key,
         apim_key_header=config.apim_key_header,
         apim_api_version=config.apim_api_version,
+    )
+
+
+def build_image_settings(config: ProviderConfig, *, api_key: str) -> ImageSettings:
+    """Assemble an ``ImageSettings`` from a stored image connection + its DECRYPTED
+    key. Non-secret fields live in ``config.config``; the key is decrypted by the
+    backend and passed in, so plaintext never leaves the store boundary."""
+    c = config.config
+    return ImageSettings(
+        api_key=api_key,
+        endpoint=c.get("endpoint", ""),
+        api_version=c.get("api_version") or "2025-04-01-preview",
+        model=c.get("model") or "gpt-image-1",
+    )
+
+
+def _split_csv(value: str) -> list[str]:
+    return [p.strip() for p in (value or "").split(",") if p.strip()]
+
+
+def build_sora_settings(config: ProviderConfig, *, keys: str) -> SoraSettings:
+    """Assemble a ``SoraSettings`` pool from a stored video connection + its
+    DECRYPTED comma-separated keys. Endpoints/models are index-aligned to keys,
+    exactly as ``SoraSettings.pool()`` expects — one config may hold several."""
+    c = config.config
+    try:
+        max_attempts = int(c.get("max_attempts") or 0)
+    except (TypeError, ValueError):
+        max_attempts = 0
+    return SoraSettings(
+        endpoints=_split_csv(c.get("endpoints_csv", "")),
+        keys=_split_csv(keys),
+        models=_split_csv(c.get("models_csv", "")) or ["sora-2"],
+        api_version=c.get("api_version") or "preview",
+        max_attempts=max_attempts,
     )
 
 
@@ -112,6 +148,38 @@ class Store(ABC):
         """Return ready-to-use, DECRYPTED ``LLMSettings`` for a connection, or
         ``None`` if it is missing/disabled. The env sentinel resolves to the
         deployment ``settings.llm``. Decryption stays inside the store."""
+
+    # --- provider connections (user-managed image / video credentials) ----- #
+    @abstractmethod
+    def upsert_provider_config(
+        self, config: ProviderConfig, *, secrets: dict | None = None,
+    ) -> ProviderConfig:
+        """Insert/update an image/video connection. A plaintext ``secrets`` dict
+        (when given) is Fernet-encrypted into ``secrets_enc`` here; ``None`` leaves
+        the stored ciphertext untouched (secrets are never echoed back to a form)."""
+
+    @abstractmethod
+    def get_provider_config(self, config_id: str) -> ProviderConfig | None: ...
+
+    @abstractmethod
+    def list_provider_configs(
+        self, *, kind: str | None = None, workspace_id: str | None = None,
+    ) -> list[ProviderConfig]:
+        """All provider connections, optionally filtered by ``kind`` and/or the
+        workspace they were created in. Access filtering happens above the store."""
+
+    @abstractmethod
+    def delete_provider_config(self, config_id: str) -> None: ...
+
+    @abstractmethod
+    def resolve_image_settings(self, config_id: str) -> ImageSettings | None:
+        """DECRYPTED ``ImageSettings`` for an image connection, or ``None`` if
+        missing/disabled. The env sentinel resolves to ``settings.image``."""
+
+    @abstractmethod
+    def resolve_sora_settings(self, config_id: str) -> SoraSettings | None:
+        """DECRYPTED ``SoraSettings`` pool for a video connection, or ``None`` if
+        missing/disabled. The env sentinel resolves to ``settings.sora``."""
 
     # --- user profiles (durable login records for the Admin page) ---------- #
     @abstractmethod

@@ -9,8 +9,9 @@ round-robin gateway in front of these endpoints.
 from __future__ import annotations
 
 import threading
+from contextvars import ContextVar
 
-from ..config import settings
+from ..config import SoraSettings, settings
 
 # Sora 2 supports 4 / 8 / 12 second clips and OpenAI-style "WxH" size strings.
 ALLOWED_SECONDS = (4, 8, 12)
@@ -20,13 +21,25 @@ SIZE_LANDSCAPE = "1280x720"   # 16:9 — YouTube / X
 _rr_lock = threading.Lock()
 _rr_index = 0
 
+# The per-run Sora connection, when an instruction selected one. Set by
+# manager_agent for the duration of a run (reset in its finally). It is a
+# ContextVar, not module state, because these functions are called DEEP in
+# sora_client — below any state-closure tool — and each account run executes in
+# its own thread via asyncio.run, so a per-run pool must not leak across runs.
+# ``None`` falls back to the deployment ``.env`` pool (settings.sora).
+_ACTIVE: ContextVar[SoraSettings | None] = ContextVar("active_sora", default=None)
+
+
+def _active() -> SoraSettings:
+    return _ACTIVE.get() or settings.sora
+
 
 def api_version() -> str:
-    return settings.sora.api_version
+    return _active().api_version
 
 
 def pool() -> list[dict]:
-    return [r for r in settings.sora.pool() if r.get("endpoint") and r.get("key")]
+    return [r for r in _active().pool() if r.get("endpoint") and r.get("key")]
 
 
 def enabled() -> bool:
@@ -54,7 +67,7 @@ def max_attempts() -> int:
     in the pool, capped at 3 so one clip can't spend three poll timeouts' worth
     of a run walking a large pool.
     """
-    configured = settings.sora.max_attempts
+    configured = _active().max_attempts
     if configured > 0:
         return min(configured, max(pool_size(), 1))
     return max(min(pool_size(), 3), 1)

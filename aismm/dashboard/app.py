@@ -27,8 +27,10 @@ from .. import attachments, cooldown, llm_access, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
-    Account, AttachmentPurpose, ENV_LLM_ID, Instruction, InstructionFile, InstructionTask,
-    LLMConfig, MediaPref, PlatformApp, PlatformName, PublishMode, RunStatus, WorkspaceMember,
+    Account, AttachmentPurpose, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction,
+    InstructionFile, InstructionTask,
+    LLMConfig, MediaPref, PlatformApp, PlatformName, ProviderConfig, PublishMode, RunStatus,
+    WorkspaceMember,
     WorkspaceRole,
 )
 from ..platforms import apps as platform_apps
@@ -256,6 +258,43 @@ def create_app() -> Flask:
         if not cfg.created_by:
             cfg.created_by = email
         return store.upsert_llm_config(cfg)
+
+    # --- image / video (ProviderConfig) — same helpers, keyed by kind -------- #
+    _ENV_PROVIDER_IDS = {"image": ENV_IMAGE_ID, "video": ENV_VIDEO_ID}
+
+    def _visible_provider_configs(kind: str) -> list[ProviderConfig]:
+        email, _name, _anon = _identity()
+        return llm_access.visible_provider_configs(
+            get_store(), kind, email, _my_workspace_ids(), is_owner=_is_site_owner())
+
+    def _provider_options(kind: str) -> list[dict]:
+        """Instruction-picker options for one kind (the deployment default is the
+        separate value-"" option in the template). Own = full label; shared = name."""
+        email, _name, _anon = _identity()
+        out = []
+        for cfg in _visible_provider_configs(kind):
+            if cfg.is_env:
+                continue
+            owned = llm_access.is_owned(cfg, email)
+            out.append({"id": cfg.id,
+                        "label": cfg.label if owned else (cfg.name or "Shared connection")})
+        return out
+
+    def _ensure_env_provider_config(kind: str):
+        """Materialise the ``.env`` image/video sentinel so the owner can share it.
+        Owner-only, best-effort — resolution works without a row."""
+        if not _is_site_owner():
+            return None
+        store = get_store()
+        env_id = _ENV_PROVIDER_IDS[kind]
+        existing = store.get_provider_config(env_id)
+        if existing is not None:
+            return existing
+        email, _name, _anon = _identity()
+        cfg = llm_access.env_provider_config(kind)
+        if not cfg.created_by:
+            cfg.created_by = email
+        return store.upsert_provider_config(cfg)
 
     @app.before_request
     def _bootstrap_workspaces():
@@ -885,6 +924,8 @@ def create_app() -> Flask:
                                settings=settings,
                                tool_groups=_tool_catalog([]),
                                llm_options=_llm_options(),
+                               image_options=_provider_options("image"),
+                               video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                tasks=list(InstructionTask))
 
@@ -903,6 +944,8 @@ def create_app() -> Flask:
                                next_run=_next_run_info(instr, store),
                                tool_groups=_tool_catalog(instr.tools),
                                llm_options=_llm_options(),
+                               image_options=_provider_options("image"),
+                               video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                tasks=list(InstructionTask))
 
@@ -939,6 +982,24 @@ def create_app() -> Flask:
                       "choice.", "error")
                 chosen_llm = instr.llm_config_id
         instr.llm_config_id = chosen_llm
+        # Image / video connections: same access check ("" = deployment default,
+        # which is optional here — an inaccessible pick just disables generation).
+        def _pick_provider(kind, field, prior):
+            chosen = f.get(field, "").strip()
+            if not chosen:
+                return ""
+            email, _name, _anon = _identity()
+            cfg = store.get_provider_config(chosen)
+            if cfg is None or cfg.kind != kind or not llm_access.can_select(
+                    cfg, email, _my_workspace_ids(), is_owner=_is_site_owner()):
+                flash(f"That {kind} connection is not available to you; keeping the "
+                      "previous choice.", "error")
+                return prior
+            return chosen
+        instr.image_config_id = _pick_provider("image", "image_config_id",
+                                               instr.image_config_id)
+        instr.video_config_id = _pick_provider("video", "video_config_id",
+                                               instr.video_config_id)
         mine = {a.id for a in store.list_accounts(workspace_id=_workspace_id())}
         instr.set_account_ids([a for a in request.form.getlist("account_ids") if a in mine])
         # Only touch the selection when the picker was actually on the form, so a
@@ -1311,6 +1372,8 @@ def create_app() -> Flask:
         """
         _require_site_owner()
         _ensure_env_llm_config()
+        _ensure_env_provider_config("image")
+        _ensure_env_provider_config("video")
         store = get_store()
 
         user_agg: dict[str, dict] = {}
@@ -1368,8 +1431,18 @@ def create_app() -> Flask:
                 "shared_people": len(cfg.shared_with),
             })
 
+        # Image / video connections summary — names/counts only, never secrets.
+        provider_by_creator: dict[str, list] = {}
+        for cfg in store.list_provider_configs():
+            provider_by_creator.setdefault((cfg.created_by or "").strip().lower(), []).append({
+                "label": cfg.label, "kind": cfg.kind, "enabled": cfg.enabled,
+                "is_env": cfg.is_env, "shared_workspace": cfg.shared_with_workspace,
+                "shared_people": len(cfg.shared_with),
+            })
+
         return render_template("admin.html", ws_rows=ws_rows, users=users,
                                llm_by_creator=llm_by_creator,
+                               provider_by_creator=provider_by_creator,
                                owner_emails=settings.auth.owner_emails,
                                sso_enabled=settings.auth.enabled)
 
@@ -1379,10 +1452,20 @@ def create_app() -> Flask:
         from ..tools import sora_config
         store = get_store()
         _ensure_env_llm_config()               # owner-only inside; materialises .env row
+        _ensure_env_provider_config("image")
+        _ensure_env_provider_config("video")
         email, _name, _anon = _identity()
         configs = _visible_llm_configs()
         owned = [c for c in configs if llm_access.is_owned(c, email)]
         shared = [c for c in configs if not llm_access.is_owned(c, email)]
+
+        def _split(kind):
+            got = _visible_provider_configs(kind)
+            return ([c for c in got if llm_access.is_owned(c, email)],
+                    [c for c in got if not llm_access.is_owned(c, email)])
+        img_owned, img_shared = _split("image")
+        vid_owned, vid_shared = _split("video")
+
         people: list[str] = []
         if _is_site_owner():
             all_ws = store.list_workspaces()
@@ -1395,7 +1478,10 @@ def create_app() -> Flask:
                                sora_enabled=sora_config.enabled(),
                                image_enabled=settings.image.enabled,
                                owned_configs=owned, shared_configs=shared,
-                               share_people=people, env_llm_id=ENV_LLM_ID)
+                               image_owned=img_owned, image_shared=img_shared,
+                               video_owned=vid_owned, video_shared=vid_shared,
+                               share_people=people, env_llm_id=ENV_LLM_ID,
+                               env_image_id=ENV_IMAGE_ID, env_video_id=ENV_VIDEO_ID)
 
     @app.route("/settings/llm", methods=["POST"])
     def save_llm_config():
@@ -1471,6 +1557,90 @@ def create_app() -> Flask:
             people = [p.strip().lower() for p in f.getlist("shared_with") if p.strip()]
             cfg.set_shared_with(people)
         store.upsert_llm_config(cfg)
+        flash("Sharing updated.", "success")
+        return redirect(url_for("settings_view"))
+
+    # --- image / video (ProviderConfig) CRUD + share ------------------------ #
+    @app.route("/settings/provider/<kind>", methods=["POST"])
+    def save_provider_config(kind):
+        if kind not in ("image", "video"):
+            abort(404)
+        store = get_store()
+        f = request.form
+        email, _name, _anon = _identity()
+        cfg_id = f.get("id") or None
+        if cfg_id:
+            cfg = store.get_provider_config(cfg_id)
+            if cfg is None or not llm_access.is_owned(cfg, email):
+                abort(404)
+            if cfg.is_env:
+                flash("The deployment default is configured from .env and cannot be edited "
+                      "here.", "error")
+                return redirect(url_for("settings_view"))
+        else:
+            cfg = ProviderConfig(kind=kind, created_by=email,
+                                 workspace_id=_new_workspace_id())
+        cfg.name = f.get("name", "").strip()
+        cfg.enabled = f.get("enabled") == "on"
+        secrets: dict | None
+        if kind == "image":
+            cfg.set_config({
+                "endpoint": f.get("endpoint", "").strip(),
+                "api_version": f.get("api_version", "").strip() or "2025-04-01-preview",
+                "model": f.get("model", "").strip() or "gpt-image-1",
+            })
+            key = f.get("api_key", "").strip()
+            secrets = {"api_key": key} if key else None
+        else:
+            cfg.set_config({
+                "endpoints_csv": f.get("endpoints_csv", "").strip(),
+                "models_csv": f.get("models_csv", "").strip() or "sora-2",
+                "api_version": f.get("api_version", "").strip() or "preview",
+                "max_attempts": f.get("max_attempts", "").strip() or "0",
+            })
+            keys = f.get("keys_csv", "").strip()
+            secrets = {"keys_csv": keys} if keys else None
+        # An empty secret box means "leave the stored one alone" — secrets are
+        # never echoed back to the form, so blanking must not wipe them.
+        store.upsert_provider_config(cfg, secrets=secrets)
+        flash(f"Saved {kind} connection '{cfg.label}'.", "success")
+        return redirect(url_for("settings_view"))
+
+    @app.route("/settings/provider/<config_id>/delete", methods=["POST"])
+    def delete_provider_config(config_id):
+        store = get_store()
+        email, _name, _anon = _identity()
+        cfg = store.get_provider_config(config_id)
+        if cfg is None or not llm_access.is_owned(cfg, email):
+            abort(404)
+        if cfg.is_env:
+            flash("The deployment default cannot be deleted.", "error")
+            return redirect(url_for("settings_view"))
+        store.delete_provider_config(config_id)
+        flash(f"{cfg.kind.title()} connection deleted.", "success")
+        return redirect(url_for("settings_view"))
+
+    @app.route("/settings/provider/<config_id>/share", methods=["POST"])
+    def share_provider_config(config_id):
+        store = get_store()
+        email, _name, _anon = _identity()
+        cfg = store.get_provider_config(config_id)
+        if cfg is None and config_id in (ENV_IMAGE_ID, ENV_VIDEO_ID) and _is_site_owner():
+            cfg = _ensure_env_provider_config(
+                "image" if config_id == ENV_IMAGE_ID else "video")
+        if cfg is None or not llm_access.is_owned(cfg, email):
+            abort(404)
+        f = request.form
+        if cfg.is_env:
+            # The deployment default is owner-managed only: never workspace-shared
+            # (that would leak it to a whole silo), only people-shared.
+            cfg.shared_with_workspace = False
+        else:
+            cfg.shared_with_workspace = f.get("shared_with_workspace") == "on"
+        if _is_site_owner():
+            people = [p.strip().lower() for p in f.getlist("shared_with") if p.strip()]
+            cfg.set_shared_with(people)
+        store.upsert_provider_config(cfg)
         flash("Sharing updated.", "success")
         return redirect(url_for("settings_view"))
 

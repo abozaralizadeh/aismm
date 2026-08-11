@@ -327,6 +327,38 @@
           <span class="hint">Which model connection this instruction's agent uses. Add your own
             in <a href="{{ url_for('settings_view') }}">Settings → LLM connections</a>.</span>
         </label>
+
+        <label>Image connection
+          <select name="image_config_id">
+            <option value="" {% if not instruction or not instruction.image_config_id %}selected{% endif %}>
+              Deployment default
+            </option>
+            {% for opt in image_options %}
+              <option value="{{ opt.id }}"
+                {% if instruction and instruction.image_config_id == opt.id %}selected{% endif %}>
+                {{ opt.label }}
+              </option>
+            {% endfor %}
+          </select>
+          <span class="hint">Which image-generation connection to use. Deployment default falls back
+            to the <code>.env</code> image model.</span>
+        </label>
+
+        <label>Video connection
+          <select name="video_config_id">
+            <option value="" {% if not instruction or not instruction.video_config_id %}selected{% endif %}>
+              Deployment default
+            </option>
+            {% for opt in video_options %}
+              <option value="{{ opt.id }}"
+                {% if instruction and instruction.video_config_id == opt.id %}selected{% endif %}>
+                {{ opt.label }}
+              </option>
+            {% endfor %}
+          </select>
+          <span class="hint">Which Sora (video) connection to use. Deployment default falls back to
+            the <code>.env</code> Sora pool.</span>
+        </label>
       </div>
 
       <div class="check-group" data-publish-only>

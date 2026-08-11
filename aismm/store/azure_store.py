@@ -34,17 +34,21 @@ Notes that shaped this implementation:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, AttachmentPurpose, ENV_LLM_ID, Instruction, InstructionFile, InstructionState,
-    InstructionTask, LLMConfig, MediaPref, PlatformApp, PlatformName, PublishMode, Run,
-    RunStatus, StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
+    Account, AttachmentPurpose, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction,
+    InstructionFile, InstructionState, InstructionTask, LLMConfig, MediaPref, PlatformApp,
+    PlatformName, ProviderConfig, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
+    UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
 )
-from .base import Store, build_llm_settings
+from .base import (
+    Store, build_image_settings, build_llm_settings, build_sora_settings,
+)
 
 logger = logging.getLogger("aismm.store.azure")
 
@@ -59,6 +63,7 @@ PK_LOCK = "lock"
 PK_WORKSPACE = "workspace"
 PK_MEMBER = "member"
 PK_LLM = "llm"
+PK_PROVIDER = "provider"
 PK_USER = "user"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
@@ -206,6 +211,8 @@ class AzureStore(Store):
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
             "tools_json": i.tools_json,
             "llm_config_id": i.llm_config_id,
+            "image_config_id": i.image_config_id,
+            "video_config_id": i.video_config_id,
             "task_type": i.task_type.value,
             "engagement_targets": i.engagement_targets,
             "publish_mode": i.publish_mode.value,
@@ -223,6 +230,8 @@ class AzureStore(Store):
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
             tools_json=e.get("tools_json", "[]"),
             llm_config_id=e.get("llm_config_id", ""),
+            image_config_id=e.get("image_config_id", ""),
+            video_config_id=e.get("video_config_id", ""),
             task_type=InstructionTask(e.get("task_type", "publish")),
             engagement_targets=e.get("engagement_targets", ""),
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
@@ -451,6 +460,83 @@ class AzureStore(Store):
             azure_api_key=decrypt(cfg.azure_api_key_enc),
             apim_subscription_key=decrypt(cfg.apim_subscription_key_enc),
         )
+
+    # --- provider connections (image / video) ------------------------------- #
+    def upsert_provider_config(self, config, *, secrets=None):
+        existing = self._get(PK_PROVIDER, config.id)
+        if secrets is not None:
+            config.secrets_enc = encrypt(json.dumps(secrets))
+        elif existing is not None:
+            config.secrets_enc = config.secrets_enc or existing.get("secrets_enc", "")
+        self._upsert(PK_PROVIDER, config.id, {
+            "workspace_id": config.workspace_id, "created_by": config.created_by,
+            "kind": config.kind, "name": config.name,
+            "config_json": config.config_json, "secrets_enc": config.secrets_enc,
+            "shared_with_workspace": config.shared_with_workspace,
+            "shared_with_json": config.shared_with_json,
+            "enabled": config.enabled, "created_at": config.created_at,
+        })
+        return config
+
+    @staticmethod
+    def _provider_from_entity(e) -> ProviderConfig:
+        return ProviderConfig(
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            created_by=e.get("created_by", ""), kind=e.get("kind", "image"),
+            name=e.get("name", ""), config_json=e.get("config_json", "{}"),
+            secrets_enc=e.get("secrets_enc", ""),
+            shared_with_workspace=bool(e.get("shared_with_workspace", False)),
+            shared_with_json=e.get("shared_with_json", "[]"),
+            enabled=bool(e.get("enabled", True)),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def get_provider_config(self, config_id):
+        entity = self._get(PK_PROVIDER, config_id)
+        return self._provider_from_entity(entity) if entity else None
+
+    def list_provider_configs(self, *, kind=None, workspace_id=None):
+        items = [self._provider_from_entity(e) for e in self._query(PK_PROVIDER)]
+        if kind is not None:
+            items = [c for c in items if c.kind == kind]
+        if workspace_id is not None:
+            items = [c for c in items if _ws_match(c.workspace_id, workspace_id)]
+        return sorted(items, key=lambda c: c.created_at)
+
+    def delete_provider_config(self, config_id):
+        self._delete(PK_PROVIDER, config_id)
+
+    def _decrypt_provider_secrets(self, cfg) -> dict:
+        raw = decrypt(cfg.secrets_enc) if cfg.secrets_enc else ""
+        try:
+            got = json.loads(raw) if raw else {}
+            return got if isinstance(got, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def resolve_image_settings(self, config_id):
+        from ..config import settings
+        cfg = self.get_provider_config(config_id)
+        if cfg is None:
+            return settings.image if config_id == ENV_IMAGE_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.image
+        secrets = self._decrypt_provider_secrets(cfg)
+        return build_image_settings(cfg, api_key=secrets.get("api_key", ""))
+
+    def resolve_sora_settings(self, config_id):
+        from ..config import settings
+        cfg = self.get_provider_config(config_id)
+        if cfg is None:
+            return settings.sora if config_id == ENV_VIDEO_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.sora
+        secrets = self._decrypt_provider_secrets(cfg)
+        return build_sora_settings(cfg, keys=secrets.get("keys_csv", ""))
 
     # --- user profiles ------------------------------------------------------ #
     def record_login(self, email, display_name=""):

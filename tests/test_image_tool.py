@@ -34,7 +34,7 @@ def captured(monkeypatch, tmp_path):
     class FakeClient:
         images = FakeImages()
 
-    monkeypatch.setattr(image_tool, "_client", lambda: FakeClient())
+    monkeypatch.setattr(image_tool, "_client_for", lambda img: FakeClient())
     monkeypatch.setattr(image_tool, "save_bytes",
                         lambda data, ext: str(tmp_path / f"out.{ext}"))
     monkeypatch.setattr(image_tool, "public_url", lambda p: f"https://host/{p}")
@@ -220,7 +220,7 @@ def test_api_failure_is_reported_not_raised(monkeypatch, tmp_path):
             async def generate(**kwargs):
                 raise RuntimeError("content filtered")
 
-    monkeypatch.setattr(image_tool, "_client", lambda: Boom())
+    monkeypatch.setattr(image_tool, "_client_for", lambda img: Boom())
     state = {}
     result = _run(state)
     assert result["error"] == "image_generation_failed"
