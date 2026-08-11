@@ -104,6 +104,14 @@ class DashboardSettings:
     base_url: str = "http://127.0.0.1:8787"
     secret_key: str = "change-me"
     reverse_proxy_prefix: str = ""
+    # Public-facing legal pages (Terms of Service / Privacy Policy) are required
+    # by some platform developer consoles — TikTok will not approve an app without
+    # both URLs. These personalise the boilerplate: the operating entity's name,
+    # a contact address, and the "last updated" date shown on the pages. Empty
+    # values fall back sensibly (the product name, the first owner email).
+    legal_entity_name: str = ""
+    legal_contact_email: str = ""
+    legal_updated: str = ""
 
     @property
     def public_base_url(self) -> str:
@@ -400,6 +408,9 @@ def load_settings() -> Settings:
             base_url=os.getenv("DASHBOARD_BASE_URL", "http://127.0.0.1:8787"),
             secret_key=os.getenv("FLASK_SECRET_KEY", "change-me"),
             reverse_proxy_prefix=_path_prefix(os.getenv("REVERSE_PROXY_PREFIX")),
+            legal_entity_name=os.getenv("LEGAL_ENTITY_NAME", "").strip(),
+            legal_contact_email=os.getenv("LEGAL_CONTACT_EMAIL", "").strip(),
+            legal_updated=os.getenv("LEGAL_UPDATED", "").strip(),
         ),
         platform_creds=_load_platform_creds(),
         auth=AuthSettings(

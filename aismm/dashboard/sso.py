@@ -50,7 +50,10 @@ logger = logging.getLogger("aismm.sso")
 
 # Endpoints reachable without a session. ``asset`` is public on purpose (see the
 # module docstring); ``static`` serves the stylesheet used by the login page.
-PUBLIC_ENDPOINTS = {"login", "auth_callback", "logout", "static", "asset", "healthz"}
+# ``terms``/``privacy`` are the legal pages a platform's app-review crawler must
+# be able to fetch with no cookie (TikTok requires both URLs).
+PUBLIC_ENDPOINTS = {"login", "auth_callback", "logout", "static", "asset", "healthz",
+                    "terms", "privacy"}
 
 _SESSION_USER = "sso_user"
 _STATE_KEY = "sso_state"

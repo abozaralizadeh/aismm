@@ -65,6 +65,11 @@
     {% endwith %}
     {% block content %}{% endblock %}
   </main>
+  <footer class="sitefoot">
+    <a href="{{ url_for('terms') }}">Terms of Service</a>
+    <span aria-hidden="true">·</span>
+    <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+  </footer>
   {% block scripts %}{% endblock %}
 </body>
 </html>

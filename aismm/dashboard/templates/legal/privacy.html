@@ -1,0 +1,108 @@
+{% extends "legal/layout.html" %}
+{% block title %}Privacy Policy · AISM²{% endblock %}
+{% block content %}
+<h1>Privacy Policy</h1>
+<p class="muted">Last updated {{ updated }}.</p>
+
+<p>
+  This Policy explains how {{ product_name }} (the “Service”), operated by {{ entity_name }}
+  (“we”, “us”), handles information when you use it to publish to third-party social media platforms.
+</p>
+
+<h2>1. Information we process</h2>
+<ul>
+  <li>
+    <strong>Account identity.</strong> When you sign in (where single sign-on is enabled), we store
+    your email address and display name to identify you and record when you last signed in and were
+    active.
+  </li>
+  <li>
+    <strong>Connected-platform tokens.</strong> When you connect a social account, the platform’s
+    authorization (OAuth) access and refresh tokens are stored so the Service can publish on your
+    behalf. Tokens are <strong>encrypted at rest</strong> and are never displayed back to you or
+    written to logs in plain text.
+  </li>
+  <li>
+    <strong>Content and configuration.</strong> The instructions, captions, generated media, schedules,
+    and run history you create are stored to operate the Service.
+  </li>
+  <li>
+    <strong>Platform data.</strong> To publish and to respond to engagement, the Service reads and
+    writes data through platform APIs — for example posts, comments, mentions, and direct messages on
+    the accounts you connect — strictly to carry out the actions you configure.
+  </li>
+  <li>
+    <strong>Operational logs.</strong> Standard technical logs (timestamps, errors, run outcomes) are
+    kept to run and troubleshoot the Service.
+  </li>
+</ul>
+
+<h2>2. How we use information</h2>
+<p>
+  We use the information only to provide the Service: to authenticate you, connect your accounts,
+  generate and publish content you have configured, respond to engagement where enabled, show you run
+  history and results, and keep the Service secure and working. We do <strong>not</strong> sell your
+  personal information, and we do not use your private content or messages for advertising.
+</p>
+
+<h2>3. AI processing</h2>
+<p>
+  To generate media and text, the Service sends the prompts and reference material you provide to AI
+  providers configured for your deployment. Those providers process the request to return a result and
+  are governed by their own terms and privacy policies.
+</p>
+
+<h2>4. Sharing</h2>
+<p>
+  Information is shared only with: the social platforms you connect (to publish and engage as you
+  direct); the AI and infrastructure providers configured for your deployment (to generate content and
+  store data); and where required by law. Within the Service, data is scoped to your workspace and its
+  members.
+</p>
+
+<h2>5. Retention</h2>
+<p>
+  We keep information for as long as your account and connections are active. Generated media may be
+  pruned from local storage on a retention schedule once safely archived. When you disconnect an
+  account its stored tokens are removed, and you can request deletion of your data.
+</p>
+
+<h2>6. Security</h2>
+<p>
+  Access tokens and other secrets are encrypted at rest, access to the dashboard is protected by
+  sign-in where configured, and media links are unguessable. No system is perfectly secure, but we
+  take reasonable measures to protect your information.
+</p>
+
+<h2>7. Your choices and rights</h2>
+<p>
+  You can disconnect any platform account at any time, edit or delete your instructions and content,
+  and request access to or deletion of your personal information. Depending on where you live, you may
+  have additional rights under laws such as the GDPR or CCPA; contact us to exercise them.
+</p>
+
+<h2>8. Revoking platform access</h2>
+<p>
+  Besides disconnecting inside the Service, you can revoke the Service’s access directly from each
+  platform’s own app or account settings (for example, the connected-apps or security section of
+  Instagram, X, YouTube, TikTok, or Reddit).
+</p>
+
+<h2>9. Children</h2>
+<p>
+  The Service is not directed to children and is intended for users old enough to hold accounts on the
+  connected platforms.
+</p>
+
+<h2>10. Changes</h2>
+<p>
+  We may update this Policy; the “last updated” date above reflects the current version. Material
+  changes will be reflected here.
+</p>
+
+<h2>11. Contact</h2>
+<p>
+  {% if contact_email %}Privacy questions or requests: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+  {% else %}Contact the operator of this deployment with privacy questions or requests.{% endif %}
+</p>
+{% endblock %}

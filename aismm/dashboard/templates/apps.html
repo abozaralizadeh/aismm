@@ -118,6 +118,12 @@
       <p class="hint">Register this exactly, in the app's OAuth settings:</p>
       <code class="copyable">{{ redirect_uris[selected.value] }}</code>
 
+      <h4>Terms &amp; Privacy URLs</h4>
+      <p class="hint">Some consoles (TikTok requires both) ask for these when you
+        submit the app:</p>
+      <code class="copyable">{{ terms_url }}</code>
+      <code class="copyable">{{ privacy_url }}</code>
+
       {% if guide.notes %}<p class="hint note-block">ℹ️ {{ guide.notes|md_inline }}</p>{% endif %}
       {% if guide.docs %}
         <p><a href="{{ guide.docs }}" target="_blank" rel="noopener">Platform documentation ↗</a></p>

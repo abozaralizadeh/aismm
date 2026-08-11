@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Legal · AISM²{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/icon.svg') }}">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="any">
+  <meta name="theme-color" content="#1c1e27">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {# A minimal, self-contained layout: these pages are PUBLIC (a platform's app
+     crawler and signed-out visitors reach them), so they deliberately don't show
+     the authenticated app nav. #}
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}" aria-label="AISM² home">
+      <span class="brand-word">AISM<sup>2</sup></span>
+    </a>
+    <nav>
+      <a href="{{ url_for('terms') }}">Terms</a>
+      <a href="{{ url_for('privacy') }}">Privacy</a>
+    </nav>
+  </header>
+  <main class="legal">
+    {% block content %}{% endblock %}
+    <hr>
+    <p class="muted small">
+      {{ entity_name }} · Last updated {{ updated }}.
+      {% if contact_email %}Questions: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.{% endif %}
+      · <a href="{{ url_for('terms') }}">Terms of Service</a>
+      · <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+    </p>
+  </main>
+</body>
+</html>

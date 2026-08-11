@@ -823,6 +823,8 @@ def create_app() -> Flask:
                        if workspaces.can_use_deployment_config(store, _workspace()) else {}),
             env_app_id=platform_apps.ENV_APP_ID,
             redirect_uris={p.value: settings.redirect_uri(p.value) for p in PlatformName},
+            terms_url=settings.dashboard.external_url("legal/terms"),
+            privacy_url=settings.dashboard.external_url("legal/privacy"),
         )
 
     @app.route("/apps", methods=["POST"])
@@ -1436,6 +1438,32 @@ def create_app() -> Flask:
     def healthz():
         """Unauthenticated liveness probe for the reverse proxy / systemd."""
         return {"status": "ok"}
+
+    # ---- public legal pages ---------------------------------------------- #
+    # TikTok (and other developer consoles) will not approve an app without a
+    # reachable Terms of Service and Privacy Policy URL. These must be PUBLIC —
+    # the platform's crawler fetches them with no session — so they are in
+    # sso.PUBLIC_ENDPOINTS alongside /assets and /healthz.
+    def _legal_context() -> dict:
+        d = settings.dashboard
+        contact = d.legal_contact_email or (
+            settings.auth.owner_emails[0] if settings.auth.owner_emails else "")
+        return {
+            "product_name": "AI Social Media Manager (AISM²)",
+            "entity_name": d.legal_entity_name or "AI Social Media Manager (AISM²)",
+            "contact_email": contact,
+            "updated": d.legal_updated or "August 2026",
+            "terms_url": d.external_url("legal/terms"),
+            "privacy_url": d.external_url("legal/privacy"),
+        }
+
+    @app.route("/legal/terms")
+    def terms():
+        return render_template("legal/terms.html", **_legal_context())
+
+    @app.route("/legal/privacy")
+    def privacy():
+        return render_template("legal/privacy.html", **_legal_context())
 
     # ---- admin (site owner only) ----------------------------------------- #
     @app.route("/admin")

@@ -103,6 +103,8 @@ GUIDES: dict[str, dict] = {
             "Create an app and add the **Content Posting API** product.",
             "Enable **Direct Post** if you want AISMM to publish rather than draft.",
             "Add the redirect URI below to the app's redirect URIs.",
+            "Paste the **Terms of Service** and **Privacy Policy** URLs below into the "
+            "app's URL properties — TikTok will not approve the app without both.",
             "Copy the **Client key** (this is the client id) and **Client secret**.",
             "Scopes used: `user.info.basic`, `video.publish`, `video.upload`.",
         ],

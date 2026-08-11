@@ -73,6 +73,17 @@ main { max-width: 960px; margin: 0 auto; padding: 1.75rem 1.5rem 4rem; }
    column and forced a horizontal scroll on a desktop with space to spare.
    Prose stays at 960 (and .form at 680) so line length is still readable. */
 main.wide { max-width: 1440px; }
+/* Legal prose (Terms / Privacy): a comfortable reading measure and a little
+   breathing room between sections. */
+main.legal { max-width: 46rem; }
+main.legal h2 { margin-top: 1.8rem; }
+main.legal ul { padding-left: 1.2rem; }
+main.legal li { margin: .3rem 0; }
+main.legal hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0 1rem; }
+.sitefoot { max-width: 960px; margin: 0 auto; padding: 0 1.5rem 2rem; display: flex;
+            gap: .5rem; justify-content: center; color: var(--muted); font-size: .85rem; }
+.sitefoot a { color: var(--muted); }
+.sitefoot a:hover { color: var(--text); }
 
 .flashes { margin-bottom: 1rem; }
 .flash { padding: .6rem .9rem; border-radius: 8px; margin-bottom: .5rem; border: 1px solid var(--border); }

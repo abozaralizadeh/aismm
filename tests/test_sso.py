@@ -82,6 +82,16 @@ def test_healthz_is_public(auth_app):
     assert auth_app().test_client().get("/healthz").status_code == 200
 
 
+def test_legal_pages_are_public(auth_app):
+    """A platform's app-review crawler fetches these with no cookie — guarding
+    them would fail app review (TikTok requires both URLs)."""
+    client = auth_app().test_client()
+    terms = client.get("/legal/terms")
+    privacy = client.get("/legal/privacy")
+    assert terms.status_code == 200 and b"Terms of Service" in terms.data
+    assert privacy.status_code == 200 and b"Privacy Policy" in privacy.data
+
+
 def test_login_page_renders_without_a_session(auth_app):
     resp = auth_app().test_client().get("/login")
     assert resp.status_code == 200
