@@ -178,6 +178,22 @@ def next_community(account) -> str:
     return ids[cursor % len(ids)]
 
 
+# X phrases the outreach-reply refusal a few ways; match on the stable parts so a
+# minor wording change doesn't drop us back to the generic "reconnect" hint.
+_REPLY_BLOCK_MARKERS = (
+    "only allowed to posts where",     # "…replies are only allowed to posts where…"
+    "mentioned or is the author",
+    "not permitted to reply",
+    "not allowed to reply",
+)
+
+
+def _is_reply_permission_block(detail: str) -> bool:
+    """Is this 403 X refusing an OUTBOUND reply (vs a token/scope failure)?"""
+    text = (detail or "").lower()
+    return any(marker in text for marker in _REPLY_BLOCK_MARKERS)
+
+
 class Twitter(SocialPlatform):
     name = PlatformName.twitter
     capabilities = Capabilities(
@@ -452,6 +468,17 @@ class Twitter(SocialPlatform):
                     "pay-per-use and your developer account has no credits left. "
                     "Buy credits at https://console.x.com and retry; nothing in the "
                     "post or the account connection needs changing.")
+        elif response.status_code == 403 and _is_reply_permission_block(detail):
+            # X refuses outbound replies to strangers on some access tiers /
+            # accounts: "replies are only allowed to posts where the account is
+            # mentioned or is the author". This is NOT a token/scope problem —
+            # reconnecting fixes nothing — so say so, or an outreach operator
+            # burns a reconnect chasing the wrong cause. Likes/search still work.
+            hint = (" — X is refusing OUTBOUND replies for this account: it only lets "
+                    "you reply to posts that mention you or that you authored. This is an "
+                    "X-side reply restriction on outreach, NOT a token or app-permission "
+                    "problem — reconnecting will not change it. Likes and search still work, "
+                    "so use those for outreach, or reply only where the account is mentioned.")
         elif response.status_code in (401, 403):
             hint = (" — the token is rejected or the app lacks access for this call. "
                     "Check the app's permissions and that the account is still "

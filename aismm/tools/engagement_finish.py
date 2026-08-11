@@ -13,7 +13,15 @@ in code, not from a number the model reports):
 
 * replied to something live      -> ``published``
 * staged replies (dry-run/approval) -> ``staged``
+* every reply attempt was refused (403, rate limit) and nothing else landed
+                                 -> ``failed`` (with the blocker reason)
 * nothing new to answer          -> ``skipped``
+
+The ``failed`` case exists because a blocked reply used to leave the tally at
+``0/0/0``, so a run that tried three replies and was refused every time reported
+as ``skipped`` — reading as "nothing to do" when the truth was "tried and was
+blocked". ``perform_reply`` now records refusals on the tally so this can tell
+the two apart.
 """
 from __future__ import annotations
 
@@ -37,15 +45,24 @@ async def perform_finish_engagement(state: dict, summary: str = "") -> dict:
     replied = int(tally.get("replied", 0))
     staged = int(tally.get("staged", 0))
     skipped = int(tally.get("skipped", 0))
+    failed = int(tally.get("failed", 0))
+    failures = [f for f in (tally.get("failures") or []) if f]
 
     if replied:
         status = RunStatus.published
     elif staged:
         status = RunStatus.staged
+    elif failed:
+        # Attempts were made and the platform refused every one — that is a
+        # failure, not an idle "nothing to answer" skip.
+        status = RunStatus.failed
     else:
         status = RunStatus.skipped
 
-    line = f"Engagement done: {replied} replied, {staged} staged, {skipped} skipped."
+    line = f"Engagement done: {replied} replied, {staged} staged, {skipped} skipped"
+    if failed:
+        line += f", {failed} blocked"
+    line += "."
     if summary.strip():
         line += f" {summary.strip()}"
     run.status = status
@@ -56,14 +73,19 @@ async def perform_finish_engagement(state: dict, summary: str = "") -> dict:
     # template on task_type.
     if not run.caption:
         run.caption = line
+    # On a fully-blocked run, put the actual blocker in run.error so the run
+    # detail says WHY it failed rather than leaving the operator to guess.
+    if status is RunStatus.failed and not run.error:
+        run.error = ("Every reply was refused by the platform. "
+                     + " | ".join(failures[:3]))
     store.update_run(run)
 
     state["result"] = {"mode": "engage", "replied": replied, "staged": staged,
-                       "skipped": skipped, "summary": summary.strip()}
+                       "skipped": skipped, "failed": failed, "summary": summary.strip()}
     logger.info("Engagement run finished | instruction='%s' account=%s | %s",
                 instruction.name, account.handle or account.external_id, line)
     return {"status": status.value, "replied": replied, "staged": staged, "skipped": skipped,
-            "message": "Run recorded. This ends the engagement run."}
+            "failed": failed, "message": "Run recorded. This ends the engagement run."}
 
 
 def _make_finish_engagement(state: dict):

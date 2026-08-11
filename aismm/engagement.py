@@ -49,8 +49,12 @@ def _counters(state: dict) -> dict:
     """Per-run engagement tally, read by finish_engagement to set the run status."""
     tally = state.get("engagement")
     if not isinstance(tally, dict):
-        tally = {"replied": 0, "staged": 0, "skipped": 0, "targets": []}
+        tally = {"replied": 0, "staged": 0, "skipped": 0, "failed": 0,
+                 "targets": [], "failures": []}
         state["engagement"] = tally
+    # Older tallies (or ones seeded elsewhere) may predate the failure fields.
+    tally.setdefault("failed", 0)
+    tally.setdefault("failures", [])
     return tally
 
 
@@ -154,9 +158,11 @@ async def perform_reply(state: dict, *, target_type: str, target_id: str, text: 
             message = (f"{exc} — {account.platform.value} is refusing replies for volume "
                        f"reasons. Paused for {held // 60} minutes.")
             logger.error("Reply rate-limited: %s", message)
+            _record_failure(tally, run, store, target_type, target_id, message)
             return {"error": "rate_limited", "message": message, "retry_after_minutes": held // 60}
         logger.exception("Live reply failed for %s (%s %s)",
                          account.handle or account.external_id, target_type, target_id)
+        _record_failure(tally, run, store, target_type, target_id, str(exc))
         return {"error": "reply_failed", "message": str(exc)}
 
     url = result.get("url", "") if isinstance(result, dict) else ""
@@ -172,6 +178,24 @@ async def perform_reply(state: dict, *, target_type: str, target_id: str, text: 
     store.update_run(run)
     return {"status": "replied", "mode": "live", "url": url,
             "message": "Reply sent. Move to the next unanswered item, or finish_engagement."}
+
+
+def _record_failure(tally: dict, run, store, target_type: str, target_id: str,
+                    reason: str) -> None:
+    """Count a reply the platform REFUSED (403, rate limit, …) on the run tally.
+
+    Without this a blocked reply left the tally at ``0 replied / 0 staged / 0
+    skipped``, so ``finish_engagement`` reported the run as ``skipped`` —
+    indistinguishable from "nothing new to answer" — even though it tried and was
+    refused. The reason (kept short) lets ``finish_engagement`` fail the run with
+    the actual blocker instead of a silent skip.
+    """
+    tally["failed"] = int(tally.get("failed", 0)) + 1
+    reason = (reason or "").strip()
+    if reason:
+        tally.setdefault("failures", []).append(f"{target_type} {target_id}: {reason}"[:300])
+    run.log = (run.log + f"\nReply to {target_type} {target_id} BLOCKED: {reason}").strip()
+    store.update_run(run)
 
 
 def _has_open_staged_reply(store, account_id: str, target_type: str, target_id: str) -> bool:

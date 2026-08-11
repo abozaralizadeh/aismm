@@ -192,6 +192,56 @@ def test_a_platform_without_a_dm_api_refuses_a_dm(store):
     assert store.list_staged(pending_only=False) == []
 
 
+# --- a blocked reply is counted, and fails a fully-blocked run ----------------------- #
+
+def test_a_refused_live_reply_is_counted_as_blocked(env, monkeypatch):
+    """A 403 on a live reply must land on the tally, not vanish — otherwise the
+    run reads as an idle 0/0/0 skip when it actually tried and was refused."""
+    async def _refuse(*a, **k):
+        raise RuntimeError("X API 403: replies are only allowed to posts where the "
+                           "account is mentioned or is the author")
+
+    monkeypatch.setattr("aismm.tokens.valid_access_token", lambda *a, **k: _async("tok"))
+    env["instruction"].publish_mode = PublishMode.live
+    monkeypatch.setattr("aismm.platforms.registry.get_platform",
+                        lambda name: _FakePlatform(_refuse))
+
+    result = _reply(env)
+    assert result["error"] == "reply_failed"
+    tally = env["engagement"]
+    assert tally["failed"] == 1
+    assert tally["replied"] == 0 and tally["staged"] == 0 and tally["skipped"] == 0
+    assert any("only allowed" in f for f in tally["failures"])
+
+
+def test_finish_engagement_fails_a_fully_blocked_run(env):
+    """Attempts made, every one refused, nothing staged/sent -> failed (not skipped),
+    with the blocker in run.error."""
+    from aismm.models import RunStatus
+    from aismm.tools.engagement_finish import perform_finish_engagement
+
+    env["engagement"] = {"replied": 0, "staged": 0, "skipped": 0, "failed": 3,
+                         "targets": [], "failures": ["comment c1: X API 403: only allowed"]}
+    out = _run(perform_finish_engagement(env, summary="Searched X; replies refused."))
+    assert out["status"] == RunStatus.failed.value
+    assert out["failed"] == 3
+    run = env["run"]
+    assert run.status is RunStatus.failed
+    assert "3 blocked" in run.caption
+    assert "refused by the platform" in run.error
+
+
+def test_finish_engagement_still_skips_when_nothing_to_answer(env):
+    """No attempts at all -> the ordinary 'nothing new' skip is unchanged."""
+    from aismm.models import RunStatus
+    from aismm.tools.engagement_finish import perform_finish_engagement
+
+    out = _run(perform_finish_engagement(env, summary="Nothing new."))
+    assert out["status"] == RunStatus.skipped.value
+    assert env["run"].status is RunStatus.skipped
+    assert env["run"].error in ("", None)
+
+
 # --- auto mode: the agent decides publish vs engage --------------------------------- #
 
 def test_auto_kickoff_asks_the_agent_to_decide():

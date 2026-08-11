@@ -477,6 +477,22 @@ def test_403_points_at_the_token_not_at_billing(monkeypatch):
     assert "BILLING" not in str(exc.value)
 
 
+def test_403_outbound_reply_block_is_not_a_token_problem(monkeypatch):
+    """X refusing an outbound reply ("only allowed to posts where the account is
+    mentioned or is the author") is an outreach restriction, NOT a token/scope
+    failure — reconnecting fixes nothing, so the message must say so and must not
+    send the operator to check the app permissions."""
+    _failing_get(monkeypatch, 403, {"detail": "You are not permitted to reply to a Post "
+                                    "where you are not mentioned or the author"})
+    account = Account(platform=PlatformName.twitter, external_id="9")
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(_x().list_posts("t", account))
+    message = str(exc.value)
+    assert "reply restriction" in message.lower()
+    assert "reconnecting will not" in message.lower()
+    assert "token is rejected" not in message   # not the generic 403 hint
+
+
 def test_429_says_rate_limited(monkeypatch):
     _failing_get(monkeypatch, 429, {"detail": "Too Many Requests"})
     account = Account(platform=PlatformName.twitter, external_id="9")
