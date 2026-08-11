@@ -15,7 +15,7 @@ import threading
 from collections.abc import Callable
 
 from flask import (
-    Flask, abort, flash, g, redirect, render_template, request, send_file,
+    Flask, Response, abort, flash, g, redirect, render_template, request, send_file,
     send_from_directory, session, url_for,
 )
 from markupsafe import Markup, escape
@@ -1464,6 +1464,20 @@ def create_app() -> Flask:
     @app.route("/legal/privacy")
     def privacy():
         return render_template("legal/privacy.html", **_legal_context())
+
+    # ---- domain-verification files --------------------------------------- #
+    # TikTok (and other consoles) prove domain ownership by fetching a file at
+    # the site root, e.g. /tiktok<code>.txt. The mapping {filename: body} comes
+    # from settings.dashboard.site_verification (TIKTOK_VERIFICATION_CODE or the
+    # general SITE_VERIFICATION_JSON). PUBLIC — the crawler carries no session —
+    # so the endpoint is in sso.PUBLIC_ENDPOINTS. A single dynamic segment at the
+    # root; Flask's literal rules win, so this never shadows a named route.
+    @app.route("/<verify_file>")
+    def site_verification(verify_file):
+        body = settings.dashboard.site_verification.get(verify_file)
+        if body is None:
+            abort(404)
+        return Response(body, mimetype="text/plain")
 
     # ---- admin (site owner only) ----------------------------------------- #
     @app.route("/admin")

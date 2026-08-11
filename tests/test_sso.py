@@ -92,6 +92,27 @@ def test_legal_pages_are_public(auth_app):
     assert privacy.status_code == 200 and b"Privacy Policy" in privacy.data
 
 
+def test_site_verification_file_is_served_public(auth_app, monkeypatch):
+    """TikTok fetches /tiktok<code>.txt with no cookie to prove domain ownership."""
+    app = auth_app()
+    body = "tiktok-developers-site-verification=ABC123"
+    patched = dataclasses.replace(
+        app_module.settings,
+        dashboard=dataclasses.replace(
+            app_module.settings.dashboard,
+            site_verification={"tiktokABC123.txt": body}),
+    )
+    monkeypatch.setattr(app_module, "settings", patched)
+    client = app.test_client()
+
+    resp = client.get("/tiktokABC123.txt")
+    assert resp.status_code == 200
+    assert resp.data.decode() == body
+    assert resp.mimetype == "text/plain"
+    # An unknown verification file is a plain 404, not a leak.
+    assert client.get("/tiktokNOPE.txt").status_code == 404
+
+
 def test_login_page_renders_without_a_session(auth_app):
     resp = auth_app().test_client().get("/login")
     assert resp.status_code == 200

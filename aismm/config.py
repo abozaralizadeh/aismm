@@ -8,6 +8,7 @@ external services is resolved here once, so the rest of the codebase never calls
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,33 @@ def _path_prefix(value: str | None) -> str:
     if any(part in {".", ".."} for part in parts):
         raise ValueError("REVERSE_PROXY_PREFIX cannot contain '.' or '..' path segments")
     return "/" + "/".join(parts)
+
+
+def _site_verification() -> dict[str, str]:
+    """Domain-ownership verification files a platform serves-and-checks.
+
+    Several developer consoles verify you control a site by fetching a file with
+    known content at a known path — TikTok requires it before it will approve an
+    app. Returns ``{filename: exact-body}``; the dashboard serves each at its own
+    root path (``/<filename>``, which the reverse proxy exposes as
+    ``<base><prefix>/<filename>``).
+
+    Two sources: ``TIKTOK_VERIFICATION_CODE`` (the whole file derives from the
+    code, so you paste only the code) and ``SITE_VERIFICATION_JSON`` (a
+    ``{filename: content}`` object for any other provider — Google, Bing, Meta).
+    """
+    files: dict[str, str] = {}
+    code = os.getenv("TIKTOK_VERIFICATION_CODE", "").strip()
+    if code:
+        files[f"tiktok{code}.txt"] = f"tiktok-developers-site-verification={code}"
+    raw = os.getenv("SITE_VERIFICATION_JSON", "").strip()
+    if raw:
+        try:
+            files.update({str(k): str(v) for k, v in json.loads(raw).items()})
+        except (ValueError, AttributeError):
+            # Malformed config must not crash import — the files just won't serve.
+            pass
+    return files
 
 
 @dataclass(frozen=True)
@@ -112,6 +140,9 @@ class DashboardSettings:
     legal_entity_name: str = ""
     legal_contact_email: str = ""
     legal_updated: str = ""
+    # Domain-verification files ({filename: body}) served publicly at the site
+    # root so a platform (e.g. TikTok) can confirm you control this deployment.
+    site_verification: dict = field(default_factory=dict)
 
     @property
     def public_base_url(self) -> str:
@@ -411,6 +442,7 @@ def load_settings() -> Settings:
             legal_entity_name=os.getenv("LEGAL_ENTITY_NAME", "").strip(),
             legal_contact_email=os.getenv("LEGAL_CONTACT_EMAIL", "").strip(),
             legal_updated=os.getenv("LEGAL_UPDATED", "").strip(),
+            site_verification=_site_verification(),
         ),
         platform_creds=_load_platform_creds(),
         auth=AuthSettings(
