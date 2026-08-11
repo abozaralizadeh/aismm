@@ -1466,15 +1466,19 @@ def create_app() -> Flask:
         return render_template("legal/privacy.html", **_legal_context())
 
     # ---- domain-verification files --------------------------------------- #
-    # TikTok (and other consoles) prove domain ownership by fetching a file at
-    # the site root, e.g. /tiktok<code>.txt. The mapping {filename: body} comes
-    # from settings.dashboard.site_verification (TIKTOK_VERIFICATION_CODE or the
-    # general SITE_VERIFICATION_JSON). PUBLIC — the crawler carries no session —
-    # so the endpoint is in sso.PUBLIC_ENDPOINTS. A single dynamic segment at the
-    # root; Flask's literal rules win, so this never shadows a named route.
-    @app.route("/<verify_file>")
+    # TikTok (and other consoles) prove domain ownership by fetching a signature
+    # file. The exact URL depends on the property registered: TikTok appends the
+    # filename to the URL PREFIX you gave it (e.g. .../aismm/verify/), so the file
+    # can be requested at the site root OR under a sub-path. We therefore match on
+    # the trailing filename at any depth. The mapping {filename: body} comes from
+    # settings.dashboard.site_verification (TIKTOK_VERIFICATION_CODE or the general
+    # SITE_VERIFICATION_JSON). PUBLIC — the crawler carries no session — so the
+    # endpoint is in sso.PUBLIC_ENDPOINTS. Flask's literal rules outrank this
+    # dynamic path, so it never shadows a named route (/assets, /legal/…, etc.).
+    @app.route("/<path:verify_file>")
     def site_verification(verify_file):
-        body = settings.dashboard.site_verification.get(verify_file)
+        mapping = settings.dashboard.site_verification
+        body = mapping.get(verify_file) or mapping.get(verify_file.rsplit("/", 1)[-1])
         if body is None:
             abort(404)
         return Response(body, mimetype="text/plain")

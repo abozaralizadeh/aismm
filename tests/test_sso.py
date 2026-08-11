@@ -105,10 +105,15 @@ def test_site_verification_file_is_served_public(auth_app, monkeypatch):
     monkeypatch.setattr(app_module, "settings", patched)
     client = app.test_client()
 
+    # Served at the site root...
     resp = client.get("/tiktokABC123.txt")
     assert resp.status_code == 200
     assert resp.data.decode() == body
     assert resp.mimetype == "text/plain"
+    # ...and under a sub-path prefix (TikTok appends the filename to the URL
+    # prefix property, e.g. .../verify/tiktok<code>.txt).
+    sub = client.get("/verify/tiktokABC123.txt")
+    assert sub.status_code == 200 and sub.data.decode() == body
     # An unknown verification file is a plain 404, not a leak.
     assert client.get("/tiktokNOPE.txt").status_code == 404
 
