@@ -426,6 +426,57 @@ def test_reply_search_deduplicates_by_id(monkeypatch):
     assert [r["id"] for r in replies] == ["r1"]
 
 
+# --- outreach search flags posts we are not allowed to reply to ---------------------- #
+# The reported 403 ("replies are only allowed to posts where the account is
+# mentioned or is the author") is X enforcing the AUTHOR's per-post reply_settings,
+# not a token problem. search_content reads reply_settings and marks each post
+# `repliable` so the agent only replies where it is allowed — likes still work on
+# any of them.
+
+def _content_search(monkeypatch, data, users=None):
+    from aismm.platforms import twitter as tw
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"data": data,
+                    "includes": {"users": users or [{"id": "111", "username": "someone"}]}}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **kw):
+            return _Resp()
+
+    monkeypatch.setattr(tw.httpx, "AsyncClient", lambda **kw: _Client())
+
+
+def test_search_flags_restricted_posts_as_not_repliable(monkeypatch):
+    account = Account(platform=PlatformName.twitter, handle="me", external_id="9")
+    _content_search(monkeypatch, [
+        {"id": "a", "text": "open", "author_id": "111", "reply_settings": "everyone"},
+        {"id": "b", "text": "no setting", "author_id": "111"},   # X omits it on open posts
+        {"id": "c", "text": "followers only", "author_id": "111",
+         "reply_settings": "following"},
+        {"id": "d", "text": "mentioned only", "author_id": "111",
+         "reply_settings": "mentionedUsers"},
+    ])
+    posts = asyncio.run(_x().search_content("t", account, query="foo"))
+    by_id = {p["id"]: p for p in posts}
+    assert by_id["a"]["repliable"] is True
+    assert by_id["b"]["repliable"] is True          # absent => open
+    assert by_id["c"]["repliable"] is False
+    assert by_id["d"]["repliable"] is False
+    # A restricted post is still returned (you may still like it), just flagged.
+    assert len(posts) == 4
+
+
 # --- billing errors must be spelled out, not left as a bare status ------------------- #
 # X moved to pay-per-use credits in Feb 2026 — there is no free tier. An account
 # out of credits gets 402 on EVERYTHING, posting included, and httpx's own

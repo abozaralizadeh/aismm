@@ -184,7 +184,12 @@ def _make_search(state: dict):
         configured outreach targets (its keywords + #hashtags); pass one to search
         something specific you inferred from the brief. Items flagged
         ``already_answered`` have already been engaged by this account — skip them.
-        Then reply with ``x_reply_to_post`` or acknowledge with ``x_like_post``.
+
+        Each item also carries ``repliable``: only reply (``x_reply_to_post``) to
+        posts where it is ``true``. A ``false`` post has the author's reply setting
+        restricted (followers / mentioned users only), so X will REFUSE your reply
+        with a 403 — do not attempt it. You may still ``x_like_post`` any post,
+        repliable or not.
 
         Args:
             query: X recent-search query. Empty = use the instruction's targets.

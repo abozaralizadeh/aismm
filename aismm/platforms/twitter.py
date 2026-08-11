@@ -194,6 +194,23 @@ def _is_reply_permission_block(detail: str) -> bool:
     return any(marker in text for marker in _REPLY_BLOCK_MARKERS)
 
 
+# A post's ``reply_settings`` is the AUTHOR's per-post choice of who may reply:
+# ``everyone`` (or unset) is open to anyone; ``following`` / ``mentionedUsers`` /
+# ``subscribers`` / ``verified`` restrict it. Replying to a restricted post we are
+# not mentioned in is exactly the 403 above — a rule X enforces, not a bug to work
+# around — so outreach reads this and only offers OPEN posts to reply to.
+_REPLIABLE_SETTINGS = ("", "everyone")
+
+
+def _is_repliable(reply_settings) -> bool:
+    """Can anyone reply to a post with this ``reply_settings`` value?
+
+    ``everyone`` and an absent/empty value (X omits it on open posts) are open;
+    every other value restricts replies to a group this account is not in.
+    """
+    return str(reply_settings or "").strip().lower() in _REPLIABLE_SETTINGS
+
+
 class Twitter(SocialPlatform):
     name = PlatformName.twitter
     capabilities = Capabilities(
@@ -635,7 +652,11 @@ class Twitter(SocialPlatform):
         Best-effort and small — recent search spends credits on the pay-per-use
         API and needs project access some apps lack, so a failure returns ``[]``
         rather than killing the run. Returns normalized items with ``author`` (the
-        poster's ``@handle``) so the agent can see it is engaging someone else.
+        poster's ``@handle``) so the agent can see it is engaging someone else, and
+        a ``repliable`` flag from each post's ``reply_settings`` — replying to a
+        restricted post the account is not mentioned in is the documented 403, so
+        the agent must only reply where ``repliable`` is true (likes still work on
+        any of them).
         """
         q = (query or "").strip()
         if not q:
@@ -645,7 +666,7 @@ class Twitter(SocialPlatform):
         try:
             payload = await self._get(access_token, "tweets/search/recent", {
                 "query": full, "max_results": max(10, min(limit, 100)),
-                "tweet.fields": f"{self.TWEET_FIELDS},author_id",
+                "tweet.fields": f"{self.TWEET_FIELDS},reply_settings,author_id",
                 "expansions": "author_id", "user.fields": "username"})
         except Exception as exc:  # noqa: BLE001 - outreach search is best-effort
             logger.warning("X content search failed (%s); returning no results", exc)
@@ -660,6 +681,7 @@ class Twitter(SocialPlatform):
                 continue
             username = users.get(p.get("author_id"), "")
             metrics = p.get("public_metrics", {}) or {}
+            reply_settings = p.get("reply_settings")
             items.append({
                 "id": str(p.get("id") or ""),
                 "text": (p.get("text") or "")[:600],
@@ -669,6 +691,8 @@ class Twitter(SocialPlatform):
                 "likes": metrics.get("like_count"),
                 "reposts": metrics.get("retweet_count"),
                 "replies": metrics.get("reply_count"),
+                "reply_settings": reply_settings or "everyone",
+                "repliable": _is_repliable(reply_settings),
             })
         return items[:limit]
 
