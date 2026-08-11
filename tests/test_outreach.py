@@ -409,3 +409,63 @@ def test_always_on_for_outreach_matches_engage():
     from aismm.tools.registry import ALWAYS_ON_ENGAGE, always_on_for
 
     assert always_on_for("outreach") == ALWAYS_ON_ENGAGE
+
+
+# --- the run-time capability guard --------------------------------------------------- #
+
+def test_outreach_is_unsupported_on_instagram():
+    """The reported failure: an outreach shift on Instagram has no search tools, so
+    the guard skips it BEFORE the agent runs instead of hard-failing the run."""
+    from aismm.orchestrator import task_unsupported_reason
+
+    caps = get_platform(PlatformName.instagram).capabilities
+    assert task_unsupported_reason(InstructionTask.outreach, caps)     # blocked
+    # Engaging on Instagram (its own comments/DMs) IS supported.
+    assert task_unsupported_reason(InstructionTask.engage, caps) == ""
+
+
+def test_outreach_is_supported_on_x_and_reddit():
+    from aismm.orchestrator import task_unsupported_reason
+
+    for name in (PlatformName.twitter, PlatformName.reddit):
+        caps = get_platform(name).capabilities
+        assert task_unsupported_reason(InstructionTask.outreach, caps) == ""
+
+
+def test_engage_is_unsupported_on_tiktok():
+    """TikTok has no comment or DM API for third-party apps."""
+    from aismm.orchestrator import task_unsupported_reason
+
+    caps = get_platform(PlatformName.tiktok).capabilities
+    assert task_unsupported_reason(InstructionTask.engage, caps)
+
+
+@pytest.mark.parametrize("task", [InstructionTask.publish, InstructionTask.auto])
+def test_publish_and_auto_are_never_blocked(task):
+    """Every platform posts, and auto falls back to posting — never guarded out."""
+    from aismm.orchestrator import task_unsupported_reason
+
+    for name in PlatformName:
+        caps = get_platform(name).capabilities
+        assert task_unsupported_reason(task, caps) == ""
+
+
+def test_run_one_skips_an_outreach_run_on_instagram(store, monkeypatch):
+    """End to end: no Run row is created, the account is reported skipped, and the
+    agent is never invoked."""
+    from aismm import orchestrator
+
+    account = store.upsert_account(
+        Account(platform=PlatformName.instagram, external_id="9", handle="me"),
+        access_token="t")
+    instr = store.upsert_instruction(
+        Instruction(name="ig outreach", task_type=InstructionTask.outreach))
+
+    def _boom(*a, **k):
+        raise AssertionError("run_for_account must not be called for a skipped task")
+
+    monkeypatch.setattr(orchestrator, "run_for_account", _boom)
+    result = orchestrator._run_one(instr, account, store)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "task_unsupported"
+    assert store.count_runs(instruction_id=instr.id) == 0

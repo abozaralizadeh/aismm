@@ -1000,8 +1000,26 @@ def create_app() -> Flask:
                                                instr.image_config_id)
         instr.video_config_id = _pick_provider("video", "video_config_id",
                                                instr.video_config_id)
-        mine = {a.id for a in store.list_accounts(workspace_id=_workspace_id())}
-        instr.set_account_ids([a for a in request.form.getlist("account_ids") if a in mine])
+        accounts = {a.id: a for a in store.list_accounts(workspace_id=_workspace_id())}
+        chosen_accounts = [a for a in request.form.getlist("account_ids") if a in accounts]
+        instr.set_account_ids(chosen_accounts)
+        # Warn NOW if this task can't run on some of the chosen accounts — otherwise
+        # the operator only finds out when the run silently skips (outreach on
+        # Instagram, engage on TikTok). A warning, not a block: a mixed instruction
+        # (outreach on X + Instagram) is valid — it just runs where it can.
+        blocked_platforms = sorted({
+            accounts[a].platform.value for a in chosen_accounts
+            if orchestrator.task_unsupported_reason(
+                instr.task_type, get_platform(accounts[a].platform).capabilities)
+        })
+        if blocked_platforms:
+            usable = len(chosen_accounts) - sum(
+                1 for a in chosen_accounts
+                if accounts[a].platform.value in blocked_platforms)
+            tail = ("no chosen account can — this instruction will do nothing"
+                    if usable == 0 else f"those account(s) will be skipped")
+            flash(f"'{instr.task_type.value}' can't run on {', '.join(blocked_platforms)}; "
+                  f"{tail}.", "error" if usable == 0 else "info")
         # Only touch the selection when the picker was actually on the form, so a
         # POST that predates it (or omits it) leaves the stored choice alone
         # rather than resetting the instruction to every tool.

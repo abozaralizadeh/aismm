@@ -20,7 +20,8 @@ from .llm import describe_model_error
 from .assets import exists as asset_exists
 from .assets import kind_from_path
 from .models import (
-    Account, Instruction, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
+    Account, Instruction, InstructionTask, PublishMode, Run, RunStatus, StagedPost,
+    StagedStatus,
 )
 from .platforms.instagram import RateLimited
 from .platforms.registry import get_platform
@@ -464,8 +465,39 @@ def retry_run(run_id: str, prompt: str = "") -> dict:
     return _run_one(instruction, account, store, prompt_override=prompt)
 
 
+def task_unsupported_reason(task: InstructionTask, caps) -> str:
+    """Why this platform CANNOT do this task — a cheap declarative check, "" if it can.
+
+    An OUTREACH run needs a third-party content-search API (X + Reddit only); an
+    ENGAGE run needs somewhere inbound to read and answer (comments or DMs). The
+    tools the agent would need are gated on exactly these capabilities, so without
+    the check the run reaches the model, finds an empty toolset, and reports a hard
+    FAILED — noise for a structural misconfiguration the operator must fix by
+    changing the task type. Publish and auto always work (every platform posts, and
+    auto falls back to posting), so they are never blocked here.
+    """
+    if task is InstructionTask.outreach and not caps.supports_search:
+        return ("outreach needs a third-party content-search API, which this platform "
+                "has none of — outreach runs on X and Reddit only")
+    if task is InstructionTask.engage and not (caps.supports_comments or caps.supports_dms):
+        return "this platform exposes no comment or DM API to engage on"
+    return ""
+
+
 def _run_one(instruction: Instruction, account: Account, store,
              prompt_override: str = "") -> dict:
+    # Cheapest guard first: a platform that structurally cannot do this task is
+    # skipped (like a cooldown), never run to a hard failure. A MIXED outreach
+    # instruction then still runs on X and skips Instagram, rather than logging one
+    # failed run per non-search account every fire.
+    caps = get_platform(account.platform).capabilities
+    blocked = task_unsupported_reason(instruction.task_type, caps)
+    if blocked:
+        logger.warning("Skipping %s / %s (%s) — %s", instruction.name,
+                       account.handle or account.external_id, account.platform.value, blocked)
+        return {"account_id": account.id, "status": "skipped",
+                "reason": "task_unsupported", "detail": blocked}
+
     # A rate-limited account cannot publish, so don't spend a run researching,
     # downloading and generating media that would be refused at the last step.
     if instruction.publish_mode is PublishMode.live and cooldown.is_active(account):
