@@ -64,8 +64,12 @@
         · {{ accounts.get(s.account_id).handle if accounts.get(s.account_id) else '' }}</div>
       <p class="caption">{{ s.caption }}</p>
       <div class="row">
-        <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
+        <form method="post" action="{{ url_for('approve', staged_id=s.id) }}" class="approve-form">
           <button class="btn btn-primary">{% if s.action_type == 'reply' %}Approve &amp; reply{% else %}Approve &amp; publish{% endif %}</button>
+          {% if s.action_type != 'reply' %}
+          <label class="muted small schedule-later">or publish at (UTC)
+            <input type="datetime-local" name="publish_at"></label>
+          {% endif %}
         </form>
         <form method="post" action="{{ url_for('reject', staged_id=s.id) }}">
           <button class="btn btn-danger">Reject</button>

@@ -158,7 +158,34 @@ def test_record_login_round_trips(label, store):
     assert prof is not None
     assert prof.display_name == "Me"
     assert prof.last_login_at is not None
+    assert prof.last_active_at is not None       # a login is also activity
     assert any(p.display_name == "Me" for p in store.list_user_profiles())
+
+
+@pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_record_activity_advances_only_last_active(label, store):
+    """Ongoing use bumps last_active_at but must NOT overwrite last_login_at or
+    the display name — the two answer different questions on the Admin page."""
+    store.init()
+    store.record_login("Me@Example.com", "Me")
+    prof = store.get_user_profile("me@example.com")
+    login_at = prof.last_login_at
+
+    store.record_activity("Me@Example.com")
+    prof = store.get_user_profile("me@example.com")
+    assert prof.last_active_at >= login_at
+    assert prof.last_login_at == login_at        # unchanged
+    assert prof.display_name == "Me"             # not wiped by the activity write
+
+
+@pytest.mark.parametrize("label,store", _both_backends(), ids=lambda v: v if isinstance(v, str) else "")
+def test_record_activity_creates_a_profile_if_absent(label, store):
+    """A person could be active before any login record exists (e.g. SSO-off) —
+    the activity write must materialise the profile rather than no-op."""
+    store.init()
+    store.record_activity("New@Example.com")
+    prof = store.get_user_profile("new@example.com")
+    assert prof is not None and prof.last_active_at is not None
 
 
 # --- can_select sharing matrix ---------------------------------------------------------- #

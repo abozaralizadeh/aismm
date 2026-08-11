@@ -101,6 +101,7 @@ class RunStatus(str, enum.Enum):
     running = "running"
     published = "published"
     staged = "staged"        # dry-run preview or queued for approval
+    rejected = "rejected"    # a queued post the operator declined
     skipped = "skipped"      # e.g. locked by a concurrent run
     failed = "failed"
 
@@ -342,6 +343,10 @@ class StagedPost(SQLModel, table=True):
     status: StagedStatus = StagedStatus.preview
     external_url: str = ""
     created_at: datetime = Field(default_factory=_now)
+    # An approval-mode post the operator chose to publish LATER: status becomes
+    # ``approved`` and this holds when. A per-minute scheduler sweep publishes it
+    # once due (orchestrator.publish_due_staged). None = publish on approval.
+    publish_at: datetime | None = None
 
     @property
     def asset_paths(self) -> list[str]:
@@ -562,6 +567,10 @@ class UserProfile(SQLModel, table=True):
     email: str = Field(primary_key=True)     # lowercased SSO identity
     display_name: str = ""
     last_login_at: datetime = Field(default_factory=_now)
+    # The last time this identity actually interacted with the site (any request),
+    # not just when the session began — updated (throttled) on activity so Admin
+    # can tell "signed in a week ago" from "still using it right now".
+    last_active_at: datetime = Field(default_factory=_now)
     created_at: datetime = Field(default_factory=_now)
 
 

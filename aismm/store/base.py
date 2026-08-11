@@ -184,7 +184,14 @@ class Store(ABC):
     # --- user profiles (durable login records for the Admin page) ---------- #
     @abstractmethod
     def record_login(self, email: str, display_name: str = "") -> None:
-        """Upsert a login: set ``last_login_at`` (and name) for this identity."""
+        """Upsert a login: set ``last_login_at`` (and ``last_active_at`` and name)
+        for this identity. A login is also activity."""
+
+    @abstractmethod
+    def record_activity(self, email: str) -> None:
+        """Bump ``last_active_at`` for this identity (any interaction with the
+        site), creating the profile if it does not exist yet. Does NOT touch
+        ``last_login_at`` — that marks the start of a session, this marks use."""
 
     @abstractmethod
     def get_user_profile(self, email: str) -> UserProfile | None: ...
@@ -336,6 +343,23 @@ class Store(ABC):
                                           StagedStatus.approved)):
                 keys.add(_key(staged.target_type, staged.target_id))
         return keys
+
+    def list_due_staged(self, now: datetime) -> list[StagedPost]:
+        """Approved posts scheduled to publish at or before ``now``.
+
+        The per-minute scheduler sweep (orchestrator.publish_due_staged) uses this
+        to publish posts an operator approved for LATER. Concrete-with-scan like
+        ``open_staged_reply_keys``: :class:`LocalStore` overrides it with SQL, and a
+        backend without a specialised query still works. Small set (only scheduled
+        items), so the scan is cheap.
+        """
+        cutoff = _as_utc(now)
+        due: list[StagedPost] = []
+        for staged in self.list_staged(pending_only=False, limit=500):
+            when = _as_utc(staged.publish_at)
+            if staged.status is StagedStatus.approved and when is not None and when <= cutoff:
+                due.append(staged)
+        return due
 
     # --- workspaces -------------------------------------------------------- #
     # A workspace owns accounts, instructions, runs and staged posts. Platform

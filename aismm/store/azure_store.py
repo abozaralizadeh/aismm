@@ -71,7 +71,7 @@ MAX_PROPERTY_CHARS = 32_000
 
 _DATETIME_FIELDS = {
     "expires_at", "created_at", "updated_at", "memory_updated_at", "note_updated_at",
-    "acquired_at", "metrics_updated_at", "last_login_at",
+    "acquired_at", "metrics_updated_at", "last_login_at", "last_active_at",
 }
 # RowKey forbids / \ # ? and control chars — lock keys contain ':'.
 _ROWKEY_UNSAFE = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
@@ -283,6 +283,7 @@ class AzureStore(Store):
             "target_id": s.target_id, "target_conversation": s.target_conversation,
             "target_excerpt": s.target_excerpt,
             "status": s.status.value, "external_url": s.external_url, "created_at": s.created_at,
+            "publish_at": s.publish_at,
         }
 
     @staticmethod
@@ -303,6 +304,7 @@ class AzureStore(Store):
             status=StagedStatus(e.get("status", "preview")),
             external_url=e.get("external_url", ""),
             created_at=_parse_dt(e.get("created_at")) or _now(),
+            publish_at=_parse_dt(e.get("publish_at")),
         )
 
     # --- accounts ---------------------------------------------------------- #
@@ -544,10 +546,28 @@ class AzureStore(Store):
         if not addr:
             return
         existing = self._get(PK_USER, addr)
-        payload = {"email": addr, "last_login_at": _now()}
+        now = _now()
+        payload = {"email": addr, "last_login_at": now, "last_active_at": now}
         if display_name:
             payload["display_name"] = display_name
-        payload["created_at"] = (_parse_dt(existing.get("created_at")) if existing else None) or _now()
+        payload["created_at"] = (_parse_dt(existing.get("created_at")) if existing else None) or now
+        self._upsert(PK_USER, addr, payload)
+
+    def record_activity(self, email):
+        addr = (email or "").strip().lower()
+        if not addr:
+            return
+        existing = self._get(PK_USER, addr)
+        now = _now()
+        # _upsert REPLACEs the whole entity, so carry the login/name forward or
+        # a mere page view would wipe last_login_at and display_name.
+        payload = {
+            "email": addr,
+            "last_active_at": now,
+            "last_login_at": (_parse_dt(existing.get("last_login_at")) if existing else None) or now,
+            "display_name": (existing.get("display_name", "") if existing else ""),
+            "created_at": (_parse_dt(existing.get("created_at")) if existing else None) or now,
+        }
         self._upsert(PK_USER, addr, payload)
 
     @staticmethod
@@ -556,6 +576,8 @@ class AzureStore(Store):
             email=e.get("email", "") or e["RowKey"],
             display_name=e.get("display_name", ""),
             last_login_at=_parse_dt(e.get("last_login_at")) or _now(),
+            last_active_at=(_parse_dt(e.get("last_active_at"))
+                            or _parse_dt(e.get("last_login_at")) or _now()),
             created_at=_parse_dt(e.get("created_at")) or _now(),
         )
 

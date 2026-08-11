@@ -15,7 +15,7 @@
 <table>
   <thead>
     <tr>
-      <th>User</th><th>Last login</th><th>Accounts</th><th>Platforms</th>
+      <th>User</th><th>Last login</th><th>Last active</th><th>Accounts</th><th>Platforms</th>
       <th>Instructions</th><th>Runs</th><th>Published</th><th>Failed</th>
       <th>Workspaces</th>
     </tr>
@@ -29,6 +29,7 @@
           {% if u.display_name %}<br><span class="muted small">{{ u.email }}</span>{% endif %}
         </td>
         <td>{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
+        <td>{{ u.last_active.strftime('%Y-%m-%d %H:%M') if u.last_active else '—' }}</td>
         <td>{{ u.accounts }}</td>
         <td>{{ u.platforms }}</td>
         <td>{{ u.instructions }}</td>
@@ -38,7 +39,7 @@
         <td>{{ u.workspaces_owned }} owned{% if u.workspaces_member %}, {{ u.workspaces_member }} member{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="muted">No users recorded yet.</td></tr>
+      <tr><td colspan="10" class="muted">No users recorded yet.</td></tr>
     {% endfor %}
   </tbody>
 </table>

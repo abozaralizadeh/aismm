@@ -317,6 +317,34 @@ def create_app() -> Flask:
         session["workspace_bootstrapped"] = email
         return None
 
+    # At most one activity write per session per this many seconds — every
+    # request would otherwise hit the DB just to advance a timestamp by a moment.
+    _ACTIVITY_THROTTLE_SECONDS = 120
+
+    @app.before_request
+    def _touch_activity():
+        """Record that this identity is still using the site (last_active_at).
+
+        Distinct from the once-per-session login record above: a person who
+        signed in yesterday and is clicking around now is *active today*, and the
+        Admin page should say so. Throttled and best-effort — a timestamp bump
+        must never slow or fail a request.
+        """
+        if request.endpoint in sso.PUBLIC_ENDPOINTS:
+            return None
+        email, _name, anon = _identity()
+        if anon or not email:
+            return None
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        if now - int(session.get("last_active_at_written", 0)) < _ACTIVITY_THROTTLE_SECONDS:
+            return None
+        try:
+            get_store().record_activity(email)
+        except Exception:  # noqa: BLE001 - never block a request on a timestamp
+            app.logger.warning("Could not record activity for %s", email, exc_info=True)
+        session["last_active_at_written"] = now
+        return None
+
     @app.template_global("platform_icon")
     def _platform_icon(name, size=14):
         return platform_icon(name, size=size)
@@ -1322,18 +1350,48 @@ def create_app() -> Flask:
 
     @app.route("/staged/<staged_id>/approve", methods=["POST"])
     def approve(staged_id):
-        _owned(get_store().get_staged(staged_id))
-        res = orchestrator.approve_staged(staged_id)
-        # A post returns "published", a reply "replied" — both are success. The
-        # raw dict is for callers; the operator gets a sentence and a link.
-        status = res.get("status")
-        if status in ("published", "replied"):
-            url = res.get("url")
-            what = "Reply sent." if status == "replied" else "Published."
-            flash(f"{what} {url}" if url else what, "success")
-        else:
-            flash(res.get("message") or res.get("error") or "Could not approve this item.",
-                  "error")
+        staged = _owned(get_store().get_staged(staged_id))
+        when = _parse_datetime_local(request.form.get("publish_at", ""))
+        # Publish LATER: a fast DB write, so it stays synchronous and flashes the
+        # scheduled time.
+        if when is not None and when > dt.datetime.now(dt.timezone.utc):
+            res = orchestrator.approve_staged(staged_id, publish_at=when)
+            if res.get("status") == "scheduled":
+                flash(f"Scheduled to publish at {when:%Y-%m-%d %H:%M} UTC.", "success")
+            else:
+                flash(res.get("message") or res.get("error") or "Could not schedule this item.",
+                      "error")
+            return redirect(request.referrer or url_for("runs"))
+
+        # A REPLY is a quick text send (no media upload), so it stays synchronous
+        # and shows the outcome + link immediately — the blocking problem is a video
+        # POST, which is backgrounded below.
+        if staged and staged.action_type == "reply":
+            res = orchestrator.approve_staged(staged_id)
+            if res.get("status") in ("replied", "staged", "skipped"):
+                url = res.get("url")
+                flash("Reply sent." + (f" {url}" if url else ""), "success")
+            else:
+                flash(res.get("message") or res.get("error") or "Could not send this reply.",
+                      "error")
+            return redirect(request.referrer or url_for("runs"))
+
+        # Publish NOW in the background: publishing a video can take a while, and a
+        # synchronous request blocks the page and is CANCELLED if the operator
+        # navigates away. The outcome shows on the run/queue on refresh.
+        def _approve():
+            app.logger.info("Approve of staged %s started", staged_id[:8])
+            try:
+                res = orchestrator.approve_staged(staged_id)
+                app.logger.info("Approve of staged %s: %s", staged_id[:8],
+                                res.get("status") or res.get("error"))
+            except Exception:  # noqa: BLE001 - a thread that dies quietly is undebuggable
+                app.logger.exception("Approve of staged %s failed", staged_id[:8])
+
+        threading.Thread(target=_approve, name=f"approve:{staged_id[:8]}",
+                         daemon=True).start()
+        flash("Publishing in the background — refresh in a moment to see the result.",
+              "success")
         # Back where it was clicked: the run page is where the post is visible.
         return redirect(request.referrer or url_for("runs"))
 
@@ -1399,7 +1457,7 @@ def create_app() -> Flask:
         def _acc(email: str) -> dict:
             key = (email or "").strip().lower()
             return user_agg.setdefault(key, {
-                "email": key, "display_name": "", "last_login": None,
+                "email": key, "display_name": "", "last_login": None, "last_active": None,
                 "accounts": 0, "platforms": set(), "instructions": 0,
                 "runs": 0, "published": 0, "failed": 0,
                 "workspaces_owned": 0, "workspaces_member": 0,
@@ -1430,6 +1488,7 @@ def create_app() -> Flask:
         for profile in store.list_user_profiles():
             agg = _acc(profile.email)
             agg["last_login"] = profile.last_login_at
+            agg["last_active"] = profile.last_active_at
             agg["display_name"] = profile.display_name
 
         users = []

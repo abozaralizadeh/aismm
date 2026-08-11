@@ -268,9 +268,17 @@ tr:hover .platform-icon { opacity: 1; }
          background: var(--panel-2); border: 1px solid var(--border); text-transform: capitalize; }
 .badge-live, .badge-published { background: rgba(53,194,138,.15); border-color: var(--ok); color: var(--ok); }
 .badge-dry_run, .badge-staged { background: rgba(110,168,254,.15); border-color: var(--accent); color: var(--accent); }
-.badge-approval { background: rgba(240,180,41,.15); border-color: var(--warn); color: var(--warn); }
+.badge-approval, .badge-approved { background: rgba(240,180,41,.15); border-color: var(--warn); color: var(--warn); }
 .badge-failed { background: rgba(240,97,109,.15); border-color: var(--danger); color: var(--danger); }
+.badge-rejected { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
 .badge-off { color: var(--muted); }
+
+/* Approve form: the button, plus an optional "publish later" datetime beside it.
+   The label stays a row (it sits inside .form on some pages, where `.form label`
+   would otherwise stack it into a column). */
+.approve-form { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.form .approve-form label.schedule-later,
+.approve-form label.schedule-later { flex-direction: row; align-items: center; gap: .35rem; }
 
 /* Performance counters — one pill per metric (likes / views / …). Wraps in the
    runs table cell; a little larger on the run-detail page (.metric-lg). */

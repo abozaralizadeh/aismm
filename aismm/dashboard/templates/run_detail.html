@@ -186,7 +186,12 @@
         <tbody>
         {% for s in staged %}
           <tr>
-            <td><span class="badge badge-{{ s.status.value }}">{{ s.status.value }}</span></td>
+            <td>
+              <span class="badge badge-{{ s.status.value }}">{{ s.status.value }}</span>
+              {% if s.status.value == 'approved' and s.publish_at %}
+                <div class="muted small">for {{ s.publish_at.strftime('%Y-%m-%d %H:%M') }} UTC</div>
+              {% endif %}
+            </td>
             <td class="small">
               {%- if s.action_type == 'reply' -%}
                 reply ({{ 'DM' if s.target_type == 'dm' else 'comment' }})
@@ -198,12 +203,21 @@
                    visible, so sending you back to Runs to click Approve was
                    asking you to judge it from memory. #}
                 {% if s.status.value == 'pending_approval' %}
-                  <form method="post" action="{{ url_for('approve', staged_id=s.id) }}">
+                  <form method="post" action="{{ url_for('approve', staged_id=s.id) }}" class="approve-form">
                     <button class="btn btn-primary small">{% if s.action_type == 'reply' %}Approve &amp; reply{% else %}Approve &amp; publish{% endif %}</button>
+                    {% if s.action_type != 'reply' %}
+                    <label class="muted small schedule-later">or at (UTC)
+                      <input type="datetime-local" name="publish_at"></label>
+                    {% endif %}
                   </form>
                   <form method="post" action="{{ url_for('reject', staged_id=s.id) }}"
                         onsubmit="return confirm('Reject this post? It will not be published.');">
                     <button class="btn btn-danger small">Reject</button>
+                  </form>
+                {% elif s.status.value == 'approved' %}
+                  <form method="post" action="{{ url_for('reject', staged_id=s.id) }}"
+                        onsubmit="return confirm('Cancel this scheduled post?');">
+                    <button class="btn btn-danger small">Cancel schedule</button>
                   </form>
                 {% elif s.external_url %}
                   <a class="btn small" href="{{ s.external_url }}" target="_blank" rel="noopener">open ↗</a>

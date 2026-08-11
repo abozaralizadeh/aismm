@@ -26,9 +26,14 @@ from .models import (
 from .platforms.instagram import RateLimited
 from .platforms.registry import get_platform
 from .store import get_store
+from .store.base import _as_utc
 from .tools.publish_tool import _confirm_duplicate
 
 logger = logging.getLogger("aismm.orchestrator")
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 # The lock is HEARTBEATED for as long as the run is alive, so this is "how long
 # after its owner dies before the lock is reclaimable", not "how long a run may
@@ -561,8 +566,15 @@ def _run_one(instruction: Instruction, account: Account, store,
         logging_setup.current_run_id.reset(log_token)
 
 
-def approve_staged(staged_id: str) -> dict:
-    """Approve a pending post and publish it live (dashboard Approve action)."""
+def approve_staged(staged_id: str, *, publish_at: datetime | None = None) -> dict:
+    """Approve a pending staged item (dashboard Approve action).
+
+    ``publish_at`` (aware UTC, in the future) queues it for LATER instead of
+    publishing now: the item moves to ``approved`` and a per-minute scheduler sweep
+    (:func:`publish_due_staged`) sends it when due. Otherwise it is dispatched
+    immediately. The dashboard runs the immediate path in a background thread so the
+    request returns at once — publishing a video can take a while.
+    """
     store = get_store()
     staged = store.get_staged(staged_id)
     if not staged:
@@ -570,6 +582,22 @@ def approve_staged(staged_id: str) -> dict:
     if staged.status != StagedStatus.pending_approval:
         return {"error": "not_pending", "status": staged.status.value}
 
+    if publish_at is not None and _as_utc(publish_at) > _now():
+        staged.status = StagedStatus.approved
+        staged.publish_at = publish_at
+        store.update_staged(staged)
+        logger.info("Staged %s scheduled to publish at %s", staged.id, publish_at.isoformat())
+        return {"status": "scheduled", "at": publish_at.isoformat()}
+
+    return _dispatch_staged(store, staged)
+
+
+def _dispatch_staged(store, staged: StagedPost) -> dict:
+    """Resolve the account + token and send a staged item NOW (post or reply).
+
+    Shared by the immediate Approve path and the scheduled sweep, so both go
+    through the same duplicate guard, ledger and run bookkeeping.
+    """
     account = store.get_account(staged.account_id)
     if not account:
         return {"error": "account_missing"}
@@ -584,6 +612,11 @@ def approve_staged(staged_id: str) -> dict:
     if staged.action_type == "reply":
         return _approve_staged_reply(store, staged, account, platform, access_token)
 
+    return _publish_staged_post(store, staged, account, platform, access_token)
+
+
+def _publish_staged_post(store, staged: StagedPost, account: Account, platform,
+                         access_token: str) -> dict:
     kind = staged.media_kind or kind_from_path(staged.asset_path)
     # A staged carousel has several items and a story has a placement; passing only
     # asset_path posted the first image of a carousel as a lone feed post.
@@ -681,13 +714,71 @@ def _approve_staged_reply(store, staged: StagedPost, account: Account, platform,
     return {"status": "replied", "url": url}
 
 
+def publish_due_staged(store=None) -> list[dict]:
+    """Publish every approved post whose scheduled time has arrived.
+
+    Called once a minute by the scheduler. A rate-limited account is skipped (the
+    item stays ``approved`` and is retried next sweep once the cooldown clears, so
+    the scheduler doesn't hammer a blocked account); any OTHER failure moves the
+    item back to ``pending_approval`` so a human sees it, rather than retrying a
+    doomed post every minute forever. Never raises — a bad item must not stop the
+    sweep (or the scheduler).
+    """
+    store = store or get_store()
+    try:
+        due = store.list_due_staged(_now())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not list scheduled posts: %s", exc)
+        return []
+    results = []
+    for staged in due:
+        account = store.get_account(staged.account_id)
+        if account is not None and cooldown.is_active(account):
+            logger.info("Scheduled post %s deferred — %s is rate-limited for %s",
+                        staged.id, account.handle or account.external_id,
+                        cooldown.describe(account))
+            continue
+        try:
+            result = _dispatch_staged(store, staged)
+        except Exception as exc:  # noqa: BLE001 - one bad item never stops the sweep
+            logger.exception("Scheduled publish of %s crashed", staged.id)
+            result = {"error": "publish_failed", "message": str(exc)}
+        error = result.get("error")
+        if error and error != "rate_limited":
+            # A doomed post (bad token, duplicate, hard failure) goes back to the
+            # queue for a human instead of looping. Rate-limited stays approved.
+            fresh = store.get_staged(staged.id)
+            if fresh and fresh.status is StagedStatus.approved:
+                fresh.status = StagedStatus.pending_approval
+                fresh.publish_at = None
+                store.update_staged(fresh)
+                logger.warning("Scheduled post %s failed (%s) — returned to the approval "
+                               "queue", staged.id, error)
+        results.append({"id": staged.id, **result})
+    if results:
+        logger.info("Scheduled-publish sweep: %d due, %s", len(results),
+                    ", ".join(r.get("status") or r.get("error") or "?" for r in results))
+    return results
+
+
 def reject_staged(staged_id: str) -> dict:
     store = get_store()
     staged = store.get_staged(staged_id)
     if not staged:
         return {"error": "not_found"}
     staged.status = StagedStatus.rejected
+    staged.publish_at = None                # un-schedule a rejected scheduled post
     store.update_staged(staged)
+    # Reflect the rejection on the originating RUN so it doesn't sit on "staged"
+    # forever. Only for a POST: an engage run stages one reply PER comment, so its
+    # status is governed by the run-wide tally (finish_engagement), and rejecting
+    # one reply must not flip the whole run. A post run has exactly one staged item.
+    if staged.action_type == "post" and staged.run_id:
+        run = store.get_run(staged.run_id)
+        if run and run.status is RunStatus.staged:
+            run.status = RunStatus.rejected
+            run.log = (run.log + "\nRejected in the approval queue.").strip()
+            store.update_run(run)
     return {"status": "rejected"}
 
 

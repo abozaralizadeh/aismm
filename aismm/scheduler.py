@@ -187,6 +187,30 @@ def _schedule_housekeeping(sched) -> None:
     threading.Thread(target=_prune, name="prune-assets-boot", daemon=True).start()
 
     _schedule_metrics_refresh(sched)
+    _schedule_due_publishes(sched)
+
+
+def _schedule_due_publishes(sched) -> None:
+    """Publish approval-mode posts an operator scheduled for a specific time.
+
+    Store-backed (StagedPost.publish_at) rather than a persistent APScheduler job,
+    so a scheduled post survives a restart with no jobstore. Every minute is fine:
+    the sweep is a cheap store query that does nothing until a post is actually due.
+    """
+    from .orchestrator import publish_due_staged
+
+    def _sweep():
+        try:
+            publish_due_staged()
+        except Exception as exc:  # noqa: BLE001 - never let the sweep stop the scheduler
+            logger.warning("Scheduled-publish sweep failed: %s", exc)
+
+    try:
+        sched.add_job(_sweep, CronTrigger.from_crontab("* * * * *"),
+                      id="housekeeping:scheduled-publish", replace_existing=True,
+                      misfire_grace_time=300, coalesce=True, max_instances=1)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not schedule the due-publish sweep: %s", exc)
 
 
 def _schedule_metrics_refresh(sched) -> None:

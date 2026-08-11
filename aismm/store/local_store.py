@@ -293,9 +293,23 @@ class LocalStore(Store):
             existing = s.get(UserProfile, addr)
             if existing is None:
                 existing = UserProfile(email=addr)
-            existing.last_login_at = _now()
+            now = _now()
+            existing.last_login_at = now
+            existing.last_active_at = now
             if display_name:
                 existing.display_name = display_name
+            s.merge(existing)
+            s.commit()
+
+    def record_activity(self, email):
+        addr = (email or "").strip().lower()
+        if not addr:
+            return
+        with Session(self._engine) as s:
+            existing = s.get(UserProfile, addr)
+            if existing is None:
+                existing = UserProfile(email=addr)
+            existing.last_active_at = _now()
             s.merge(existing)
             s.commit()
 
@@ -512,6 +526,16 @@ class LocalStore(Store):
             if pending_only:
                 stmt = stmt.where(StagedPost.status == StagedStatus.pending_approval)
             return list(s.exec(stmt.order_by(StagedPost.created_at.desc()).limit(limit)).all())
+
+    def list_due_staged(self, now):
+        """SQL variant of the base scan — approved posts whose publish time has come."""
+        with Session(self._engine) as s:
+            stmt = (select(StagedPost)
+                    .where(StagedPost.status == StagedStatus.approved)
+                    .where(StagedPost.publish_at.is_not(None))
+                    .where(StagedPost.publish_at <= now)
+                    .order_by(StagedPost.publish_at))
+            return list(s.exec(stmt).all())
 
     def open_staged_reply_keys(self, account_id):
         """SQL variant of the base scan — the engagement queue-dedup lookup."""
