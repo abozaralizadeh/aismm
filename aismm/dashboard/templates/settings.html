@@ -20,6 +20,133 @@ edit <code>.env</code> and restart to change it.</p>
 </table>
 </div>
 
+<h2>LLM connections</h2>
+<p class="muted">Add your own Azure OpenAI or APIM connection and pick it per instruction
+  (Instructions → the <em>LLM</em> field). Keys are encrypted at rest and never shown back to
+  you. Instructions left on <strong>Deployment default</strong> use the <code>.env</code> model
+  above{% if is_site_owner %} (which only you, the owner, may share){% endif %}.</p>
+
+{% macro llm_fields(cfg) %}
+  <label>Name
+    <input type="text" name="name" value="{{ cfg.name if cfg else '' }}"
+           placeholder="e.g. My GPT-4o" required>
+  </label>
+  <label>Provider
+    <select name="provider">
+      <option value="azure" {% if not cfg or cfg.provider == 'azure' %}selected{% endif %}>Azure OpenAI (direct)</option>
+      <option value="apim" {% if cfg and cfg.provider == 'apim' %}selected{% endif %}>APIM gateway</option>
+    </select>
+  </label>
+  <label>Model / deployment
+    <input type="text" name="model" value="{{ cfg.model if cfg else '' }}" required>
+  </label>
+  <fieldset>
+    <legend>Azure (direct)</legend>
+    <label>Azure endpoint
+      <input type="text" name="azure_endpoint" value="{{ cfg.azure_endpoint if cfg else '' }}"
+             placeholder="https://your-resource.openai.azure.com">
+    </label>
+    <label>API version
+      <input type="text" name="azure_api_version"
+             value="{{ cfg.azure_api_version if cfg else '2025-04-01-preview' }}">
+    </label>
+    <label>API key
+      <input type="password" name="azure_api_key" autocomplete="new-password"
+             placeholder="{{ 'leave blank to keep the stored key' if cfg else '' }}">
+    </label>
+  </fieldset>
+  <fieldset>
+    <legend>APIM gateway</legend>
+    <label>APIM base URL
+      <input type="text" name="apim_base_url" value="{{ cfg.apim_base_url if cfg else '' }}"
+             placeholder="https://your-apim.azure-api.net">
+    </label>
+    <label>Key header
+      <input type="text" name="apim_key_header"
+             value="{{ cfg.apim_key_header if cfg else 'api-key' }}">
+    </label>
+    <label>API version
+      <input type="text" name="apim_api_version"
+             value="{{ cfg.apim_api_version if cfg else '2025-04-01-preview' }}">
+    </label>
+    <label>Subscription key
+      <input type="password" name="apim_subscription_key" autocomplete="new-password"
+             placeholder="{{ 'leave blank to keep the stored key' if cfg else '' }}">
+    </label>
+  </fieldset>
+  <label class="check">
+    <input type="checkbox" name="enabled" {% if not cfg or cfg.enabled %}checked{% endif %}>
+    Enabled
+  </label>
+{% endmacro %}
+
+<h3>Your connections</h3>
+{% if owned_configs %}
+  {% for cfg in owned_configs %}
+    <div class="panel">
+      <h4>{{ cfg.label }} {% if cfg.is_env %}<span class="badge">.env</span>{% endif %}
+        {% if not cfg.enabled %}<span class="badge badge-off">disabled</span>{% endif %}</h4>
+      {% if not cfg.is_env %}
+        <form class="form" method="post" action="{{ url_for('save_llm_config') }}">
+          <input type="hidden" name="id" value="{{ cfg.id }}">
+          {{ llm_fields(cfg) }}
+          <div class="actions">
+            <button class="btn btn-primary" type="submit">Save</button>
+          </div>
+        </form>
+        <form class="form" method="post" action="{{ url_for('delete_llm_config', config_id=cfg.id) }}"
+              onsubmit="return confirm('Delete this LLM connection? Instructions using it will fail until you pick another.');">
+          <button class="btn btn-danger small" type="submit">Delete</button>
+        </form>
+      {% else %}
+        <p class="muted">The deployment default is configured from <code>.env</code> and cannot be
+          edited here. Share it with specific people below.</p>
+      {% endif %}
+      <form class="form" method="post" action="{{ url_for('share_llm_config', config_id=cfg.id) }}">
+        {% if not cfg.is_env %}
+          <label class="check">
+            <input type="checkbox" name="shared_with_workspace"
+                   {% if cfg.shared_with_workspace %}checked{% endif %}>
+            Share with everyone in this workspace (they see the name only)
+          </label>
+        {% endif %}
+        {% if is_site_owner %}
+          <label>Share with specific people (name only)
+            <select name="shared_with" multiple size="4">
+              {% for email in share_people %}
+                <option value="{{ email }}" {% if email in cfg.shared_with %}selected{% endif %}>{{ email }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+        <div class="actions"><button class="btn small" type="submit">Update sharing</button></div>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">You have no LLM connections yet.</p>
+{% endif %}
+
+<h3>Add a connection</h3>
+<div class="panel">
+  <form class="form" method="post" action="{{ url_for('save_llm_config') }}">
+    {{ llm_fields(none) }}
+    <div class="actions"><button class="btn btn-primary" type="submit">Add connection</button></div>
+  </form>
+</div>
+
+{% if shared_configs %}
+  <h3>Shared with you</h3>
+  <div class="table-scroll">
+  <table class="kv">
+    {% for cfg in shared_configs %}
+      <tr><td>{{ cfg.name or 'Shared connection' }}</td>
+          <td><span class="muted">shared — name only</span></td></tr>
+    {% endfor %}
+  </table>
+  </div>
+{% endif %}
+
 <h2>Media tools</h2>
 <div class="table-scroll">
 <table class="kv">

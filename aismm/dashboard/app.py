@@ -23,12 +23,13 @@ from werkzeug.utils import secure_filename
 
 from ..config import settings
 from ..assets import browser_url, public_url
-from .. import attachments, cooldown, tokens, workspaces
+from .. import attachments, cooldown, llm_access, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
-    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionTask, MediaPref,
-    PlatformApp, PlatformName, PublishMode, RunStatus, WorkspaceMember, WorkspaceRole,
+    Account, AttachmentPurpose, ENV_LLM_ID, Instruction, InstructionFile, InstructionTask,
+    LLMConfig, MediaPref, PlatformApp, PlatformName, PublishMode, RunStatus, WorkspaceMember,
+    WorkspaceRole,
 )
 from ..platforms import apps as platform_apps
 from ..platforms import setup_guides
@@ -196,6 +197,66 @@ def create_app() -> Flask:
             abort(404)
         return obj
 
+    # ---- site owner (a single, env-defined operator) ---------------------- #
+    def _is_site_owner() -> bool:
+        """The global owner set by ``AUTH_OWNER_EMAILS``.
+
+        With SSO off the dashboard is unauthenticated and one local operator
+        owns everything — the same convention as workspaces — so treat that as
+        the owner too. Otherwise it is a strict membership test.
+        """
+        email, _name, anon = _identity()
+        return bool(anon) or settings.auth.is_owner(email)
+
+    def _require_site_owner():
+        """404 (not 403) unless the caller is the site owner — hide existence."""
+        if not _is_site_owner():
+            abort(404)
+
+    def _my_workspace_ids() -> set[str]:
+        """Every workspace id the current identity can see (for LLM sharing)."""
+        return {w.id for w in _my_workspaces()} | {""}
+
+    def _visible_llm_configs() -> list[LLMConfig]:
+        email, _name, _anon = _identity()
+        return llm_access.visible_configs(get_store(), email, _my_workspace_ids(),
+                                          is_owner=_is_site_owner())
+
+    def _llm_options() -> list[dict]:
+        """Picker options for the instruction form (deployment default is the
+        separate value-"" option in the template, so it is excluded here).
+
+        Own connections show their full label; shared ones the NAME only.
+        """
+        email, _name, _anon = _identity()
+        out = []
+        for cfg in _visible_llm_configs():
+            if cfg.is_env:
+                continue
+            owned = llm_access.is_owned(cfg, email)
+            out.append({"id": cfg.id,
+                        "label": cfg.label if owned else (cfg.name or "Shared connection")})
+        return out
+
+    def _ensure_env_llm_config():
+        """Materialise the ``.env`` sentinel row so the owner can share/manage it.
+
+        Resolution works without it (``resolve_llm_settings('env')`` falls back
+        to ``settings.llm``), but a real row is needed to persist the owner's
+        people-shares. Owner-only, best-effort.
+        """
+        if not _is_site_owner():
+            return None
+        store = get_store()
+        existing = store.get_llm_config(ENV_LLM_ID)
+        if existing is not None:
+            return existing
+        email, _name, _anon = _identity()
+        cfg = llm_access.env_config()
+        if not cfg.created_by:
+            cfg.created_by = email
+        return store.upsert_llm_config(cfg)
+
     @app.before_request
     def _bootstrap_workspaces():
         """Give a newly signed-in identity its workspaces, once per session."""
@@ -206,7 +267,14 @@ def create_app() -> Flask:
             return None
         if not email or session.get("workspace_bootstrapped") == email:
             return None
-        workspaces.ensure_user(get_store(), email, name)
+        store = get_store()
+        workspaces.ensure_user(store, email, name)
+        # Persist last-login so the owner's Admin page can attribute usage to a
+        # person and show when they were last active. Best-effort, never fatal.
+        try:
+            store.record_login(email, name)
+        except Exception:  # noqa: BLE001 - a login record must never block a request
+            app.logger.warning("Could not record login for %s", email, exc_info=True)
         session["workspace_bootstrapped"] = email
         return None
 
@@ -243,7 +311,7 @@ def create_app() -> Flask:
         except Exception:  # noqa: BLE001 - never break a page over the switcher
             return {}
         return {"current_workspace": current, "my_workspaces": _my_workspaces(),
-                "my_workspace_role": _my_role()}
+                "my_workspace_role": _my_role(), "is_site_owner": _is_site_owner()}
 
     @app.route("/workspaces")
     def workspaces_page():
@@ -816,6 +884,7 @@ def create_app() -> Flask:
                                accounts=get_store().list_accounts(workspace_id=_workspace_id()),
                                settings=settings,
                                tool_groups=_tool_catalog([]),
+                               llm_options=_llm_options(),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                tasks=list(InstructionTask))
 
@@ -833,6 +902,7 @@ def create_app() -> Flask:
                                    instr.schedule, starts_at=instr.schedule_start_at),
                                next_run=_next_run_info(instr, store),
                                tool_groups=_tool_catalog(instr.tools),
+                               llm_options=_llm_options(),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                tasks=list(InstructionTask))
 
@@ -855,6 +925,20 @@ def create_app() -> Flask:
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"
+        # LLM connection: "" is the deployment default (gated at run time, so it
+        # can produce the clear "no LLM" error). A NON-empty pick must be one the
+        # user may actually select, or a stale/forbidden id could smuggle a
+        # private connection into the run — keep the prior value on refusal.
+        chosen_llm = f.get("llm_config_id", "").strip()
+        if chosen_llm:
+            email, _name, _anon = _identity()
+            cfg = store.get_llm_config(chosen_llm)
+            if cfg is None or not llm_access.can_select(cfg, email, _my_workspace_ids(),
+                                                        is_owner=_is_site_owner()):
+                flash("That LLM connection is not available to you; keeping the previous "
+                      "choice.", "error")
+                chosen_llm = instr.llm_config_id
+        instr.llm_config_id = chosen_llm
         mine = {a.id for a in store.list_accounts(workspace_id=_workspace_id())}
         instr.set_account_ids([a for a in request.form.getlist("account_ids") if a in mine])
         # Only touch the selection when the picker was actually on the form, so a
@@ -1216,13 +1300,179 @@ def create_app() -> Flask:
         """Unauthenticated liveness probe for the reverse proxy / systemd."""
         return {"status": "ok"}
 
+    # ---- admin (site owner only) ----------------------------------------- #
+    @app.route("/admin")
+    def admin():
+        """Cross-workspace USAGE for the single site owner. Never content.
+
+        Shows account & platform usage, last login & activity, workspaces &
+        members, and an LLM-connections summary — aggregated across every
+        workspace. Instruction bodies and secrets are never read here.
+        """
+        _require_site_owner()
+        _ensure_env_llm_config()
+        store = get_store()
+
+        user_agg: dict[str, dict] = {}
+
+        def _acc(email: str) -> dict:
+            key = (email or "").strip().lower()
+            return user_agg.setdefault(key, {
+                "email": key, "display_name": "", "last_login": None,
+                "accounts": 0, "platforms": set(), "instructions": 0,
+                "runs": 0, "published": 0, "failed": 0,
+                "workspaces_owned": 0, "workspaces_member": 0,
+            })
+
+        ws_rows = []
+        for ws in store.list_workspaces():
+            scope = workspaces.scope_for(ws)
+            accounts = store.list_accounts(workspace_id=scope)
+            members = store.list_members(ws.id)
+            counts = workspaces.content_counts(store, ws)
+            published = store.count_runs(workspace_id=scope, status=RunStatus.published)
+            failed = store.count_runs(workspace_id=scope, status=RunStatus.failed)
+            ws_rows.append({"workspace": ws, "counts": counts, "members": members,
+                            "shared": len(members) > 1, "published": published,
+                            "failed": failed})
+            owner = _acc(ws.created_by)
+            owner["workspaces_owned"] += 1
+            owner["accounts"] += len(accounts)
+            owner["platforms"].update(a.platform for a in accounts)
+            owner["instructions"] += counts["instructions"]
+            owner["runs"] += counts["runs"]
+            owner["published"] += published
+            owner["failed"] += failed
+            for member in members:
+                _acc(member.email)["workspaces_member"] += 1
+
+        for profile in store.list_user_profiles():
+            agg = _acc(profile.email)
+            agg["last_login"] = profile.last_login_at
+            agg["display_name"] = profile.display_name
+
+        users = []
+        for agg in user_agg.values():
+            row = dict(agg)
+            row["platforms"] = len(agg["platforms"])
+            row["is_owner"] = settings.auth.is_owner(row["email"])
+            users.append(row)
+        users.sort(key=lambda u: (not u["is_owner"], u["email"]))
+
+        # LLM connections summary — names/counts only, never secrets/endpoints.
+        llm_by_creator: dict[str, list] = {}
+        for cfg in store.list_llm_configs():
+            llm_by_creator.setdefault((cfg.created_by or "").strip().lower(), []).append({
+                "label": cfg.label, "provider": cfg.provider, "enabled": cfg.enabled,
+                "is_env": cfg.is_env, "shared_workspace": cfg.shared_with_workspace,
+                "shared_people": len(cfg.shared_with),
+            })
+
+        return render_template("admin.html", ws_rows=ws_rows, users=users,
+                               llm_by_creator=llm_by_creator,
+                               owner_emails=settings.auth.owner_emails,
+                               sso_enabled=settings.auth.enabled)
+
     # ---- settings -------------------------------------------------------- #
     @app.route("/settings")
     def settings_view():
         from ..tools import sora_config
+        store = get_store()
+        _ensure_env_llm_config()               # owner-only inside; materialises .env row
+        email, _name, _anon = _identity()
+        configs = _visible_llm_configs()
+        owned = [c for c in configs if llm_access.is_owned(c, email)]
+        shared = [c for c in configs if not llm_access.is_owned(c, email)]
+        people: list[str] = []
+        if _is_site_owner():
+            all_ws = store.list_workspaces()
+            people = sorted(
+                {p.email for p in store.list_user_profiles()}
+                | {m.email for w in all_ws for m in store.list_members(w.id)}
+                | {w.created_by for w in all_ws if w.created_by}
+            )
         return render_template("settings.html", settings=settings, platforms=_platforms_view(),
                                sora_enabled=sora_config.enabled(),
-                               image_enabled=settings.image.enabled)
+                               image_enabled=settings.image.enabled,
+                               owned_configs=owned, shared_configs=shared,
+                               share_people=people, env_llm_id=ENV_LLM_ID)
+
+    @app.route("/settings/llm", methods=["POST"])
+    def save_llm_config():
+        store = get_store()
+        f = request.form
+        email, _name, _anon = _identity()
+        cfg_id = f.get("id") or None
+        if cfg_id:
+            cfg = store.get_llm_config(cfg_id)
+            if cfg is None or not llm_access.is_owned(cfg, email):
+                abort(404)
+            if cfg.is_env:
+                flash("The deployment default is configured from .env and cannot be edited "
+                      "here.", "error")
+                return redirect(url_for("settings_view"))
+        else:
+            cfg = LLMConfig(created_by=email, workspace_id=_new_workspace_id())
+        provider = f.get("provider", "azure").strip().lower()
+        cfg.provider = provider if provider in ("azure", "apim") else "azure"
+        cfg.name = f.get("name", "").strip()
+        cfg.model = f.get("model", "").strip()
+        cfg.azure_endpoint = f.get("azure_endpoint", "").strip()
+        cfg.azure_api_version = (f.get("azure_api_version", "").strip()
+                                 or "2025-04-01-preview")
+        cfg.apim_base_url = f.get("apim_base_url", "").strip()
+        cfg.apim_key_header = f.get("apim_key_header", "").strip() or "api-key"
+        cfg.apim_api_version = (f.get("apim_api_version", "").strip()
+                                or "2025-04-01-preview")
+        cfg.enabled = f.get("enabled") == "on"
+        # An empty secret box means "leave the stored one alone" — secrets are
+        # never echoed back to the form, so blanking must not wipe them.
+        store.upsert_llm_config(
+            cfg,
+            azure_api_key=f.get("azure_api_key", "").strip() or None,
+            apim_subscription_key=f.get("apim_subscription_key", "").strip() or None,
+        )
+        flash(f"Saved LLM connection '{cfg.label}'.", "success")
+        return redirect(url_for("settings_view"))
+
+    @app.route("/settings/llm/<config_id>/delete", methods=["POST"])
+    def delete_llm_config(config_id):
+        store = get_store()
+        email, _name, _anon = _identity()
+        cfg = store.get_llm_config(config_id)
+        if cfg is None or not llm_access.is_owned(cfg, email):
+            abort(404)
+        if cfg.is_env:
+            flash("The deployment default cannot be deleted.", "error")
+            return redirect(url_for("settings_view"))
+        store.delete_llm_config(config_id)
+        flash("LLM connection deleted. Instructions using it will fail until you pick "
+              "another.", "success")
+        return redirect(url_for("settings_view"))
+
+    @app.route("/settings/llm/<config_id>/share", methods=["POST"])
+    def share_llm_config(config_id):
+        store = get_store()
+        email, _name, _anon = _identity()
+        cfg = store.get_llm_config(config_id)
+        if cfg is None and config_id == ENV_LLM_ID and _is_site_owner():
+            cfg = _ensure_env_llm_config()
+        if cfg is None or not llm_access.is_owned(cfg, email):
+            abort(404)
+        f = request.form
+        if cfg.is_env:
+            # The deployment model is owner-managed only: it is never workspace-
+            # shared (that would leak it to a whole silo), only people-shared.
+            cfg.shared_with_workspace = False
+        else:
+            cfg.shared_with_workspace = f.get("shared_with_workspace") == "on"
+        # People-sharing is the owner's privilege alone.
+        if _is_site_owner():
+            people = [p.strip().lower() for p in f.getlist("shared_with") if p.strip()]
+            cfg.set_shared_with(people)
+        store.upsert_llm_config(cfg)
+        flash("Sharing updated.", "success")
+        return redirect(url_for("settings_view"))
 
     return app
 

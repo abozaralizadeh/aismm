@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Admin · AISMM{% endblock %}
+{% block content %}
+
+<h1>Admin</h1>
+<p class="hint">
+  Deployment-wide <strong>usage</strong> across every workspace — who is using the app, how much,
+  and with which connections. This is the only page that reaches across workspaces.
+  <strong>Instruction content and secrets are never shown here.</strong>
+  {% if not sso_enabled %}<br>SSO is off, so there is one local operator who owns everything.{% endif %}
+</p>
+
+<h2>Users &amp; activity</h2>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th>User</th><th>Last login</th><th>Accounts</th><th>Platforms</th>
+      <th>Instructions</th><th>Runs</th><th>Published</th><th>Failed</th>
+      <th>Workspaces</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+      <tr>
+        <td>
+          {{ u.display_name or u.email }}
+          {% if u.is_owner %}<span class="badge">owner</span>{% endif %}
+          {% if u.display_name %}<br><span class="muted small">{{ u.email }}</span>{% endif %}
+        </td>
+        <td>{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
+        <td>{{ u.accounts }}</td>
+        <td>{{ u.platforms }}</td>
+        <td>{{ u.instructions }}</td>
+        <td>{{ u.runs }}</td>
+        <td>{{ u.published }}</td>
+        <td>{{ u.failed }}</td>
+        <td>{{ u.workspaces_owned }} owned{% if u.workspaces_member %}, {{ u.workspaces_member }} member{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No users recorded yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>Workspaces &amp; members</h2>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr>
+      <th>Workspace</th><th>Owner</th><th>Members</th><th>Accounts</th><th>Platforms</th>
+      <th>Instructions</th><th>Runs</th><th>Published</th><th>Failed</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in ws_rows %}
+      <tr>
+        <td>{{ r.workspace.name }}
+          {% if r.shared %}<span class="badge badge-staged">shared</span>
+          {% else %}<span class="badge badge-preview">private</span>{% endif %}</td>
+        <td class="small">{{ r.workspace.created_by or '—' }}</td>
+        <td class="small">
+          {% for m in r.members %}{{ m.email }} ({{ m.role.value }}){% if not loop.last %}<br>{% endif %}{% endfor %}
+        </td>
+        <td>{{ r.counts.accounts }}</td>
+        <td>{{ r.counts.platforms }}</td>
+        <td>{{ r.counts.instructions }}</td>
+        <td>{{ r.counts.runs }}</td>
+        <td>{{ r.published }}</td>
+        <td>{{ r.failed }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No workspaces.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2>LLM connections</h2>
+<p class="hint">Names and counts only — no endpoints, no keys.</p>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Creator</th><th>Connection</th><th>Provider</th><th>Enabled</th><th>Sharing</th></tr>
+  </thead>
+  <tbody>
+    {% for creator, rows in llm_by_creator.items() %}
+      {% for c in rows %}
+        <tr>
+          <td class="small">{% if loop.first %}{{ creator or '—' }}{% endif %}</td>
+          <td>{{ c.label }}{% if c.is_env %} <span class="badge">.env</span>{% endif %}</td>
+          <td>{{ c.provider }}</td>
+          <td>{{ '✓' if c.enabled else '—' }}</td>
+          <td class="small">
+            {% if c.shared_workspace %}workspace{% endif %}
+            {% if c.shared_people %}{% if c.shared_workspace %} · {% endif %}{{ c.shared_people }} {{ 'person' if c.shared_people == 1 else 'people' }}{% endif %}
+            {% if not c.shared_workspace and not c.shared_people %}private{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" class="muted">No LLM connections.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% endblock %}

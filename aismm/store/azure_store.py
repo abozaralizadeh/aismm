@@ -40,11 +40,11 @@ from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, AttachmentPurpose, Instruction, InstructionFile, InstructionState, InstructionTask,
-    MediaPref, PlatformApp, PlatformName, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
-    Workspace, WorkspaceMember, WorkspaceRole,
+    Account, AttachmentPurpose, ENV_LLM_ID, Instruction, InstructionFile, InstructionState,
+    InstructionTask, LLMConfig, MediaPref, PlatformApp, PlatformName, PublishMode, Run,
+    RunStatus, StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
 )
-from .base import Store
+from .base import Store, build_llm_settings
 
 logger = logging.getLogger("aismm.store.azure")
 
@@ -58,13 +58,15 @@ PK_FILE = "file"
 PK_LOCK = "lock"
 PK_WORKSPACE = "workspace"
 PK_MEMBER = "member"
+PK_LLM = "llm"
+PK_USER = "user"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
 MAX_PROPERTY_CHARS = 32_000
 
 _DATETIME_FIELDS = {
     "expires_at", "created_at", "updated_at", "memory_updated_at", "note_updated_at",
-    "acquired_at", "metrics_updated_at",
+    "acquired_at", "metrics_updated_at", "last_login_at",
 }
 # RowKey forbids / \ # ? and control chars — lock keys contain ':'.
 _ROWKEY_UNSAFE = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
@@ -203,6 +205,7 @@ class AzureStore(Store):
             "name": i.name, "brief": i.brief, "account_ids_json": i.account_ids_json,
             "schedule": i.schedule, "schedule_start_at": i.schedule_start_at,
             "tools_json": i.tools_json,
+            "llm_config_id": i.llm_config_id,
             "task_type": i.task_type.value,
             "engagement_targets": i.engagement_targets,
             "publish_mode": i.publish_mode.value,
@@ -219,6 +222,7 @@ class AzureStore(Store):
             account_ids_json=e.get("account_ids_json", "[]"), schedule=e.get("schedule", ""),
             schedule_start_at=_parse_dt(e.get("schedule_start_at")),
             tools_json=e.get("tools_json", "[]"),
+            llm_config_id=e.get("llm_config_id", ""),
             task_type=InstructionTask(e.get("task_type", "publish")),
             engagement_targets=e.get("engagement_targets", ""),
             publish_mode=PublishMode(e.get("publish_mode", "dry_run")),
@@ -369,6 +373,113 @@ class AzureStore(Store):
     def get_app_secret(self, app_id):
         app = self.get_platform_app(app_id)
         return decrypt(app.client_secret_enc) if app else ""
+
+    # --- LLM connections ---------------------------------------------------- #
+    def upsert_llm_config(self, config, *, azure_api_key=None, apim_subscription_key=None):
+        existing = self._get(PK_LLM, config.id)
+        if azure_api_key is not None:
+            config.azure_api_key_enc = encrypt(azure_api_key)
+        elif existing is not None:
+            config.azure_api_key_enc = (config.azure_api_key_enc
+                                        or existing.get("azure_api_key_enc", ""))
+        if apim_subscription_key is not None:
+            config.apim_subscription_key_enc = encrypt(apim_subscription_key)
+        elif existing is not None:
+            config.apim_subscription_key_enc = (config.apim_subscription_key_enc
+                                                or existing.get("apim_subscription_key_enc", ""))
+        self._upsert(PK_LLM, config.id, {
+            "workspace_id": config.workspace_id, "created_by": config.created_by,
+            "name": config.name, "provider": config.provider, "model": config.model,
+            "azure_endpoint": config.azure_endpoint,
+            "azure_api_key_enc": config.azure_api_key_enc,
+            "azure_api_version": config.azure_api_version,
+            "apim_base_url": config.apim_base_url,
+            "apim_subscription_key_enc": config.apim_subscription_key_enc,
+            "apim_key_header": config.apim_key_header,
+            "apim_api_version": config.apim_api_version,
+            "shared_with_workspace": config.shared_with_workspace,
+            "shared_with_json": config.shared_with_json,
+            "enabled": config.enabled, "created_at": config.created_at,
+        })
+        return config
+
+    @staticmethod
+    def _llm_from_entity(e) -> LLMConfig:
+        return LLMConfig(
+            id=e["RowKey"], workspace_id=e.get("workspace_id", ""),
+            created_by=e.get("created_by", ""), name=e.get("name", ""),
+            provider=e.get("provider", "azure"), model=e.get("model", ""),
+            azure_endpoint=e.get("azure_endpoint", ""),
+            azure_api_key_enc=e.get("azure_api_key_enc", ""),
+            azure_api_version=e.get("azure_api_version", "2025-04-01-preview"),
+            apim_base_url=e.get("apim_base_url", ""),
+            apim_subscription_key_enc=e.get("apim_subscription_key_enc", ""),
+            apim_key_header=e.get("apim_key_header", "api-key"),
+            apim_api_version=e.get("apim_api_version", "2025-04-01-preview"),
+            shared_with_workspace=bool(e.get("shared_with_workspace", False)),
+            shared_with_json=e.get("shared_with_json", "[]"),
+            enabled=bool(e.get("enabled", True)),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def get_llm_config(self, config_id):
+        entity = self._get(PK_LLM, config_id)
+        return self._llm_from_entity(entity) if entity else None
+
+    def list_llm_configs(self, *, workspace_id=None):
+        items = [self._llm_from_entity(e) for e in self._query(PK_LLM)]
+        if workspace_id is not None:
+            items = [c for c in items if _ws_match(c.workspace_id, workspace_id)]
+        return sorted(items, key=lambda c: c.created_at)
+
+    def delete_llm_config(self, config_id):
+        self._delete(PK_LLM, config_id)
+
+    def resolve_llm_settings(self, config_id):
+        from ..config import settings
+        cfg = self.get_llm_config(config_id)
+        if cfg is None:
+            # The deployment default always resolves to .env even before its
+            # sentinel row is created (lazily, when the owner opens Settings).
+            return settings.llm if config_id == ENV_LLM_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.llm
+        return build_llm_settings(
+            cfg,
+            azure_api_key=decrypt(cfg.azure_api_key_enc),
+            apim_subscription_key=decrypt(cfg.apim_subscription_key_enc),
+        )
+
+    # --- user profiles ------------------------------------------------------ #
+    def record_login(self, email, display_name=""):
+        addr = (email or "").strip().lower()
+        if not addr:
+            return
+        existing = self._get(PK_USER, addr)
+        payload = {"email": addr, "last_login_at": _now()}
+        if display_name:
+            payload["display_name"] = display_name
+        payload["created_at"] = (_parse_dt(existing.get("created_at")) if existing else None) or _now()
+        self._upsert(PK_USER, addr, payload)
+
+    @staticmethod
+    def _userprofile_from_entity(e) -> UserProfile:
+        return UserProfile(
+            email=e.get("email", "") or e["RowKey"],
+            display_name=e.get("display_name", ""),
+            last_login_at=_parse_dt(e.get("last_login_at")) or _now(),
+            created_at=_parse_dt(e.get("created_at")) or _now(),
+        )
+
+    def get_user_profile(self, email):
+        entity = self._get(PK_USER, (email or "").strip().lower())
+        return self._userprofile_from_entity(entity) if entity else None
+
+    def list_user_profiles(self):
+        items = [self._userprofile_from_entity(e) for e in self._query(PK_USER)]
+        return sorted(items, key=lambda u: u.email)
 
     # --- instructions ------------------------------------------------------ #
     def upsert_instruction(self, instruction):

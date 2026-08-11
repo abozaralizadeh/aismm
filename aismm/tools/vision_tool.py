@@ -79,8 +79,12 @@ async def _fetch(target: str) -> tuple[bytes, str, str]:
     return data, _MIME.get(ext, "image/jpeg"), ""
 
 
-async def perform_describe_image(target: str, question: str = "") -> dict:
-    """Fetch, validate and describe one image (extracted for testability)."""
+async def perform_describe_image(target: str, question: str = "", *, model=None) -> dict:
+    """Fetch, validate and describe one image (extracted for testability).
+
+    ``model`` reuses the run's LLM connection when the caller passes one; the
+    describer falls back to the deployment default otherwise.
+    """
     target = (target or "").strip()
     if not target:
         return {"error": "no_target",
@@ -104,7 +108,8 @@ async def perform_describe_image(target: str, question: str = "") -> dict:
     from ..agent.vision import describe_image as _describe   # lazy: keeps tools import-light
 
     try:
-        description = await _describe(data, mime=mime, question=question, source=target)
+        description = await _describe(data, mime=mime, question=question, source=target,
+                                      model=model)
     except Exception as exc:  # noqa: BLE001
         logger.warning("describe_image failed for %s: %s", target, exc)
         return {"error": "vision_failed",
@@ -152,7 +157,8 @@ def _make_describe_image(state: dict):
         This costs a model call, so use it when the surrounding text is not
         enough, not on every image you come across.
         """
-        return await perform_describe_image(asset_path_or_url, question)
+        return await perform_describe_image(asset_path_or_url, question,
+                                            model=state.get("model"))
 
     return describe_image
 

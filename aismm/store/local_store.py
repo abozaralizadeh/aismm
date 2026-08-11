@@ -18,10 +18,11 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, Instruction, InstructionFile, InstructionState, Lock, PlatformApp, Run,
-    RunStatus, StagedPost, StagedStatus, Workspace, WorkspaceMember,
+    Account, ENV_LLM_ID, Instruction, InstructionFile, InstructionState, LLMConfig, Lock,
+    PlatformApp, Run, RunStatus, StagedPost, StagedStatus, UserProfile, Workspace,
+    WorkspaceMember,
 )
-from .base import Store
+from .base import Store, build_llm_settings
 
 
 logger = logging.getLogger("aismm.store.local")
@@ -164,6 +165,81 @@ class LocalStore(Store):
     def get_app_secret(self, app_id):
         app = self.get_platform_app(app_id)
         return decrypt(app.client_secret_enc) if app else ""
+
+    # --- LLM connections ---------------------------------------------------- #
+    def upsert_llm_config(self, config, *, azure_api_key=None, apim_subscription_key=None):
+        with Session(self._engine) as s:
+            existing = s.get(LLMConfig, config.id)
+            if azure_api_key is not None:
+                config.azure_api_key_enc = encrypt(azure_api_key)
+            elif existing is not None:
+                config.azure_api_key_enc = config.azure_api_key_enc or existing.azure_api_key_enc
+            if apim_subscription_key is not None:
+                config.apim_subscription_key_enc = encrypt(apim_subscription_key)
+            elif existing is not None:
+                config.apim_subscription_key_enc = (config.apim_subscription_key_enc
+                                                    or existing.apim_subscription_key_enc)
+            merged = s.merge(config)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def get_llm_config(self, config_id):
+        with Session(self._engine) as s:
+            return s.get(LLMConfig, config_id)
+
+    def list_llm_configs(self, *, workspace_id=None):
+        with Session(self._engine) as s:
+            stmt = select(LLMConfig)
+            if workspace_id is not None:
+                stmt = stmt.where(_ws_clause(LLMConfig.workspace_id, workspace_id))
+            return list(s.exec(stmt.order_by(LLMConfig.created_at)).all())
+
+    def delete_llm_config(self, config_id):
+        with Session(self._engine) as s:
+            obj = s.get(LLMConfig, config_id)
+            if obj:
+                s.delete(obj)
+                s.commit()
+
+    def resolve_llm_settings(self, config_id):
+        cfg = self.get_llm_config(config_id)
+        if cfg is None:
+            # The deployment default always resolves to .env even before its
+            # sentinel row is created (lazily, when the owner opens Settings).
+            return settings.llm if config_id == ENV_LLM_ID else None
+        if not cfg.enabled:
+            return None
+        if cfg.is_env:
+            return settings.llm
+        return build_llm_settings(
+            cfg,
+            azure_api_key=decrypt(cfg.azure_api_key_enc),
+            apim_subscription_key=decrypt(cfg.apim_subscription_key_enc),
+        )
+
+    # --- user profiles ------------------------------------------------------ #
+    def record_login(self, email, display_name=""):
+        addr = (email or "").strip().lower()
+        if not addr:
+            return
+        with Session(self._engine) as s:
+            existing = s.get(UserProfile, addr)
+            if existing is None:
+                existing = UserProfile(email=addr)
+            existing.last_login_at = _now()
+            if display_name:
+                existing.display_name = display_name
+            s.merge(existing)
+            s.commit()
+
+    def get_user_profile(self, email):
+        with Session(self._engine) as s:
+            return s.get(UserProfile, (email or "").strip().lower())
+
+    def list_user_profiles(self):
+        with Session(self._engine) as s:
+            return list(s.exec(select(UserProfile).order_by(UserProfile.email)).all())
 
     # --- instructions ------------------------------------------------------ #
     def upsert_instruction(self, instruction):

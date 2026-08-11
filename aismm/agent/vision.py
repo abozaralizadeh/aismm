@@ -57,18 +57,21 @@ DEFAULT_QUESTION = "Describe this image."
 _MAX_OUTPUT_TOKENS = 1200
 
 
-def _agent() -> Agent:
+def _agent(model=None) -> Agent:
     return Agent(
         name="Image describer",
         instructions=DESCRIBER_INSTRUCTIONS,
-        model=build_model(),
+        model=model or build_model(),
         model_settings=ModelSettings(max_tokens=_MAX_OUTPUT_TOKENS),
     )
 
 
 async def describe_image(data: bytes, *, mime: str = "image/jpeg", question: str = "",
-                         source: str = "") -> str:
+                         source: str = "", model=None) -> str:
     """Return a description of ``data``, answering ``question`` if one is given.
+
+    ``model`` reuses the run's connection when the caller has one on
+    ``state["model"]``; it falls back to the deployment default otherwise.
 
     Raises on failure; the caller turns that into a tool-shaped error so the
     agent can decide whether to carry on without having seen the picture.
@@ -85,5 +88,5 @@ async def describe_image(data: bytes, *, mime: str = "image/jpeg", question: str
     ]
     logger.info("Describing %s (%d bytes, %s) — %r",
                 source or "an image", len(data), mime, prompt[:120])
-    result = await Runner.run(_agent(), input=[{"role": "user", "content": parts}])
+    result = await Runner.run(_agent(model), input=[{"role": "user", "content": parts}])
     return (result.final_output or "").strip()

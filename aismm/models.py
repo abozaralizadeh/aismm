@@ -198,6 +198,11 @@ class Instruction(SQLModel, table=True):
     # choices a smaller model has to weigh. `publish`/`report_failure` are always
     # available regardless — a run has to be able to end.
     tools_json: str = "[]"
+    # Which LLM connection this instruction's runs use (``LLMConfig.id``). Empty
+    # means the deployment default (the ``.env`` model, sentinel id ``"env"``).
+    # Resolved + access-checked per run in agent/manager_agent; a run whose
+    # selected connection is not accessible fails with a clear "no LLM" error.
+    llm_config_id: str = ""
     # What this instruction's runs DO. ``publish`` (default) creates a post;
     # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
     # both — for an engage run it gates how replies go out (preview / approval /
@@ -385,6 +390,87 @@ class PlatformApp(SQLModel, table=True):
     @property
     def label(self) -> str:
         return self.name or f"{self.platform.value} app {self.id[:8]}"
+
+
+# The deployment ``.env`` LLM is exposed as a single sentinel ``LLMConfig`` row
+# so it slots into the same picker, sharing, and resolution paths as any
+# user-created connection — its credentials still come from ``settings.llm``.
+ENV_LLM_ID = "env"
+
+
+class LLMConfig(SQLModel, table=True):
+    """A user-managed LLM connection (Azure OpenAI or an APIM gateway).
+
+    Everyone can add PRIVATE connections and pick one per instruction. Sharing:
+
+    * ``shared_with_workspace`` — any creator may share their own connection with
+      the members of ``workspace_id`` (they see the NAME only, never the secret).
+    * ``shared_with`` (emails) — ONLY the site owner may share a connection with
+      specific people, across workspaces (again, NAME only).
+
+    The deployment ``.env`` model is a single sentinel row (``id == ENV_LLM_ID``,
+    ``provider == "env"``, owned by the site owner): its config fields are empty
+    and resolution reads ``settings.llm``. It is not editable/deletable, and
+    since only the owner may set ``shared_with`` on their own rows, nobody else
+    can reshare it.
+
+    Secrets are Fernet-encrypted by the store, exactly like account tokens and
+    ``PlatformApp`` credentials — the ``_enc`` columns hold ciphertext only.
+    """
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    workspace_id: str = Field(default="", index=True)   # where it was created
+    created_by: str = Field(default="", index=True)     # lowercased identity that owns it
+    name: str = ""                           # label shown to everyone with access
+    provider: str = "azure"                  # "azure" | "apim" | "env"
+    model: str = ""                          # deployment name
+    # Azure direct
+    azure_endpoint: str = ""
+    azure_api_key_enc: str = ""              # secret
+    azure_api_version: str = "2025-04-01-preview"
+    # APIM gateway
+    apim_base_url: str = ""
+    apim_subscription_key_enc: str = ""      # secret
+    apim_key_header: str = "api-key"
+    apim_api_version: str = "2025-04-01-preview"
+    # Sharing
+    shared_with_workspace: bool = False      # any creator may set (name-only to members)
+    shared_with_json: str = "[]"             # list of emails; ONLY the owner may set
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def shared_with(self) -> list[str]:
+        try:
+            got = json.loads(self.shared_with_json or "[]")
+            return [str(e).strip().lower() for e in got if str(e).strip()]
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def set_shared_with(self, emails: list[str]) -> None:
+        cleaned = sorted({str(e).strip().lower() for e in (emails or []) if str(e).strip()})
+        self.shared_with_json = json.dumps(cleaned)
+
+    @property
+    def is_env(self) -> bool:
+        return self.provider == "env" or self.id == ENV_LLM_ID
+
+    @property
+    def label(self) -> str:
+        return self.name or (f"Deployment default" if self.is_env
+                             else f"{self.provider} · {self.model or '?'}")
+
+
+class UserProfile(SQLModel, table=True):
+    """A durable record of a signed-in identity — the app has no user table
+    otherwise (identity is just the SSO email). Written on login so the owner's
+    Admin page can show last-login and attribute usage to a person.
+    """
+
+    email: str = Field(primary_key=True)     # lowercased SSO identity
+    display_name: str = ""
+    last_login_at: datetime = Field(default_factory=_now)
+    created_at: datetime = Field(default_factory=_now)
 
 
 class AttachmentPurpose(str, enum.Enum):

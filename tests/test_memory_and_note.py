@@ -180,7 +180,7 @@ def test_oversized_memory_is_summarized(store, instruction, monkeypatch):
     _with_limit(monkeypatch, 100)
     store.set_memory(instruction.id, "y" * 500)
 
-    async def fake_compact(memory):
+    async def fake_compact(memory, *, model=None):
         return "CURRENT POSITION: 2026-03-14\nNEXT STEP: 2026-03-15"
 
     monkeypatch.setattr(memory_module, "compact_memory", fake_compact)
@@ -196,7 +196,7 @@ def test_failed_compaction_keeps_the_original_memory(store, instruction, monkeyp
     original = "z" * 500
     store.set_memory(instruction.id, original)
 
-    async def boom(memory):
+    async def boom(memory, *, model=None):
         raise RuntimeError("model unavailable")
 
     monkeypatch.setattr(memory_module, "compact_memory", boom)
@@ -209,7 +209,7 @@ def test_compaction_that_saves_nothing_is_discarded(store, instruction, monkeypa
     original = "z" * 500
     store.set_memory(instruction.id, original)
 
-    async def longer(memory):
+    async def longer(memory, *, model=None):
         return memory + " and more"
 
     monkeypatch.setattr(memory_module, "compact_memory", longer)

@@ -29,6 +29,7 @@ _TEST_ENV = {
     "AUTH_OIDC_CLIENT_SECRET": "",
     "AUTH_ALLOWED_EMAILS": "",
     "AUTH_ALLOWED_DOMAINS": "",
+    "AUTH_OWNER_EMAILS": "",
     # Never write into the developer's real data dir.
     "AISMM_DATA_DIR": tempfile.mkdtemp(prefix="aismm-tests-"),
     # Sora failover attempts must not depend on a real pool being configured.

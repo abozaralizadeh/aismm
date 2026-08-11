@@ -183,6 +183,11 @@ class AuthSettings:
     scopes: list[str] = field(default_factory=lambda: ["openid", "email", "profile"])
     allowed_emails: list[str] = field(default_factory=list)
     allowed_domains: list[str] = field(default_factory=list)
+    # The global site owner(s), by email. Orthogonal to per-workspace roles: an
+    # owner sees the deployment-wide Admin page and manages sharing of the .env
+    # deployment LLM. Set via AUTH_OWNER_EMAILS. With SSO off, the single local
+    # operator is treated as owner regardless (see dashboard `_is_site_owner`).
+    owner_emails: list[str] = field(default_factory=list)
     provider_name: str = "SSO"          # button label: "Sign in with <name>"
     session_hours: int = 12
     enabled_override: bool | None = None  # AUTH_ENABLED forces on/off; None = auto
@@ -211,6 +216,11 @@ class AuthSettings:
             return True
         domain = addr.rpartition("@")[2]
         return bool(domain) and domain in {d.lower().lstrip("@") for d in self.allowed_domains}
+
+    def is_owner(self, email: str) -> bool:
+        """Is this identity the global site owner? Fails closed on an empty list."""
+        addr = (email or "").strip().lower()
+        return bool(addr) and addr in {e.lower() for e in self.owner_emails}
 
 
 @dataclass(frozen=True)
@@ -399,6 +409,7 @@ def load_settings() -> Settings:
             scopes=_split_csv(os.getenv("AUTH_OIDC_SCOPES")) or ["openid", "email", "profile"],
             allowed_emails=_split_csv(os.getenv("AUTH_ALLOWED_EMAILS")),
             allowed_domains=_split_csv(os.getenv("AUTH_ALLOWED_DOMAINS")),
+            owner_emails=_split_csv(os.getenv("AUTH_OWNER_EMAILS")),
             provider_name=os.getenv("AUTH_PROVIDER_NAME", "SSO").strip() or "SSO",
             session_hours=int(os.getenv("AUTH_SESSION_HOURS", "12") or 12),
             enabled_override=(None if not os.getenv("AUTH_ENABLED", "").strip()

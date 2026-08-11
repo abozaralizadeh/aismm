@@ -51,13 +51,13 @@ def needs_compaction(memory: str) -> bool:
     return len(memory or "") > settings.memory_max_chars
 
 
-async def compact_memory(memory: str) -> str:
+async def compact_memory(memory: str, *, model=None) -> str:
     """Summarize an oversized memory. Returns the original on any failure."""
     target = max(settings.memory_max_chars // 2, 500)
     agent = Agent(
         name="MemoryCompactor",
         instructions=COMPACTOR_INSTRUCTIONS.format(target=target),
-        model=build_model(),
+        model=model or build_model(),
         model_settings=ModelSettings(temperature=0.2),
     )
     result = await Runner.run(agent, f"Compress this memory:\n\n{memory}", max_turns=2)
@@ -67,18 +67,18 @@ async def compact_memory(memory: str) -> str:
     return compacted
 
 
-async def maybe_compact(instruction_id: str, store) -> bool:
+async def maybe_compact(instruction_id: str, store, *, model=None) -> bool:
     """Compact this instruction's memory if it has outgrown the limit.
 
     Never fatal and never destructive: if the summarizer fails, the original
-    memory is left exactly as it was.
+    memory is left exactly as it was. ``model`` reuses the run's connection.
     """
     record = store.get_state(instruction_id)
     memory = record.memory or ""
     if not needs_compaction(memory):
         return False
     try:
-        compacted = await compact_memory(memory)
+        compacted = await compact_memory(memory, model=model)
     except Exception as exc:  # noqa: BLE001 - keep the run's outcome intact
         logger.warning("Memory compaction failed for %s (memory kept as-is): %s",
                        instruction_id, exc)

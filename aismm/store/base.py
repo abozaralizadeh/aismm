@@ -9,10 +9,29 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
+from ..config import LLMSettings
 from ..models import (
-    Account, Instruction, InstructionFile, InstructionState, PlatformApp, Run, RunStatus,
-    StagedPost, StagedStatus, Workspace, WorkspaceMember,
+    Account, Instruction, InstructionFile, InstructionState, LLMConfig, PlatformApp, Run,
+    RunStatus, StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember,
 )
+
+
+def build_llm_settings(config: LLMConfig, *, azure_api_key: str,
+                       apim_subscription_key: str) -> LLMSettings:
+    """Assemble a ``LLMSettings`` from a stored connection + its DECRYPTED
+    secrets. Construction is shared; each backend decrypts its own way and calls
+    this so plaintext never leaves the store boundary."""
+    return LLMSettings(
+        provider=config.provider,
+        model=config.model,
+        azure_api_key=azure_api_key,
+        azure_endpoint=config.azure_endpoint,
+        azure_api_version=config.azure_api_version,
+        apim_base_url=config.apim_base_url,
+        apim_subscription_key=apim_subscription_key,
+        apim_key_header=config.apim_key_header,
+        apim_api_version=config.apim_api_version,
+    )
 
 
 class Store(ABC):
@@ -63,6 +82,47 @@ class Store(ABC):
     @abstractmethod
     def get_app_secret(self, app_id: str) -> str:
         """Return the decrypted client secret for an app."""
+
+    # --- LLM connections (user-managed model credentials) ------------------ #
+    @abstractmethod
+    def upsert_llm_config(
+        self,
+        config: LLMConfig,
+        *,
+        azure_api_key: str | None = None,
+        apim_subscription_key: str | None = None,
+    ) -> LLMConfig:
+        """Insert/update an LLM connection. A plaintext secret (when given) is
+        encrypted here; ``None`` leaves the stored ciphertext untouched."""
+
+    @abstractmethod
+    def get_llm_config(self, config_id: str) -> LLMConfig | None: ...
+
+    @abstractmethod
+    def list_llm_configs(self, *, workspace_id: str | None = None) -> list[LLMConfig]:
+        """All LLM connections, optionally only those created in one workspace.
+        ``workspace_id=None`` returns every connection (owner/admin + access
+        filtering happens above the store)."""
+
+    @abstractmethod
+    def delete_llm_config(self, config_id: str) -> None: ...
+
+    @abstractmethod
+    def resolve_llm_settings(self, config_id: str) -> LLMSettings | None:
+        """Return ready-to-use, DECRYPTED ``LLMSettings`` for a connection, or
+        ``None`` if it is missing/disabled. The env sentinel resolves to the
+        deployment ``settings.llm``. Decryption stays inside the store."""
+
+    # --- user profiles (durable login records for the Admin page) ---------- #
+    @abstractmethod
+    def record_login(self, email: str, display_name: str = "") -> None:
+        """Upsert a login: set ``last_login_at`` (and name) for this identity."""
+
+    @abstractmethod
+    def get_user_profile(self, email: str) -> UserProfile | None: ...
+
+    @abstractmethod
+    def list_user_profiles(self) -> list[UserProfile]: ...
 
     # --- instructions ------------------------------------------------------ #
     @abstractmethod

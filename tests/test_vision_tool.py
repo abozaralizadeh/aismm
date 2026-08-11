@@ -24,7 +24,7 @@ def described(monkeypatch):
     """Stub the vision agent; record what it was asked to look at."""
     seen = {}
 
-    async def fake_describe(data, *, mime="image/jpeg", question="", source=""):
+    async def fake_describe(data, *, mime="image/jpeg", question="", source="", model=None):
         seen.update(bytes_len=len(data), mime=mime, question=question, source=source)
         return "A comic panel: a woman holds an unopened letter."
 

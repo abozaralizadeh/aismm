@@ -19,15 +19,17 @@ routes through it too) and return one shared ``OpenAIResponsesModel``.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import threading
 from functools import lru_cache
 
 import openai
 from agents import OpenAIResponsesModel, set_default_openai_client
 from openai import AsyncAzureOpenAI
 
-from .config import settings
+from .config import LLMSettings, settings
 
 logger = logging.getLogger("aismm.llm")
 
@@ -105,8 +107,8 @@ def describe_model_error(exc: BaseException) -> str | None:
     return None
 
 
-def _build_azure_client() -> AsyncAzureOpenAI:
-    llm = settings.llm
+def _build_azure_client(llm: LLMSettings | None = None) -> AsyncAzureOpenAI:
+    llm = llm or settings.llm
     if not (llm.azure_api_key and llm.azure_endpoint):
         raise RuntimeError(
             "LLM_PROVIDER=azure but AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT are unset."
@@ -120,13 +122,13 @@ def _build_azure_client() -> AsyncAzureOpenAI:
     )
 
 
-def _build_apim_client() -> AsyncAzureOpenAI:
+def _build_apim_client(llm: LLMSettings | None = None) -> AsyncAzureOpenAI:
     """APIM route → Azure-shaped client (see module docstring for why).
 
     ``azure_endpoint`` is the APIM route *without* ``/openai``; the SDK appends
     it, producing ``{APIM_BASE_URL}/openai/responses?api-version=…``.
     """
-    llm = settings.llm
+    llm = llm or settings.llm
     if not (llm.apim_base_url and llm.apim_subscription_key):
         raise RuntimeError(
             "LLM_PROVIDER=apim but APIM_BASE_URL / APIM_SUBSCRIPTION_KEY are unset."
@@ -150,29 +152,81 @@ def _build_apim_client() -> AsyncAzureOpenAI:
     )
 
 
-@lru_cache(maxsize=1)
-def _client():
-    provider = settings.llm.provider
+def _build_client(llm: LLMSettings) -> AsyncAzureOpenAI:
+    """Build a dedicated client for one ``LLMSettings`` — no global mutation."""
+    provider = llm.provider
     if provider == "apim":
-        client = _build_apim_client()
-    elif provider == "azure":
-        client = _build_azure_client()
-    else:
-        raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r} (expected 'azure' or 'apim').")
-    set_default_openai_client(client)
+        return _build_apim_client(llm)
+    if provider == "azure":
+        return _build_azure_client(llm)
+    raise RuntimeError(f"Unknown LLM_PROVIDER={provider!r} (expected 'azure' or 'apim').")
+
+
+def _log_endpoint(llm: LLMSettings) -> None:
     # Log where calls actually go — the first thing to check when a gateway
     # 404s or times out. (client.base_url carries a /deployments/<model> suffix
     # that the SDK drops for /responses, so it would read as misleading here.)
-    endpoint = (settings.llm.apim_base_url if provider == "apim"
-                else settings.llm.azure_endpoint).rstrip("/").removesuffix("/openai")
+    endpoint = (llm.apim_base_url if llm.provider == "apim"
+                else llm.azure_endpoint).rstrip("/").removesuffix("/openai")
     logger.info("LLM client ready (provider=%s, model=%s, responses → %s/openai/responses)",
-                provider, settings.llm.model, endpoint)
+                llm.provider, llm.model, endpoint)
+
+
+def _fingerprint(llm: LLMSettings) -> str:
+    """A stable key for one connection that never stores the raw secret.
+
+    Two instructions on the same endpoint+key share one client rather than
+    leaking a connection per run; the secret is hashed, never used as a key.
+    """
+    secret = (llm.apim_subscription_key if llm.provider == "apim" else llm.azure_api_key) or ""
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
+    return "|".join([
+        llm.provider, llm.model,
+        llm.apim_base_url if llm.provider == "apim" else llm.azure_endpoint,
+        llm.apim_api_version if llm.provider == "apim" else llm.azure_api_version,
+        llm.apim_key_header, digest,
+    ])
+
+
+_MODEL_CACHE: dict[str, OpenAIResponsesModel] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def build_model_for(llm: LLMSettings) -> OpenAIResponsesModel:
+    """Return a Responses model bound to a SPECIFIC connection.
+
+    Unlike :func:`build_model`, this does **not** call
+    ``set_default_openai_client`` — concurrent scheduler runs each carry their
+    own client on the returned model, so a per-instruction override cannot
+    clobber another run's default client. Clients are reused across runs by a
+    fingerprint of the connection (secret hashed, never stored raw).
+    """
+    key = _fingerprint(llm)
+    with _MODEL_CACHE_LOCK:
+        model = _MODEL_CACHE.get(key)
+        if model is None:
+            client = _build_client(llm)
+            _log_endpoint(llm)
+            model = OpenAIResponsesModel(model=llm.model, openai_client=client)
+            _MODEL_CACHE[key] = model
+        return model
+
+
+@lru_cache(maxsize=1)
+def _client():
+    client = _build_client(settings.llm)
+    set_default_openai_client(client)
+    _log_endpoint(settings.llm)
     return client
 
 
 @lru_cache(maxsize=1)
 def build_model() -> OpenAIResponsesModel:
-    """Return the shared Responses model used by every agent."""
+    """Return the shared Responses model used by every agent (env default).
+
+    This still registers the client as the SDK default so the hosted
+    ``WebSearchTool`` and any SDK-default consumers route through it.
+    """
     return OpenAIResponsesModel(model=settings.llm.model, openai_client=_client())
 
 

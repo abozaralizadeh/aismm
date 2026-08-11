@@ -378,8 +378,10 @@ def content_counts(store, workspace) -> dict:
     applied and cannot be forgotten at the call site.
     """
     scope = scope_for(workspace)
+    accounts = store.list_accounts(workspace_id=scope)
     return {
-        "accounts": len(store.list_accounts(workspace_id=scope)),
+        "accounts": len(accounts),
+        "platforms": len({a.platform for a in accounts}),
         "instructions": len(store.list_instructions(workspace_id=scope)),
         "runs": store.count_runs(workspace_id=scope),
         "staged": len(store.list_staged(workspace_id=scope)),

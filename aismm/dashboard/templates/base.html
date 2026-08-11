@@ -28,6 +28,7 @@
       <a href="{{ url_for('runs') }}">Runs</a>
       <a href="{{ url_for('settings_view') }}">Settings</a>
       <a href="{{ url_for('workspaces_page') }}">Workspaces</a>
+      {% if is_site_owner %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
     </nav>
     {% if current_workspace %}
       <form class="workspace-switch" method="post" action="{{ url_for('switch_workspace_form') }}">

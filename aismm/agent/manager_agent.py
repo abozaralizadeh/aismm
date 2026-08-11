@@ -12,8 +12,10 @@ import logging
 from agents import Agent, ModelSettings, Runner
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
-from ..llm import build_model
-from ..models import Account, Instruction, InstructionTask, Run, RunStatus
+from ..config import settings
+from ..llm import build_model_for
+from ..llm_access import can_select, env_config
+from ..models import ENV_LLM_ID, Account, Instruction, InstructionTask, Run, RunStatus
 from ..platforms.registry import get_platform
 from ..store.base import Store
 from ..tools import build_tools
@@ -44,6 +46,43 @@ def _performance_block(store: Store, account: Account) -> str:
         return ""
 
 
+_NO_LLM_MESSAGE = (
+    "No LLM connection is available for this instruction. Add one in "
+    "Settings → LLM connections and select it, or ask the owner to share the "
+    "deployment model with you."
+)
+
+
+def _resolve_model(instruction: Instruction, store: Store):
+    """Return the Responses model this instruction may use, or ``None``.
+
+    ``None`` means no accessible LLM — the run must fail with a clear message
+    rather than silently falling back to the deployment default (the owner
+    controls who may use it).
+    """
+    cfg_id = instruction.llm_config_id or ENV_LLM_ID
+    cfg = store.get_llm_config(cfg_id)
+    if cfg is None:
+        # The env sentinel resolves even before its row is created; any other
+        # missing id means the connection was deleted — no fallback.
+        if cfg_id != ENV_LLM_ID:
+            return None
+        cfg = env_config()
+    # A scheduled run acts on behalf of the instruction's workspace: the config
+    # must be owned by / shared with that workspace or its creator. SSO-off means
+    # a single local operator who owns everything.
+    workspace = store.get_workspace(instruction.workspace_id)
+    creator = workspace.created_by if workspace else ""
+    is_owner = (not settings.auth.enabled) or settings.auth.is_owner(creator)
+    member_ids = {instruction.workspace_id, ""}
+    if not can_select(cfg, creator, member_ids, is_owner=is_owner):
+        return None
+    llm = store.resolve_llm_settings(cfg_id)
+    if llm is None:
+        return None
+    return build_model_for(llm)
+
+
 async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
                           prompt_override: str = "") -> dict:
     """Run the agent once for one account. Returns the terminal result dict.
@@ -68,6 +107,19 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         "run": run,
         "assets": [],
     }
+    # Resolve the model this instruction may use BEFORE any work. No accessible
+    # LLM is a clear failure, never a silent fallback to the deployment default
+    # (the owner controls who may use it).
+    model = _resolve_model(instruction, store)
+    if model is None:
+        logger.error("No accessible LLM for instruction '%s' (config=%r) — failing run",
+                     instruction.name, instruction.llm_config_id or ENV_LLM_ID)
+        run.status = RunStatus.failed
+        run.error = _NO_LLM_MESSAGE
+        run.log = (run.log + "\nFAILED: no LLM connection available.").strip()
+        store.update_run(run)
+        return {"error": "no_llm", "message": _NO_LLM_MESSAGE}
+    state["model"] = model
     instruction_state = store.get_state(instruction.id)
     attachments = store.list_instruction_files(instruction.id)
     state["attachments"] = attachments
@@ -85,7 +137,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         name=agent_name,
         instructions=instructions,
         tools=build_tools(state, instruction.tools),
-        model=build_model(),
+        model=model,
         model_settings=ModelSettings(temperature=0.8),
     )
     if prompt_override.strip():
@@ -200,7 +252,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                        "will not know where this one got to", instruction.id)
     # Summarize an overgrown memory now, so the next kickoff stays small. Never
     # fatal — a failed compaction leaves the memory untouched.
-    await maybe_compact(instruction.id, store)
+    await maybe_compact(instruction.id, store, model=model)
 
     if state.get("result"):
         return state["result"]
