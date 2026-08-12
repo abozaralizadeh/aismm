@@ -144,6 +144,39 @@ def _normalize(source: str, destination: str, size: str) -> None:
               *common])
 
 
+def ensure_faststart(mp4_bytes: bytes) -> bytes:
+    """Move the MP4 ``moov`` atom to the front for progressive playback.
+
+    A freshly-encoded MP4 (Sora's output, and ffmpeg's default) puts ``moov``
+    *after* ``mdat``, so a browser must fetch the end of the file before it can
+    play — over HTTP range requests that shows up as a ``<video>`` that starts,
+    buffers, then stalls or stops part-way while the player keeps seeking back
+    for metadata. ``-movflags +faststart`` re-muxes (``-c copy``, no re-encode,
+    so it is cheap and lossless) with ``moov`` first.
+
+    Best-effort: a file already faststart is rewritten identically, and any
+    ffmpeg failure returns the input unchanged — a byte-for-byte-correct video
+    that merely starts slowly beats no video at all. ``concat_clips`` already
+    emits faststart for the multi-clip case; this covers the single clip that
+    ``generate_video`` saves raw and the one-clip concat branch.
+    """
+    if not mp4_bytes:
+        return mp4_bytes
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "in.mp4")
+            output = os.path.join(directory, "out.mp4")
+            with open(source, "wb") as handle:
+                handle.write(mp4_bytes)
+            _run([ffmpeg_exe(), "-y", "-i", source, "-c", "copy",
+                  "-movflags", "+faststart", output])
+            with open(output, "rb") as handle:
+                return handle.read()
+    except Exception as exc:  # noqa: BLE001 - never lose the video over this
+        logger.warning("faststart remux failed, serving as-is: %s", exc)
+        return mp4_bytes
+
+
 def concat_clips(clips: list[bytes], size: str) -> bytes:
     """Normalize then concatenate clips into one MP4. Returns the merged bytes."""
     if not clips:
@@ -160,7 +193,7 @@ def concat_clips(clips: list[bytes], size: str) -> bytes:
 
         if len(normalized) == 1:
             with open(normalized[0], "rb") as handle:
-                return handle.read()
+                return ensure_faststart(handle.read())
 
         listing = os.path.join(directory, "list.txt")
         with open(listing, "w") as handle:

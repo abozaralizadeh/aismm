@@ -672,3 +672,52 @@ def test_a_source_whose_shot_failed_is_not_used(monkeypatch, sora):
     assert [row["shot"] for row in result["failed_shots"]] == [2]
     # Shot 3 still rendered, from shot 1 rather than from the shot that failed.
     assert [r["base"] for r in sora["remixes"]] == ["job-1"]
+
+
+# --- faststart: browser progressive playback ----------------------------------------- #
+# A freshly-encoded MP4 puts the moov atom AFTER mdat, so the dashboard <video>
+# starts then stalls part-way while the player seeks back for metadata. Every
+# saved video must be faststart (moov first). Needs the real ffmpeg binary.
+
+from aismm import video as _video  # noqa: E402
+
+
+def _moov_first(mp4: bytes) -> bool:
+    return 0 <= mp4.find(b"moov") < mp4.find(b"mdat")
+
+
+def _encode_non_faststart(seconds: int = 1) -> bytes:
+    import os
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "n.mp4")
+        subprocess.run([_video.ffmpeg_exe(), "-y", "-f", "lavfi", "-i",
+                        f"testsrc=size=320x240:rate=24:duration={seconds}",
+                        "-pix_fmt", "yuv420p", "-c:v", "libx264", out],
+                       capture_output=True)
+        with open(out, "rb") as h:
+            return h.read()
+
+
+@pytest.mark.skipif(not _video.ffmpeg_available(), reason="ffmpeg binary not available")
+def test_ensure_faststart_moves_moov_to_the_front():
+    raw = _encode_non_faststart()
+    assert not _moov_first(raw)  # the problem we are fixing exists in the input
+    fixed = _video.ensure_faststart(raw)
+    assert _moov_first(fixed)
+    # Lossless remux — the clip is unchanged in length.
+    assert abs(_video.duration_seconds(fixed) - _video.duration_seconds(raw)) < 0.2
+
+
+def test_ensure_faststart_is_best_effort_on_bad_input():
+    assert _video.ensure_faststart(b"") == b""
+    assert _video.ensure_faststart(b"not-a-video") == b"not-a-video"
+
+
+@pytest.mark.skipif(not _video.ffmpeg_available(), reason="ffmpeg binary not available")
+def test_single_clip_concat_is_also_faststart():
+    """The one-clip branch used to return the normalized clip unchanged (moov at
+    the end); it must now be faststart like the multi-clip merge already is."""
+    merged = _video.concat_clips([_encode_non_faststart()], "320x240")
+    assert _moov_first(merged)

@@ -7,11 +7,13 @@ returns ``None``) when no Sora resource is configured.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from agents import function_tool
 
 from ..assets import public_url, save_bytes
+from .. import video
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -71,6 +73,12 @@ async def perform_generate_video(state: dict, prompt: str, *, seconds: int = 8,
             logger.warning("generate_video failed: %s", exc)
             return {"error": "video_generation_failed", "message": str(exc)}
 
+    # Sora returns the moov atom at the END of the file; a browser then stalls
+    # part-way through playback while it seeks back for metadata. Remux to
+    # faststart (moov first) so the dashboard <video> plays through. Cheap
+    # (-c copy) and best-effort — a failure returns the original bytes.
+    if video.ffmpeg_available():
+        mp4 = await asyncio.to_thread(video.ensure_faststart, mp4)
     path = save_bytes(mp4, "mp4")
     # Keep the serving endpoint + job id on the asset: a Sora job is only
     # addressable on the resource that created it (poll/download/remix).
