@@ -1,9 +1,48 @@
 import asyncio
 
+import httpx
 import pytest
 
 from aismm.models import Account, PlatformName
 from aismm.platforms.registry import get_platform, registered_platforms
+from aismm.platforms.tiktok import TikTok
+
+
+def _tk_response(status, body):
+    return httpx.Response(status, json=body,
+                          request=httpx.Request("POST", "https://open.tiktokapis.com/v2/post/publish/video/init/"))
+
+
+def test_tiktok_403_explains_it_is_permission_not_the_video():
+    """A bare 'Client error 403 Forbidden' told the agent nothing; the reason
+    (unaudited app / missing scope) must be spelled out so it does not
+    regenerate the clip chasing the wrong cause."""
+    resp = _tk_response(403, {"error": {"code": "access_denied",
+                                        "message": "Forbidden", "log_id": "abc123"}})
+    err = TikTok._api_error(resp)
+    msg = str(err)
+    assert "403" in msg
+    assert "not a problem with the video" in msg.lower() or "not about the video" in msg.lower() \
+        or "regenerat" in msg.lower()
+    assert "abc123" in msg  # the log_id TikTok support can trace
+
+
+def test_tiktok_scope_error_names_video_publish_and_reconnect():
+    resp = _tk_response(403, {"error": {"code": "scope_not_authorized",
+                                        "message": "scope not authorized"}})
+    msg = str(TikTok._api_error(resp))
+    assert "video.publish" in msg and "reconnect" in msg.lower()
+
+
+def test_tiktok_check_raises_on_error_code_in_a_200_body():
+    """TikTok signals failure with error.code even on a 2xx; raise_for_status
+    misses that, so _check must catch it."""
+    ok = _tk_response(200, {"error": {"code": "ok"}, "data": {"publish_id": "p"}})
+    assert TikTok._check(TikTok, ok)["data"]["publish_id"] == "p"
+    bad = _tk_response(200, {"error": {"code": "spam_risk_too_many_posts",
+                                       "message": "too many"}})
+    with pytest.raises(RuntimeError):
+        TikTok._check(TikTok, bad)
 
 
 def test_all_platforms_registered():
