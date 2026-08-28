@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 
-from agents import Agent, ModelSettings, Runner
+from agents import Agent, Runner
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
 from ..config import SoraSettings, settings
-from ..llm import build_model_for
+from ..llm import STATELESS_RUN_CONFIG, agent_model_settings, build_model_for
 from ..llm_access import can_select, env_config, env_provider_config
 from ..models import (
     ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Account, Instruction, InstructionTask, Run,
@@ -180,7 +180,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         instructions=instructions,
         tools=build_tools(state, instruction.tools),
         model=model,
-        model_settings=ModelSettings(temperature=0.8),
+        model_settings=agent_model_settings(temperature=0.8),
     )
     if prompt_override.strip():
         # A retry sends exactly what the operator edited — no memory, note or
@@ -215,12 +215,14 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
 
     try:
         try:
-            result = await Runner.run(agent, agent_input, max_turns=MAX_TURNS)
+            result = await Runner.run(agent, agent_input, max_turns=MAX_TURNS,
+                                      run_config=STATELESS_RUN_CONFIG)
         except Exception as exc:  # noqa: BLE001 - only retry the specific failure we can fix
             if isinstance(agent_input, list) and looks_like_unsupported_file_input(str(exc)):
                 logger.warning("Deployment rejected native file input (%s) — retrying as "
                                "text-only", exc)
-                result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS)
+                result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS,
+                                          run_config=STATELESS_RUN_CONFIG)
             else:
                 raise
 
@@ -283,7 +285,8 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
             logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
             # Continue the SAME conversation so prior tool outputs/assets are retained.
             follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
-            await Runner.run(agent, follow_up, max_turns=8)
+            await Runner.run(agent, follow_up, max_turns=8,
+                             run_config=STATELESS_RUN_CONFIG)
     finally:
         # Tear the browser down inside THIS event loop (the AIBlog lesson): a
         # Chromium subprocess finalized later by GC raises "Event loop is closed".

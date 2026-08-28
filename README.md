@@ -280,6 +280,7 @@ configured, the same code simply retries in place.
 |---|---|
 | `LLM_PROVIDER` | `azure` or `apim`. |
 | `AZURE_OPENAI_MODEL` | Chat deployment name (both providers). |
+| `LLM_SUPPORTS_TEMPERATURE` | Whether the model accepts `temperature`. Unset = work it out from the name; reasoning models (o1/o3/o4, gpt-5.x) reject it. |
 | `AZURE_OPENAI_API_KEY` / `_ENDPOINT` / `_API_VERSION` | Azure-direct LLM. |
 | `APIM_BASE_URL` / `APIM_SUBSCRIPTION_KEY` / `APIM_KEY_HEADER` / `APIM_API_VERSION` | APIM LLM. |
 | `AZURE_OPENAI_ENDPOINT_SORA` / `_API_KEY_SORA` / `_MODEL_SORA` / `_API_VERSION_SORA` | Sora 2 pool (comma-separated, index-aligned). |

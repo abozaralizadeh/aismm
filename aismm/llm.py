@@ -26,12 +26,73 @@ import threading
 from functools import lru_cache
 
 import openai
-from agents import OpenAIResponsesModel, set_default_openai_client
+from agents import (ModelSettings, OpenAIResponsesModel, RunConfig,
+                    set_default_openai_client)
 from openai import AsyncAzureOpenAI
 
 from .config import LLMSettings, settings
 
 logger = logging.getLogger("aismm.llm")
+
+# Every Runner.run passes this. The Responses API is STATEFUL: with the default
+# ``store=true`` each turn's output items come back with ids minted by the resource that
+# served it (``fc_*`` tool calls, ``rs_*`` reasoning), and the SDK replays those items as
+# the next turn's input — ``manager_agent`` even replays them explicitly via
+# ``result.to_input_list()``. The APIM route here is a LOAD BALANCER that round-robins
+# three independent Azure OpenAI resources, and any resource that did not mint an id
+# rejects it:
+#
+#     400 - "The requested item was created under a different Azure OpenAI resource."
+#
+# So every turn after the first had a 2-in-3 chance of failing and being retried against
+# the next backend. ``store=false`` carries the whole conversation in the request, mints
+# no ids, and lets any backend serve any turn — what a round-robin pool requires.
+# (Measured on the sibling trAIde bot against this same pool: 59% of all backend calls
+# were wasted before the switch, 0% after.)
+STATELESS_RUN_CONFIG = RunConfig(model_settings=ModelSettings(store=False))
+
+# --- sampling parameters, and the models that refuse them ---------------------------- #
+# Reasoning-family models (o1/o3/o4, gpt-5.x) REJECT `temperature` outright —
+# 400 "Unsupported parameter: 'temperature' is not supported with this model" —
+# rather than ignoring it. They do their own sampling internally, so there is
+# nothing to pass. Every agent therefore builds its ModelSettings through
+# `agent_model_settings` below instead of constructing ModelSettings directly,
+# so switching AZURE_OPENAI_MODEL cannot break a run in the one place someone
+# forgot to update.
+#
+# On Azure the model name is the DEPLOYMENT name, which the operator chooses, so
+# this can only be a good guess: a gpt-5 deployment named "main" is invisible to
+# it. `LLM_SUPPORTS_TEMPERATURE=0|1` overrides the guess in both directions.
+_NO_SAMPLING = (
+    re.compile(r"(?:^|[^a-z0-9])o[1-9](?:[^0-9]|$)"),   # o1, o3-mini, o4 — not gpt-4o
+    re.compile(r"gpt-[5-9]"),                            # gpt-5, gpt-5.6-luna, and later
+)
+
+
+def supports_sampling(model_name: str) -> bool:
+    """Whether ``temperature``/``top_p`` may be sent to this model."""
+    override = settings.llm.supports_temperature
+    if override is not None:
+        return override
+    name = (model_name or "").strip().lower()
+    return not any(pattern.search(name) for pattern in _NO_SAMPLING)
+
+
+def agent_model_settings(*, temperature: float | None = None, **kwargs) -> ModelSettings:
+    """``ModelSettings`` with the sampling knobs dropped when the model refuses them.
+
+    Build every agent's settings through this. Passing ``temperature`` to a
+    reasoning model is a hard 400, not a warning, so an agent that sets it
+    directly stops working the moment the deployment is repointed.
+    """
+    if temperature is not None:
+        if supports_sampling(settings.llm.model):
+            kwargs["temperature"] = temperature
+        else:
+            logger.debug("Model %s does not accept temperature; omitting it.",
+                         settings.llm.model)
+    return ModelSettings(**kwargs)
+
 
 _LLM_TIMEOUT = 600.0  # generous; video/image tools have their own timeouts
 

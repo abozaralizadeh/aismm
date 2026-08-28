@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import logging
 
-from agents import Agent, ModelSettings, Runner
+from agents import Agent, Runner
 
 from ..config import settings
-from ..llm import build_model
+from ..llm import STATELESS_RUN_CONFIG, agent_model_settings, build_model
 
 logger = logging.getLogger("aismm.agent.memory")
 
@@ -58,9 +58,10 @@ async def compact_memory(memory: str, *, model=None) -> str:
         name="MemoryCompactor",
         instructions=COMPACTOR_INSTRUCTIONS.format(target=target),
         model=model or build_model(),
-        model_settings=ModelSettings(temperature=0.2),
+        model_settings=agent_model_settings(temperature=0.2),
     )
-    result = await Runner.run(agent, f"Compress this memory:\n\n{memory}", max_turns=2)
+    result = await Runner.run(agent, f"Compress this memory:\n\n{memory}", max_turns=2,
+                              run_config=STATELESS_RUN_CONFIG)
     compacted = (result.final_output or "").strip()
     if not compacted:
         raise RuntimeError("compactor returned nothing")

@@ -676,6 +676,15 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   posts to `{apim}/responses` — which the gateway doesn't route — and adds a bogus
   `Authorization: Bearer`. `APIM_BASE_URL` therefore excludes `/openai`.
   [tests/test_llm_client.py](tests/test_llm_client.py) pins the resulting request URL.
+- **Reasoning models REJECT `temperature`, so every agent builds settings through
+  `llm.agent_model_settings`** — never `ModelSettings(...)` directly (a test asserts no module
+  outside `llm.py` does). Repointing `AZURE_OPENAI_MODEL` at `gpt-5.6-luna` 400'd every run with
+  "Unsupported parameter: 'temperature' is not supported with this model": o1/o3/o4 and gpt-5.x do
+  their own sampling and refuse the parameter rather than ignoring it. `supports_sampling` guesses
+  from the model name, which on Azure is the operator-chosen DEPLOYMENT name — so
+  `LLM_SUPPORTS_TEMPERATURE=0|1` overrides it in both directions (tri-state: unset ≠ False).
+  `None` is the right way to drop a setting; the SDK turns it into `omit` and the key never reaches
+  the wire.
 - **Agent tracing must be pointed somewhere valid** — the SDK's exporter posts to `api.openai.com`
   with the *default client's* key, so on Azure/APIM it 401s on every run until `configure_tracing()`
   disables it. Call it from any entrypoint that can start a run (CLI `run`/`dashboard`/`scheduler`/

@@ -29,6 +29,14 @@ def _bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _opt_bool(name: str) -> bool | None:
+    """A tri-state env flag: unset means "decide for me", not False."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return _bool(raw)
+
+
 def _path_prefix(value: str | None) -> str:
     """Normalize a reverse-proxy path prefix to ``/path`` or ``""``."""
     raw = (value or "").strip()
@@ -82,6 +90,11 @@ class LLMSettings:
     apim_subscription_key: str = ""
     apim_key_header: str = "api-key"
     apim_api_version: str = "2025-04-01-preview"
+    # Whether this model accepts `temperature`. None = work it out from the model
+    # name (see llm.supports_sampling); reasoning models reject it with a 400.
+    # On Azure the name is the DEPLOYMENT name, which the operator chooses, so a
+    # gpt-5 deployment called "main" needs this set explicitly.
+    supports_temperature: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -419,6 +432,7 @@ def load_settings() -> Settings:
             apim_subscription_key=os.getenv("APIM_SUBSCRIPTION_KEY", ""),
             apim_key_header=os.getenv("APIM_KEY_HEADER", "api-key"),
             apim_api_version=os.getenv("APIM_API_VERSION", "2025-04-01-preview"),
+            supports_temperature=_opt_bool("LLM_SUPPORTS_TEMPERATURE"),
         ),
         image=ImageSettings(
             api_key=os.getenv("AZURE_OPENAI_API_KEY_DALLE", ""),

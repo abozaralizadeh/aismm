@@ -22,9 +22,9 @@ from __future__ import annotations
 import base64
 import logging
 
-from agents import Agent, ModelSettings, Runner
+from agents import Agent, Runner
 
-from ..llm import build_model
+from ..llm import STATELESS_RUN_CONFIG, agent_model_settings, build_model
 
 logger = logging.getLogger("aismm.agent.vision")
 
@@ -62,7 +62,7 @@ def _agent(model=None) -> Agent:
         name="Image describer",
         instructions=DESCRIBER_INSTRUCTIONS,
         model=model or build_model(),
-        model_settings=ModelSettings(max_tokens=_MAX_OUTPUT_TOKENS),
+        model_settings=agent_model_settings(max_tokens=_MAX_OUTPUT_TOKENS),
     )
 
 
@@ -88,5 +88,6 @@ async def describe_image(data: bytes, *, mime: str = "image/jpeg", question: str
     ]
     logger.info("Describing %s (%d bytes, %s) — %r",
                 source or "an image", len(data), mime, prompt[:120])
-    result = await Runner.run(_agent(model), input=[{"role": "user", "content": parts}])
+    result = await Runner.run(_agent(model), input=[{"role": "user", "content": parts}],
+                              run_config=STATELESS_RUN_CONFIG)
     return (result.final_output or "").strip()
