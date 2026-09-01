@@ -216,6 +216,9 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         model_settings=agent_model_settings(temperature=0.8),
     )
     tool_names = {getattr(t, "name", "") for t in tools}
+    # finish_engagement checks this against what was actually READ, so a run
+    # cannot end claiming it checked an inbox it never opened.
+    state["tool_names"] = tool_names
     if prompt_override.strip():
         # A retry sends exactly what the operator edited — no memory, note or
         # performance is re-inlined, so what they read in the box is what runs.

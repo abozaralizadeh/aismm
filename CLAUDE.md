@@ -456,6 +456,18 @@ checked, and must SAY SO in the summary. It is logged as a warning, and
 tool to tick. The engage/auto kickoffs now say "AND its inbound DMs … every read tool you have" —
 the old "(and DMs, if a DM tool is available)" invited skipping them.
 
+**A run cannot END claiming it checked an inbox it never opened** (`engagement.note_read` →
+`engagement_finish.unread_inboxes`). With the DM tools present and no error in the log, an engage
+run still reported "Read comments across 12 recent posts/reels, all recent mentions, and inbound
+DMs; no comments or DMs needed replies" — the model simply never called `instagram_dms`, and that
+sentence is prose it wrote about itself. So the DM read tools record the call in CODE and
+`finish_engagement` compares the two, sending the agent back to look. Same reasoning as the publish
+ledger and the AI disclosure: a guarantee that must hold on every path cannot live in model-written
+prose. It is **bounded** (`_MAX_NUDGES`) — a model that will not look must still be able to end, or
+it burns the whole run on this exchange and leaves no record; after the nudges the run finishes and
+the summary says "NOT CHECKED this run: …". `scripts/diagnose_instagram.py` answers the same
+question outside a run: it prints the messaging node, the scopes, and Graph's own error.
+
 **`list_dms` RAISES; it must never swallow a failure into `[]`.** That swallow is what hid the bug
 above for weeks: an account that *could not read* DMs looked identical to an account with none. All
 three platforms' tool wrappers already turn an exception into `{"error": …, "message": …}` the agent

@@ -35,8 +35,63 @@ from .registry import register_tool
 logger = logging.getLogger("aismm.tools.engagement_finish")
 
 
+#: How many times a run is sent back to read an inbox before it is allowed to
+#: end anyway. A model that will not look must not be able to burn the run.
+_MAX_NUDGES = 2
+
+#: Read tools whose absence from a run would make "nothing to answer" a lie.
+#: Keyed by tool name so the check is over what was BUILT, not over capabilities.
+_INBOX_READS = {"instagram_dms": "inbound Instagram DMs",
+                "x_dms": "inbound X DMs",
+                "reddit_dms": "inbound Reddit messages"}
+
+
+def unread_inboxes(state: dict) -> list[str]:
+    """Inboxes this run can read but has not read yet.
+
+    An engage run reported "read comments across 12 recent posts/reels, all
+    recent mentions, and inbound DMs" on an account whose DM tool it never
+    called. The summary is model-written prose; what was read is recorded in
+    code by ``engagement.note_read``. Comparing the two is the only way to tell
+    an empty inbox from an unopened one — the same reasoning as the publish
+    ledger and the AI disclosure: a guarantee that must hold on every path
+    cannot live in prose the model writes about itself.
+    """
+    available = set(state.get("tool_names") or ())
+    used = set(state.get("read_tools_used") or ())
+    return [what for tool, what in _INBOX_READS.items()
+            if tool in available and tool not in used]
+
+
+def _pending_tools(state: dict) -> list[str]:
+    available = set(state.get("tool_names") or ())
+    used = set(state.get("read_tools_used") or ())
+    return [tool for tool in _INBOX_READS if tool in available and tool not in used]
+
+
 async def perform_finish_engagement(state: dict, summary: str = "") -> dict:
     """Record an engage run's outcome from the per-run reply tally."""
+    unread = unread_inboxes(state)
+    nudges = int(state.get("finish_nudges", 0))
+    if unread and nudges < _MAX_NUDGES:
+        # Sent back to look, not failed: the agent can finish as soon as it has.
+        state["finish_nudges"] = nudges + 1
+        tools = ", ".join(_pending_tools(state))
+        logger.warning("finish_engagement refused: %s not read yet (call %s)",
+                       ", ".join(unread), tools)
+        return {"error": "inbox_not_read",
+                "message": (f"You have not read {', '.join(unread)} yet. Call {tools} "
+                            f"first, answer anything that needs a reply, and then finish. "
+                            f"Do not report that there was nothing to answer without "
+                            f"having looked.")}
+    if unread:
+        # Bounded: a run that will not look must still be able to END, or it
+        # burns its whole budget on this exchange and dies with no record at all.
+        # It ends honestly instead — the summary says what was never checked.
+        logger.warning("Engage run finished WITHOUT reading %s after %d nudge(s)",
+                       ", ".join(unread), nudges)
+        summary = (f"{summary.strip()} "
+                   f"NOT CHECKED this run: {', '.join(unread)}.").strip()
     run = state["run"]
     store = state["store"]
     instruction = state["instruction"]

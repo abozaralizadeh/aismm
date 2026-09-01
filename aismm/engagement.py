@@ -35,6 +35,18 @@ from .models import PublishMode, StagedPost, StagedStatus
 
 logger = logging.getLogger("aismm.engagement")
 
+
+def note_read(state: dict, tool_name: str) -> None:
+    """Record that a read tool actually ran this run.
+
+    The run summary is model-written prose, and an engage run reported "read
+    comments across 12 recent posts/reels, all recent mentions, and inbound DMs"
+    on an account whose DMs it had not touched. What was READ therefore has to be
+    recorded in code, exactly like the reply tally and the publish ledger — a
+    claim the model makes about its own behaviour is not evidence.
+    """
+    state.setdefault("read_tools_used", set()).add(tool_name)
+
 # A reply refused for volume reasons still means the platform is throttling this
 # account; back off like a rate-limited post does.
 RATE_LIMIT_COOLDOWN_SECONDS = 3600

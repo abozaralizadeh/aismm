@@ -241,10 +241,14 @@ def _make_dms(state: dict):
             limit: How many messages to return (1–50, newest first).
         """
         async def call(platform, account, token):
+            engagement.note_read(state, "instagram_dms")
             dms = await platform.list_dms(token, account, limit=limit)
             for d in dms:
                 d["already_answered"] = engagement_ledger.answered(
                     account, "dm", d.get("id"))
+            logger.info("Instagram DMs read for %s: %d inbound message(s), %d unanswered",
+                        account.handle or account.external_id, len(dms),
+                        sum(1 for d in dms if not d.get("already_answered")))
             return {"count": len(dms), "dms": dms}
 
         return await _with_context(state, call)
