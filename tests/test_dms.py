@@ -573,3 +573,117 @@ def test_the_failure_names_the_node_it_asked(monkeypatch):
     _ig_transport(monkeypatch, lambda r: httpx.Response(400, json={"error": {}}))
     with pytest.raises(RuntimeError, match=IG_PAGE):
         _run(_ig().list_dms("t", _ig_account()))
+
+
+# --- reading ALL the conversations, not just the busy ones ------------------------------- #
+# Reported: "it's getting the new messages but can't see the old ones". `limit`
+# was applied three ways at once — one page of conversations, N messages each,
+# then the newest N messages overall — so a quiet old thread holding one
+# unanswered question lost to three chatty recent ones.
+
+def _threads(*convos):
+    return {"data": [{"id": f"c{i}", "messages": {"data": list(msgs)}}
+                     for i, msgs in enumerate(convos, start=1)]}
+
+
+def _msg(mid, sender, text, created):
+    return {"id": mid, "from": {"id": sender, "username": f"user{sender}"},
+            "message": text, "created_time": created}
+
+
+def test_every_conversation_contributes_its_latest_message(monkeypatch):
+    """A busy thread must not crowd out a quiet one."""
+    busy = [_msg(f"b{i}", "111", "chatter", f"2026-09-0{i}T10:00:00+0000")
+            for i in range(1, 6)]
+    quiet = [_msg("q1", "222", "asked months ago, never answered",
+                  "2026-01-05T10:00:00+0000")]
+
+    _ig_transport(monkeypatch, lambda r: httpx.Response(200, json=_threads(busy, quiet)))
+    items = _run(_ig().list_dms("t", _ig_account(), limit=25))
+    assert "q1" in [i["id"] for i in items]
+
+
+def test_conversations_are_paged(monkeypatch):
+    """One page of conversations is not the whole inbox."""
+    pages = [
+        {"data": [{"id": "c1", "messages": {"data": [
+            _msg("m1", "111", "one", "2026-09-01T10:00:00+0000")]}}],
+         "paging": {"next": "http://next", "cursors": {"after": "CUR"}}},
+        {"data": [{"id": "c2", "messages": {"data": [
+            _msg("m2", "222", "two", "2026-08-01T10:00:00+0000")]}}]},
+    ]
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.params.get("after"))
+        return httpx.Response(200, json=pages[len(seen) - 1])
+
+    _ig_transport(monkeypatch, handler)
+    items = _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert [i["id"] for i in items] == ["m1", "m2"]
+    assert seen == [None, "CUR"]
+
+
+def test_paging_stops_once_the_limit_is_met(monkeypatch):
+    """`limit` counts conversations — it must bound the calls, not just the output."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, json={
+            "data": [{"id": f"c{len(calls)}", "messages": {"data": [
+                _msg(f"m{len(calls)}", "111", "x", "2026-09-01T10:00:00+0000")]}}],
+            "paging": {"next": "http://next", "cursors": {"after": "CUR"}}})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account(), limit=2))
+    assert len(calls) == 2
+
+
+def test_our_own_replies_never_make_a_thread_look_answered(monkeypatch):
+    """A thread whose only recent messages are ours still surfaces the person's."""
+    convo = [_msg("mine", IG_PAGE, "our reply", "2026-09-02T10:00:00+0000"),
+             _msg("theirs", "555", "the question", "2026-09-01T10:00:00+0000")]
+    _ig_transport(monkeypatch, lambda r: httpx.Response(200, json=_threads(convo)))
+    items = _run(_ig().list_dms("t", _ig_account()))
+    assert [i["id"] for i in items] == ["theirs"]
+
+
+# --- the 24-hour reply window -------------------------------------------------------------- #
+
+def test_an_old_message_is_flagged_as_unanswerable(monkeypatch):
+    """Instagram refuses an automated reply after 24h, so say so before the agent
+    writes one."""
+    old = _msg("old", "555", "months ago", "2026-01-01T10:00:00+0000")
+    _ig_transport(monkeypatch, lambda r: httpx.Response(200, json=_threads([old])))
+    item = _run(_ig().list_dms("t", _ig_account()))[0]
+    assert item["can_reply"] is False
+    assert item["age_hours"] > 24
+
+
+def test_an_unreadable_timestamp_is_not_assumed_fresh_or_stale(monkeypatch):
+    """Unknown is unknown — and must not block a reply that would have worked."""
+    broken = _msg("x", "555", "hi", "not-a-date")
+    _ig_transport(monkeypatch, lambda r: httpx.Response(200, json=_threads([broken])))
+    item = _run(_ig().list_dms("t", _ig_account()))[0]
+    assert item["age_hours"] is None
+    assert item["can_reply"] is True
+
+
+def test_the_human_agent_tag_is_never_sent(monkeypatch):
+    """Meta requires it to be applied by a real person and names loss of API
+    access as the consequence of using it for automation."""
+    import inspect
+
+    from aismm.platforms import instagram as ig
+
+    sent = {}
+
+    def handler(request):
+        sent["body"] = request.content.decode()
+        return httpx.Response(200, json={"message_id": "m1"})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().send_dm("t", _ig_account(), recipient_id="555", text="hi"))
+    assert "HUMAN_AGENT" not in sent["body"].upper()
+    assert "human_agent" not in inspect.getsource(ig.Instagram.send_dm).split('"""')[2]

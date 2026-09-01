@@ -57,14 +57,25 @@ async def _check(account) -> int:
 
     failures = 0
     try:
-        dms = await platform.list_dms(token, account, limit=25)
-        print(f"  DMs             : {len(dms)} inbound message(s)")
-        for dm in dms[:5]:
-            print(f"      · {dm.get('sender') or dm.get('sender_id')}: "
-                  f"{(dm.get('text') or '')[:70]!r}  (id={dm.get('id')})")
+        dms = await platform.list_dms(token, account, limit=50)
+        threads = {d.get("thread_id") or d.get("conversation_id") for d in dms}
+        answerable = sum(1 for d in dms if d.get("can_reply"))
+        print(f"  DMs             : {len(dms)} inbound message(s) "
+              f"across {len(threads)} conversation(s); {answerable} still inside "
+              f"Instagram's 24h reply window")
+        for dm in dms[:10]:
+            age = dm.get("age_hours")
+            when = "age unknown" if age is None else f"{age:.0f}h ago"
+            mark = "" if dm.get("can_reply") else "  [TOO OLD to answer via API]"
+            print(f"      · {dm.get('sender') or dm.get('sender_id')} ({when}): "
+                  f"{(dm.get('text') or '')[:60]!r}{mark}")
         if not dms:
             print("      (an EMPTY list here means Instagram really returned no inbound "
                   "messages — the call itself succeeded)")
+        print("      NOTE: Instagram never returns a Requests-folder thread that has "
+              "been\n            inactive for 30+ days, and a DM from a non-follower "
+              "STARTS in Requests.\n            Accept it in the Instagram app and it "
+              "becomes visible here.")
     except Exception as exc:  # noqa: BLE001
         failures += 1
         print(f"  DMs             : FAILED\n      {exc}")

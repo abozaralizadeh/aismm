@@ -41,6 +41,45 @@ from .registry import register
 GRAPH_VERSION = "v21.0"
 # One request is capped at 100 by Graph; this bounds how many pages we walk.
 MAX_MEDIA_PAGE_TOTAL = 500
+# DM reading. `limit` on list_dms counts CONVERSATIONS, and every one of them
+# contributes its latest inbound message — the unit a person is waiting on is a
+# thread, not a message. The per-thread cap only bounds how far back inside a
+# single busy conversation we look.
+MAX_DM_CONVERSATIONS = 200
+# Graph returns detail for at most the 20 most recent messages of a conversation.
+DM_MESSAGES_PER_CONVERSATION = 20
+# Instagram only allows a free-form reply within 24 hours of the person's last
+# message. The HUMAN_AGENT tag extends that to 7 days — and Meta requires it to
+# be applied by a REAL human, explicitly not by a bot, with loss of API access as
+# the stated consequence for misuse. This app is a bot, so it never sends that
+# tag: an old DM is readable, and answerable only by a person in the Instagram
+# app. Reading is still worth it — the operator can see what is waiting.
+DM_REPLY_WINDOW_HOURS = 24
+
+
+def _hours_since(when) -> float | None:
+    """Hours between an ISO-8601 timestamp and now, or ``None`` if unparseable.
+
+    Graph returns ``2026-08-30T11:22:33+0000``; ``fromisoformat`` wants a colon
+    in the offset before 3.11, and a missing/odd value must not take the DM read
+    down — an unknown age is reported as unknown, never as "fresh".
+    """
+    import datetime as _dt
+
+    text = str(when or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    elif len(text) > 5 and (text[-5] in "+-") and ":" not in text[-5:]:
+        text = f"{text[:-2]}:{text[-2:]}"
+    try:
+        moment = _dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_dt.timezone.utc)
+    return (_dt.datetime.now(_dt.timezone.utc) - moment).total_seconds() / 3600
 
 GRAPH = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
@@ -856,7 +895,7 @@ class Instagram(SocialPlatform):
 
     async def list_dms(self, access_token: str, account: Account, *,
                        limit: int = 25) -> list[dict]:
-        """Recent INBOUND direct messages awaiting a reply.
+        """INBOUND direct messages awaiting a reply, across ALL conversations.
 
         ``GET /{page-id}/conversations?platform=instagram`` lists conversations,
         and nesting ``messages{...}`` pulls each thread's recent messages in the
@@ -866,6 +905,30 @@ class Instagram(SocialPlatform):
         IGSID, which is the RECIPIENT a reply is sent to (``POST /{page-id}/
         messages`` addresses the person, not a thread id).
 
+        **``limit`` counts CONVERSATIONS to scan, not messages, and the newest
+        inbound message of every scanned conversation is always returned.** The
+        first version applied ``limit`` three ways at once — one page of
+        conversations, ten messages each, then the newest ``limit`` messages
+        overall — so a quiet older thread holding one unanswered question was
+        dropped in favour of ten recent messages from three chatty ones. Reported
+        as "it gets the new messages but can't see the old ones". The unit that
+        needs answering is a CONVERSATION, so each one is represented before any
+        thread is allowed a second message.
+
+        **What Instagram will not return, however we ask.** Reported as "it gets
+        the new messages but can't see the old ones", and only partly ours:
+
+        * a conversation in the **Requests** folder that has been inactive for
+          more than 30 days is not accessible to the API at all — and a DM from
+          someone who does not follow the account STARTS in Requests;
+        * at most the 20 most recent messages of any one conversation carry
+          detail;
+        * folder information is not exposed, so we cannot tell the agent which
+          tab a thread is in.
+
+        Accepting a request in the Instagram app moves that thread into the inbox
+        and the API can see it from then on. Nothing here can work around that.
+
         Needs ``instagram_manage_messages``; an account connected before it was
         granted must be reconnected. A failure
         RAISES rather than returning ``[]`` — the tool layer turns it into a
@@ -873,12 +936,29 @@ class Instagram(SocialPlatform):
         "no DMs", which is exactly how this went unnoticed.
         """
         target = self._messaging_target(account)
+        wanted = max(1, min(int(limit or 25), MAX_DM_CONVERSATIONS))
         try:
-            payload = await self._graph_get(
-                access_token, f"{target}/conversations",
-                {"platform": "instagram",
-                 "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
-                 "limit": max(1, min(limit, 50))})
+            conversations: list[dict] = []
+            params = {
+                "platform": "instagram",
+                "fields": (f"id,updated_time,"
+                           f"messages.limit({DM_MESSAGES_PER_CONVERSATION})"
+                           f"{{{self.MESSAGE_FIELDS}}}"),
+                "limit": min(wanted, 50),
+            }
+            while True:
+                payload = await self._graph_get(access_token, f"{target}/conversations",
+                                                params)
+                conversations.extend(payload.get("data") or [])
+                if len(conversations) >= wanted:
+                    break
+                paging = payload.get("paging") or {}
+                after = ((paging.get("cursors") or {}).get("after") or "")
+                if not after or not paging.get("next"):
+                    break
+                params = {**params, "after": after,
+                          "limit": min(wanted - len(conversations), 50)}
+            conversations = conversations[:wanted]
         except Exception as exc:  # noqa: BLE001 - re-raised, never swallowed
             # Graph's own words plus what to check. Raised, not returned as [] —
             # "cannot read DMs" must never look like "no DMs". The extra line
@@ -898,23 +978,48 @@ class Instagram(SocialPlatform):
         # on some threads and the Page on others, so both count as "me".
         mine = {str(account.external_id or ""), str((account.meta or {}).get("page_id") or "")}
         mine.discard("")
-        items: list[dict] = []
-        for convo in payload.get("data", []) or []:
+
+        # Grouped by thread, newest first WITHIN each thread, so "the latest
+        # inbound message of this conversation" is well defined.
+        threads: list[list[dict]] = []
+        for convo in conversations:
+            inbound = []
             for m in ((convo.get("messages") or {}).get("data")) or []:
                 frm = m.get("from") or {}
                 sender_id = str(frm.get("id") or "")
                 if not sender_id or sender_id in mine:          # skip our own outbound
                     continue
-                items.append({
+                created = m.get("created_time")
+                age = _hours_since(created)
+                inbound.append({
                     "id": str(m.get("id") or ""),
                     "conversation_id": sender_id,       # reply is addressed to the sender IGSID
+                    "thread_id": str(convo.get("id") or ""),
                     "sender": frm.get("username", ""),
                     "sender_id": sender_id,
                     "text": (m.get("message") or "")[:1000],
-                    "created_at": m.get("created_time"),
+                    "created_at": created,
+                    # Instagram refuses an automated reply outside its 24h window,
+                    # so say so BEFORE the agent writes one. None = unknown age.
+                    "age_hours": None if age is None else round(age, 1),
+                    "can_reply": True if age is None else age <= DM_REPLY_WINDOW_HOURS,
                 })
+            if inbound:
+                inbound.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+                threads.append(inbound)
+
+        # EVERY conversation's latest inbound message first — that is the thing
+        # someone is waiting on — and only then the older messages, by recency.
+        # Truncating by recency alone is what hid the quiet threads.
+        items = [thread[0] for thread in threads]
+        rest = [m for thread in threads for m in thread[1:]]
+        rest.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+        items.extend(rest)
         items.sort(key=lambda i: i.get("created_at") or "", reverse=True)
-        return items[:limit]
+        logger.info("Instagram conversations scanned for %s: %d thread(s), %d inbound "
+                    "message(s)", account.handle or account.external_id, len(threads),
+                    len(items))
+        return items
 
     async def send_dm(self, access_token: str, account: Account, *,
                       recipient_id: str, text: str) -> dict:
@@ -925,7 +1030,14 @@ class Instagram(SocialPlatform):
         strings in the form body. Sending is on the PAGE, like reading — see
         :meth:`_messaging_target`. Needs the ``instagram_manage_messages`` scope,
         and Instagram only lets you message a user who messaged you first, within
-        the platform's standard messaging window.
+        **24 hours** of their last message.
+
+        The ``HUMAN_AGENT`` tag extends that window to 7 days and is deliberately
+        NOT sent: Meta requires it to be applied by a real person and names loss
+        of API access as the consequence of using it for automated messages. This
+        app is automation, so an older DM is readable and answerable only by a
+        human in the Instagram app. ``list_dms`` flags those with
+        ``can_reply=false`` so the agent does not waste a call finding out.
         """
         return await self._graph_post(
             access_token, f"{self._messaging_target(account)}/messages",

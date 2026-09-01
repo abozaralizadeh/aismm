@@ -237,8 +237,27 @@ def _make_dms(state: dict):
         before it was granted must be reconnected. Best-effort: an empty list can
         mean "no new DMs" or "the scope is missing".
 
+        Reads EVERY conversation, not just the busy ones: each thread's latest
+        inbound message is always included, so a question someone asked weeks ago
+        and never got an answer to is still here. Work through the whole list —
+        an old unanswered DM is the one most worth answering.
+
+        Each item carries ``age_hours`` and ``can_reply``. Instagram refuses an
+        automated reply more than 24 hours after the person's last message, so a
+        ``can_reply=false`` item CANNOT be answered by you: mention it in your
+        finish_engagement summary so a human can answer it in the app, and do not
+        try to send it.
+
+        Two things Instagram never returns, so do not report the inbox as empty
+        on their account: a Requests-folder thread inactive for over 30 days is
+        invisible to the API (a DM from someone who does not follow the account
+        starts in Requests, until it is accepted in the app), and only the 20 most
+        recent messages of any one conversation carry detail.
+
         Args:
-            limit: How many messages to return (1–50, newest first).
+            limit: How many CONVERSATIONS to scan (1–200), newest activity first.
+                Not a message count: every scanned conversation contributes its
+                latest inbound message, plus recent context from busy threads.
         """
         async def call(platform, account, token):
             engagement.note_read(state, "instagram_dms")

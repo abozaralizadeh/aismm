@@ -468,6 +468,20 @@ it burns the whole run on this exchange and leaves no record; after the nudges t
 the summary says "NOT CHECKED this run: …". `scripts/diagnose_instagram.py` answers the same
 question outside a run: it prints the messaging node, the scopes, and Graph's own error.
 
+**`list_dms`'s `limit` counts CONVERSATIONS, and every one contributes its latest inbound
+message.** The first version applied it three ways at once — one page of conversations, N messages
+each, then the newest N messages overall — so a quiet old thread holding one unanswered question
+lost to three chatty recent ones ("it gets the new messages but can't see the old ones"). The unit
+someone is waiting on is a THREAD, so each is represented before any thread gets a second message,
+and `/conversations` is PAGED like `list_media`. Three limits are Instagram's, not ours, and are
+documented at the read so nobody hunts them again: a **Requests**-folder thread inactive for 30+
+days is not accessible to the API at all (and a DM from a non-follower STARTS in Requests until it
+is accepted in the app), only the **20 most recent** messages of a conversation carry detail, and
+folder information is not exposed. Each item carries `age_hours`/`can_reply`: Instagram refuses an
+automated reply more than **24 hours** after the person's last message. **Never send
+`HUMAN_AGENT`** — it extends the window to 7 days but Meta requires a real person to apply it and
+names loss of API access as the consequence of using it for automation.
+
 **`list_dms` RAISES; it must never swallow a failure into `[]`.** That swallow is what hid the bug
 above for weeks: an account that *could not read* DMs looked identical to an account with none. All
 three platforms' tool wrappers already turn an exception into `{"error": …, "message": …}` the agent
