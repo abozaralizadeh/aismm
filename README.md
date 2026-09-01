@@ -1115,9 +1115,13 @@ metric set (`reach,likes,comments,saved,shares`): Meta retired `impressions`, `p
 > ```
 > instagram_basic  instagram_content_publish  pages_show_list  pages_read_engagement
 > business_management  instagram_manage_comments  instagram_manage_insights
+> instagram_manage_messages  pages_manage_metadata
 > ```
 >
-> Both `instagram_manage_comments` and `instagram_manage_insights` need **App Review**. If your app
+> `instagram_manage_comments`, `instagram_manage_insights` and `instagram_manage_messages` need
+> **App Review**. Reading and answering **DMs needs `pages_manage_metadata` as well** —
+> Instagram messaging runs through the linked Facebook Page, so without it the conversations
+> read is refused. If your app
 > hasn't been granted insights, the dialog refuses everything — set `INSTAGRAM_SCOPES` in `.env` to
 > the list minus that scope (commas or spaces; it replaces the default outright):
 >

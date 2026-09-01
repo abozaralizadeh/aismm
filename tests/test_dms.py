@@ -81,7 +81,13 @@ def test_x_list_dms_keeps_inbound_messages_and_drops_our_own(monkeypatch):
     assert items[0]["text"] == "hi there"
 
 
-def test_x_list_dms_is_best_effort_on_failure(monkeypatch):
+def test_x_list_dms_reports_a_failure_instead_of_pretending_there_are_none(monkeypatch):
+    """"Cannot read DMs" and "no DMs" are different answers.
+
+    Swallowing the first into an empty list is what let a broken Instagram DM
+    read look like a quiet inbox. The tool layer catches this and hands the agent
+    the reason.
+    """
     from aismm.platforms import twitter as tw
 
     async def boom(self, *a, **kw):
@@ -89,7 +95,8 @@ def test_x_list_dms_is_best_effort_on_failure(monkeypatch):
 
     monkeypatch.setattr(tw.Twitter, "_get", boom)
     account = Account(platform=PlatformName.twitter, handle="me", external_id="9")
-    assert _run(_x().list_dms("t", account)) == []
+    with pytest.raises(RuntimeError, match="402"):
+        _run(_x().list_dms("t", account))
 
 
 def _x_transport(monkeypatch, handler):
@@ -176,10 +183,11 @@ def test_reddit_list_dms_keeps_pms_and_drops_comment_replies_and_self(monkeypatc
     assert items[0]["text"].startswith("hello")
 
 
-def test_reddit_list_dms_is_best_effort_on_failure(monkeypatch):
+def test_reddit_list_dms_reports_a_failure_instead_of_pretending_there_are_none(monkeypatch):
     _rd_transport(monkeypatch, lambda r: httpx.Response(500, json={}))
     account = Account(platform=PlatformName.reddit, handle="me", external_id="9")
-    assert _run(_rd().list_dms("t", account)) == []
+    with pytest.raises(httpx.HTTPStatusError):
+        _run(_rd().list_dms("t", account))
 
 
 def test_reddit_reply_to_dm_addresses_the_t4_fullname(monkeypatch):
@@ -212,6 +220,16 @@ def test_reddit_reply_to_dm_adds_the_t4_prefix_when_missing(monkeypatch):
 # --- Instagram: list_dms / send_dm / reply_to_target --------------------------------- #
 
 IG_USER = "17841400000000000"
+IG_PAGE = "998877665544332"
+
+
+def _ig_account(page_id=IG_PAGE):
+    """A connected Instagram account, with the linked Page recorded on it."""
+    account = Account(platform=PlatformName.instagram, handle="brand",
+                      external_id=IG_USER)
+    if page_id:
+        account.set_meta({"page_id": page_id})
+    return account
 
 
 def _ig():
@@ -247,7 +265,7 @@ def test_ig_list_dms_keeps_inbound_and_uses_sender_as_the_recipient(monkeypatch)
         ]})
 
     _ig_transport(monkeypatch, handler)
-    account = Account(platform=PlatformName.instagram, handle="brand", external_id=IG_USER)
+    account = _ig_account()
     items = _run(_ig().list_dms("t", account))
     assert [i["id"] for i in items] == ["m1"]           # our own outbound is dropped
     assert items[0]["conversation_id"] == "555"         # reply is addressed to the sender IGSID
@@ -256,7 +274,7 @@ def test_ig_list_dms_keeps_inbound_and_uses_sender_as_the_recipient(monkeypatch)
 
 def test_ig_reply_to_dm_posts_to_the_recipient(monkeypatch):
     def handler(request):
-        assert request.url.path.endswith(f"/{IG_USER}/messages")
+        assert request.url.path.endswith(f"/{IG_PAGE}/messages")
         from urllib.parse import parse_qs
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         assert json.loads(form["recipient"]) == {"id": "555"}
@@ -264,7 +282,7 @@ def test_ig_reply_to_dm_posts_to_the_recipient(monkeypatch):
         return httpx.Response(200, json={"message_id": "mid_1", "recipient_id": "555"})
 
     requests = _ig_transport(monkeypatch, handler)
-    account = Account(platform=PlatformName.instagram, handle="brand", external_id=IG_USER)
+    account = _ig_account()
     result = _run(_ig().reply_to_target(
         "t", account, target_type="dm", target_id="m1", text="thank you!",
         reply_to="555"))
@@ -402,3 +420,122 @@ def test_ig_reply_to_dm_tool_passes_the_recipient_as_reply_to(store, monkeypatch
     tool = _tool(_state(store, ig), "instagram_reply_to_dm")
     _invoke(tool, message_id="m1", recipient_id="555", message="hi there")
     assert seen == {"target_type": "dm", "target_id": "m1", "reply_to": "555"}
+
+
+# --- Instagram messaging hangs off the PAGE, not the IG user --------------------------- #
+# Reported: "the engagement in instagram never sees the DMs and never answers
+# them". Two causes, and the second is why the first was invisible for so long:
+#
+#   1. /conversations and /messages were addressed to the IG user id. With
+#      Instagram-via-Facebook-Login every messaging endpoint is on the linked
+#      PAGE (Meta's own guide: GET /{page-id}/conversations?platform=instagram).
+#   2. The resulting error was swallowed into an empty list, so an account that
+#      COULD NOT read DMs looked exactly like an account with none.
+
+def test_the_conversations_read_goes_to_the_page(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["platform"] = request.url.params.get("platform")
+        return httpx.Response(200, json={"data": []})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account()))
+    assert seen["path"].endswith(f"/{IG_PAGE}/conversations")
+    assert IG_USER not in seen["path"]          # the old, wrong node
+    assert seen["platform"] == "instagram"
+
+
+def test_an_account_connected_before_the_page_id_was_stored_still_works(monkeypatch):
+    """`me` resolves to the token's owner, and the stored token IS the page token
+    (fetch_identity refuses the connection otherwise) — so no reconnect is needed."""
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"data": []})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account(page_id=None)))
+    assert seen["path"].endswith("/me/conversations")
+
+
+def test_a_refused_conversations_read_is_reported_not_silently_empty(monkeypatch):
+    _ig_transport(monkeypatch, lambda r: httpx.Response(
+        400, json={"error": {"message": "(#200) Requires pages_manage_metadata",
+                             "code": 200}}))
+    with pytest.raises(Exception, match="pages_manage_metadata"):
+        _run(_ig().list_dms("t", _ig_account()))
+
+
+def test_the_agent_is_told_why_rather_than_seeing_an_empty_inbox(monkeypatch):
+    """End to end: the tool layer turns the refusal into something actionable."""
+    import asyncio as _asyncio
+
+    from aismm.tools import instagram_tools
+
+    _ig_transport(monkeypatch, lambda r: httpx.Response(
+        400, json={"error": {"message": "(#200) Requires pages_manage_metadata"}}))
+
+    async def context(_state):
+        return _ig(), _ig_account(), "token"
+
+    monkeypatch.setattr(instagram_tools, "_instagram_context", context)
+    result = _asyncio.run(instagram_tools._with_context(
+        {}, lambda p, a, t: p.list_dms(t, a)))
+    assert result["error"] == "instagram_api_error"
+    assert "pages_manage_metadata" in result["message"]
+
+
+def test_our_own_outbound_message_is_never_answered(monkeypatch):
+    """A thread carries both sides; the account must not reply to itself. The
+    Page and the IG user both count as us."""
+    def handler(request):
+        return httpx.Response(200, json={"data": [{"id": "c1", "messages": {"data": [
+            {"id": "m1", "from": {"id": "555", "username": "fan"},
+             "message": "hello?", "created_time": "2026-08-02T00:00:00Z"},
+            {"id": "m2", "from": {"id": IG_USER, "username": "brand"},
+             "message": "ours, via the ig id", "created_time": "2026-08-01T00:00:00Z"},
+            {"id": "m3", "from": {"id": IG_PAGE, "username": "brand"},
+             "message": "ours, via the page", "created_time": "2026-08-01T00:00:00Z"},
+        ]}}]})
+
+    _ig_transport(monkeypatch, handler)
+    items = _run(_ig().list_dms("t", _ig_account()))
+    assert [i["id"] for i in items] == ["m1"]
+
+
+def test_the_page_id_is_recorded_at_connect(monkeypatch):
+    """Without it every existing connection would need a reconnect."""
+    def handler(request):
+        if request.url.path.endswith("/me/accounts"):
+            return httpx.Response(200, json={"data": [{
+                "id": IG_PAGE, "name": "Brand Page", "access_token": "page-token",
+                "instagram_business_account": {"id": IG_USER, "username": "brand"}}]})
+        return httpx.Response(200, json={})
+
+    _ig_transport(monkeypatch, handler)
+    identity = _run(_ig().fetch_identity("user-token"))
+    assert identity.meta["page_id"] == IG_PAGE
+    assert identity.external_id == IG_USER          # publishing still uses the IG id
+
+    identities = _run(_ig().fetch_identities("user-token"))
+    assert identities[0].meta["page_id"] == IG_PAGE
+
+
+def test_the_messaging_scopes_are_both_requested():
+    """Meta's guide requires pages_manage_metadata alongside
+    instagram_manage_messages for /{page-id}/conversations."""
+    scopes = _ig().DEFAULT_SCOPES
+    assert "instagram_manage_messages" in scopes
+    assert "pages_manage_metadata" in scopes
+
+
+def test_the_messaging_scopes_stay_optional():
+    """One unavailable scope kills the WHOLE dialog, so these must never be able
+    to take publishing down with them."""
+    ig = _ig()
+    for scope in ("instagram_manage_messages", "pages_manage_metadata"):
+        assert scope in ig.OPTIONAL_SCOPES
+        assert scope not in ig.REQUIRED_SCOPES

@@ -711,17 +711,16 @@ class Twitter(SocialPlatform):
         ``external_id`` — the same self-exclusion the reply search uses), so the
         agent never answers its own outbound message. ``id`` is the inbound message
         (event) id the ledger dedupes on; ``conversation_id`` is where a reply is
-        sent. Needs the ``dm.read`` scope. Best-effort: DMs are pay-per-use and the
-        scope may be missing on an old connection, so a failure returns ``[]``.
+        sent. Needs the ``dm.read`` scope, which an old connection may not have —
+        and `_api_error` explains a 401/403 far better than an empty list does.
+        A failure RAISES rather than returning ``[]``: the tool layer turns it into a
+        message the agent can act on, and "cannot read DMs" must not look like "no
+        DMs" — that is how a broken Instagram DM read went unnoticed for weeks.
         """
-        try:
-            payload = await self._get(access_token, "dm_events", {
-                "max_results": max(1, min(limit, 100)),
-                "dm_event.fields": self.DM_FIELDS,
-                "expansions": "sender_id", "user.fields": "username"})
-        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
-            logger.warning("X DM read failed (%s); returning no DMs", exc)
-            return []
+        payload = await self._get(access_token, "dm_events", {
+            "max_results": max(1, min(limit, 100)),
+            "dm_event.fields": self.DM_FIELDS,
+            "expansions": "sender_id", "user.fields": "username"})
         users = {u.get("id"): u.get("username")
                  for u in (payload.get("includes", {}) or {}).get("users", []) or []}
         me = str(account.external_id or "")

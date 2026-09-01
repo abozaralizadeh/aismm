@@ -349,18 +349,16 @@ class Reddit(SocialPlatform):
         excluded so it never answers itself. ``id`` is the message fullname
         (``t4_…``) — both the ledger dedupe key AND the ``thing_id`` a reply is
         addressed to, so no separate conversation id is needed. Needs the
-        ``privatemessages`` scope. Best-effort: a failure returns ``[]``.
+        ``privatemessages`` scope. A failure RAISES rather than returning ``[]``: the tool layer turns it into a
+        message the agent can act on, and "cannot read DMs" must not look like "no
+        DMs" — that is how a broken Instagram DM read went unnoticed for weeks.
         """
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(f"{OAUTH}/message/inbox",
-                                     params={"limit": max(1, min(limit, 100))},
-                                     headers=_headers(access_token))
-                r.raise_for_status()
-                children = (r.json().get("data") or {}).get("children") or []
-        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
-            logger.warning("Reddit inbox read failed: %s", exc)
-            return []
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{OAUTH}/message/inbox",
+                                 params={"limit": max(1, min(limit, 100))},
+                                 headers=_headers(access_token))
+            r.raise_for_status()
+            children = (r.json().get("data") or {}).get("children") or []
         me = (account.handle or "").lstrip("@").lower().removeprefix("u/")
         items: list[dict] = []
         for child in children:

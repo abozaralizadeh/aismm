@@ -204,10 +204,11 @@ class Instagram(SocialPlatform):
         # like_count/comments_count on the media object drive the feedback loop;
         # reach/saved/shares come from insights as a best-effort top-up.
         supports_metrics=True,
-        # The Instagram Messaging API (GET /{ig-user-id}/conversations, POST
-        # /{ig-user-id}/messages) reads and answers DMs — needs the App-Review
-        # gated `instagram_manage_messages` scope, kept OPTIONAL below so an app
-        # without it can still connect for publishing.
+        # The Instagram Messaging API (GET /{page-id}/conversations, POST
+        # /{page-id}/messages) reads and answers DMs — messaging hangs off the
+        # linked PAGE, not the IG user id. Needs the App-Review gated
+        # `instagram_manage_messages` AND `pages_manage_metadata`, both kept
+        # OPTIONAL below so an app without them can still connect for publishing.
         supports_dms=True,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
@@ -236,6 +237,12 @@ class Instagram(SocialPlatform):
         "instagram_manage_comments",   # reply/hide/delete comments
         "instagram_manage_insights",   # media + account metrics
         "instagram_manage_messages",   # read + answer DMs
+        # Required alongside instagram_manage_messages: Meta's own Instagram
+        # messaging guide lists instagram_basic + instagram_manage_messages +
+        # pages_manage_metadata for /{page-id}/conversations. Without it the
+        # conversations read is refused, which is indistinguishable from an
+        # empty inbox unless the error is surfaced.
+        "pages_manage_metadata",
     )
     DEFAULT_SCOPES = REQUIRED_SCOPES + OPTIONAL_SCOPES
 
@@ -296,7 +303,10 @@ class Instagram(SocialPlatform):
             external_id=iba["id"],
             handle=iba.get("username") or page.get("name", ""),
             # Publishing uses the PAGE access token; store it as the account token.
-            meta={"access_token": page_token, "page_name": page.get("name", "")},
+            # The PAGE id is stored too: Instagram MESSAGING hangs off the Page,
+            # not off the IG user id (see _messaging_target).
+            meta={"access_token": page_token, "page_name": page.get("name", ""),
+                  "page_id": str(page.get("id", ""))},
         )
 
     async def fetch_identities(self, access_token: str) -> list[Identity]:
@@ -326,7 +336,8 @@ class Instagram(SocialPlatform):
             identities.append(Identity(
                 external_id=iba["id"],
                 handle=iba.get("username") or page.get("name", ""),
-                meta={"access_token": token, "page_name": page.get("name", "")},
+                meta={"access_token": token, "page_name": page.get("name", ""),
+                      "page_id": str(page.get("id", ""))},
             ))
 
         if not identities:
@@ -340,7 +351,8 @@ class Instagram(SocialPlatform):
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 f"{GRAPH}/me/accounts",
-                params={"fields": "name,access_token,instagram_business_account{id,username}"},
+                params={"fields": "id,name,access_token,"
+                                  "instagram_business_account{id,username}"},
                 headers=_auth(access_token),
             )
             try:
@@ -808,35 +820,59 @@ class Instagram(SocialPlatform):
 
     MESSAGE_FIELDS = "id,created_time,from,message"
 
+    @staticmethod
+    def _messaging_target(account: Account) -> str:
+        """The node Instagram MESSAGING hangs off — the PAGE, not the IG user.
+
+        This is the whole reason DMs were invisible. Publishing is addressed to
+        the IG user id (``/{ig-user-id}/media``), but with Instagram-via-Facebook-
+        Login every messaging endpoint is on the linked Page:
+        ``GET /{page-id}/conversations?platform=instagram`` and
+        ``POST /{page-id}/messages``. Asking the IG user id for ``/conversations``
+        errors, and the error used to be swallowed into an empty list — so a run
+        that could not read DMs looked exactly like an account with no DMs.
+
+        Accounts connected before the page id was recorded fall back to ``me``,
+        which resolves to the token's owner. The stored token is the PAGE token
+        (``fetch_identity`` refuses the connection otherwise), so ``me`` IS the
+        Page — it is what Meta's own send-API sample uses. That keeps every
+        existing connection working without a reconnect.
+        """
+        return str((account.meta or {}).get("page_id") or "me")
+
     async def list_dms(self, access_token: str, account: Account, *,
                        limit: int = 25) -> list[dict]:
         """Recent INBOUND direct messages awaiting a reply.
 
-        ``GET /{ig-user-id}/conversations?platform=instagram`` lists conversations,
+        ``GET /{page-id}/conversations?platform=instagram`` lists conversations,
         and nesting ``messages{...}`` pulls each thread's recent messages in the
         same call. We keep only messages whose ``from.id`` is NOT this account
         (inbound), so the agent never answers its own outbound message. ``id`` is
         the message id the ledger dedupes on; ``conversation_id`` is the sender's
-        IGSID, which is the RECIPIENT a reply is sent to (``POST /{ig-user-id}/
-        messages`` addresses the person, not a thread id). Needs the
-        ``instagram_manage_messages`` scope. Best-effort: a failure returns ``[]``.
+        IGSID, which is the RECIPIENT a reply is sent to (``POST /{page-id}/
+        messages`` addresses the person, not a thread id).
+
+        Needs ``instagram_manage_messages`` AND ``pages_manage_metadata``; an
+        account connected before those were granted must be reconnected. A failure
+        RAISES rather than returning ``[]`` — the tool layer turns it into a
+        message the agent can act on, and "cannot read DMs" must not look like
+        "no DMs", which is exactly how this went unnoticed.
         """
-        try:
-            payload = await self._graph_get(
-                access_token, f"{account.external_id}/conversations",
-                {"platform": "instagram",
-                 "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
-                 "limit": max(1, min(limit, 50))})
-        except Exception as exc:  # noqa: BLE001 - DM read is best-effort
-            logger.warning("Instagram DM read failed: %s", exc)
-            return []
-        me = str(account.external_id or "")
+        payload = await self._graph_get(
+            access_token, f"{self._messaging_target(account)}/conversations",
+            {"platform": "instagram",
+             "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
+             "limit": max(1, min(limit, 50))})
+        # Our own outbound messages come back as `from` = the IG business account
+        # on some threads and the Page on others, so both count as "me".
+        mine = {str(account.external_id or ""), str((account.meta or {}).get("page_id") or "")}
+        mine.discard("")
         items: list[dict] = []
         for convo in payload.get("data", []) or []:
             for m in ((convo.get("messages") or {}).get("data")) or []:
                 frm = m.get("from") or {}
                 sender_id = str(frm.get("id") or "")
-                if not sender_id or (me and sender_id == me):   # skip our own outbound
+                if not sender_id or sender_id in mine:          # skip our own outbound
                     continue
                 items.append({
                     "id": str(m.get("id") or ""),
@@ -853,14 +889,15 @@ class Instagram(SocialPlatform):
                       recipient_id: str, text: str) -> dict:
         """Send a direct message to a user. Sends IMMEDIATELY.
 
-        ``POST /{ig-user-id}/messages`` with a ``recipient.id`` (the sender's IGSID
+        ``POST /{page-id}/messages`` with a ``recipient.id`` (the sender's IGSID
         from :meth:`list_dms`) and a ``message.text``. Graph wants these as JSON
-        strings in the form body. Needs the ``instagram_manage_messages`` scope,
+        strings in the form body. Sending is on the PAGE, like reading — see
+        :meth:`_messaging_target`. Needs the ``instagram_manage_messages`` scope,
         and Instagram only lets you message a user who messaged you first, within
         the platform's standard messaging window.
         """
         return await self._graph_post(
-            access_token, f"{account.external_id}/messages",
+            access_token, f"{self._messaging_target(account)}/messages",
             {"recipient": json.dumps({"id": recipient_id}),
              "message": json.dumps({"text": text})})
 

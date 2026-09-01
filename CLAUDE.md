@@ -407,6 +407,23 @@ inherit the refusing base `list_dms`/`reply_to_target`. `scripts/preflight.py` +
 rides `reply_to_target`, already covered because every DM platform is comment-capable). No
 AI-disclosure suffix on a reply or a DM (it is conversational, not a labelled post).
 
+**Instagram MESSAGING hangs off the PAGE, not the IG user id** — this is why engage runs never
+saw a single Instagram DM. Publishing is addressed to the IG user (`/{ig-user-id}/media`), but with
+Instagram-via-Facebook-Login the messaging endpoints are `GET /{page-id}/conversations?platform=
+instagram` and `POST /{page-id}/messages` (Meta's own Instagram Messaging guide). Asking the IG user
+id for `/conversations` errors. `Instagram._messaging_target` is the single place that decides:
+`meta["page_id"]` (recorded at connect by BOTH `fetch_identity` and `fetch_identities`), falling
+back to **`me`** for accounts connected before it was stored — the account token IS the page token,
+so `me` is the Page, and no reconnect is forced. It also needs **`pages_manage_metadata`** next to
+`instagram_manage_messages`; both stay in `OPTIONAL_SCOPES` because one unavailable scope kills the
+whole dialog.
+
+**`list_dms` RAISES; it must never swallow a failure into `[]`.** That swallow is what hid the bug
+above for weeks: an account that *could not read* DMs looked identical to an account with none. All
+three platforms' tool wrappers already turn an exception into `{"error": …, "message": …}` the agent
+can act on, so the platform-level `except: return []` only destroyed information. Same reasoning as
+`_confirm_duplicate`'s three-state return — "no" and "cannot tell" are different answers.
+
 **A DM carries TWO ids, and confusing them double-answers or misdelivers.** `target_id` is the
 inbound MESSAGE id — the ledger dedupe key (reply once per message, keyed on `dm:<id>`) and the
 open-staged guard key. The SEND destination is separate and travels as the new optional `reply_to`
