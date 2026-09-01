@@ -158,6 +158,65 @@
         </div>
       </label>
 
+      {% if twitter_communities %}
+        {% set pinned = instruction.twitter_community_id if instruction else '' %}
+        <details class="account-section" {% if pinned %}open{% endif %}>
+          <summary>
+            X posts go to
+            <strong>
+              {% if pinned == 'none' %}the home timeline
+              {% elif pinned %}
+                {% for group in twitter_communities %}{% for o in group.options %}{%
+                  if o.id == pinned %}{{ o.name }}{% endif %}{% endfor %}{% endfor %}
+              {% else %}whatever the account is set to
+              {% endif %}
+            </strong>
+          </summary>
+          <div class="section-body">
+            <label>Community
+              <select name="twitter_community_id">
+                <option value="" {% if not pinned %}selected{% endif %}>
+                  Use the account's setting (rotate through all of them)</option>
+                <option value="none" {% if pinned == 'none' %}selected{% endif %}>
+                  The home timeline — no community</option>
+                {% for group in twitter_communities %}
+                  <optgroup label="@{{ group.handle }}">
+                    {% for o in group.options %}
+                      <option value="{{ o.id }}" {% if pinned == o.id %}selected{% endif %}>
+                        {{ o.name }}</option>
+                    {% endfor %}
+                  </optgroup>
+                {% endfor %}
+              </select>
+              <span class="hint">
+                Only affects X accounts. Pinning one community here means every run of THIS
+                instruction posts there, and it leaves the account's rotation alone — so a
+                second instruction can keep rotating through the rest.
+                Names come from the <a href="{{ url_for('accounts') }}">account</a>; add or
+                rename them there.
+              </span>
+            </label>
+
+            {% set share = instruction.twitter_share_with_followers if instruction else '' %}
+            <label>Also share with followers
+              <select name="twitter_share_with_followers">
+                <option value="" {% if not share %}selected{% endif %}>
+                  Use the account's setting</option>
+                <option value="yes" {% if share == 'yes' %}selected{% endif %}>
+                  Yes — followers see it too</option>
+                <option value="no" {% if share == 'no' %}selected{% endif %}>
+                  No — the community only</option>
+              </select>
+              <span class="hint">
+                The switch X shows beside its own community picker. A community post is
+                otherwise visible <strong>only inside that community</strong>. Sent only
+                alongside a community — it means nothing on a home-timeline post.
+              </span>
+            </label>
+          </div>
+        </details>
+      {% endif %}
+
       <div class="grid-2">
         <label>Schedule
           <input type="text" name="schedule" value="{{ instruction.schedule if instruction else '' }}"

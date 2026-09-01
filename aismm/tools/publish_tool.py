@@ -409,7 +409,8 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # advances its community rotation here). Never fatal: the post already went
     # out, and losing the run over a counter would be absurd.
     try:
-        platform.after_publish(account=account, store=store, result=result)
+        platform.after_publish(account=account, store=store, result=result,
+                               instruction=instruction)
     except Exception as exc:  # noqa: BLE001
         logger.warning("after_publish bookkeeping failed for %s: %s",
                        account.platform.value, exc)

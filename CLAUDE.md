@@ -135,6 +135,26 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   content each run. The whole of a THREAD goes to one community, chosen once. `after_publish` is a
   `SocialPlatform` hook (default no-op) rather than another platform branch in `perform_publish`, and
   its failure is logged, never fatal — the post already went out.
+- **The destination is per INSTRUCTION, with the account as the default**
+  (`Instruction.twitter_community_id` / `twitter_share_with_followers`, read by `next_community`
+  and `shares_with_followers`). One account commonly runs a niche-community instruction and a
+  timeline instruction; an account-wide setting cannot express that. `""` inherits the account's
+  rotation, `HOME_TIMELINE` (`"none"`) forces the timeline, anything else is one id — and a pinned
+  instruction **must not advance the rotation cursor** in `after_publish` (it never used the
+  rotation; advancing would walk the cursor past the communities the rotating instructions feed),
+  which is why `after_publish` grew an `instruction` argument. `twitter_share_with_followers` is a
+  tri-state STRING (`""`/`"yes"`/`"no"`) because Azure Table storage rejects `None`. A saved pick is
+  validated against the ids the workspace's accounts actually have, so a removed community falls
+  back to inheriting rather than posting somewhere the operator can no longer see.
+- **Communities are chosen by NAME, never by id.** A 19-digit number is not something anyone
+  recognises. `GET /2/communities/:id` and `GET /2/users/:id/communities` both return names, so
+  `resolve_community_names` tries the listing first (one call for all of them) and falls back to
+  per-id lookups, caching the result in `account.meta["community_names"]` at save time — X is
+  pay-per-use, so this is not done per render. Both endpoints can fail (app tier, a community the
+  account has not joined), so the operator can label an id by hand: `parse_community_entries`
+  accepts `ID = Name`, **one entry per line**, because a name may contain commas and commas
+  separate bare ids. A typed label WINS over the API's — it is deliberate. An id with no name
+  displays as the id, never as blank.
 - **A community post is invisible to your followers unless you say otherwise** — `POST /2/tweets`
   takes `community_id` AND `share_with_followers` (boolean, default false), which is the switch X's
   own composer shows beside the community picker. Both live in `account.meta` and are set per
@@ -888,6 +908,32 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   successful connect and then failed at publish time with `code=190 … must be granted before
   impersonating a user's page`. It now REFUSES the connection there, naming the page and the dialog
   step to redo.
+- **Reconnecting must UPDATE the account row, never add one.** `upsert_account` keys on the row
+  ID and the OAuth callback built a fresh `Account()` each time, so every reconnect duplicated
+  every account that login covers — reconnecting ONE Instagram account produced a second copy of
+  all three, because one Meta login claims every linked Page. The damage is not cosmetic: an
+  `Instruction` stores account IDs, so its instructions kept pointing at the OLD rows, whose tokens
+  the re-authorization had just invalidated — connected-looking account, configured-looking
+  instruction, silently stopped publishing. The callback now matches on **(platform, external_id)
+  within the workspace** and updates in place, MERGING meta (`{**kept, **new}`) so the X community
+  list, `share_with_followers`, the publish ledger and the cooldown survive — none of them are
+  re-derivable from an OAuth callback. A reconnect also **adopts the orphans of any duplicate it finds** — instructions still
+  pointing at an older row are moved onto the one just re-authorized, so reconnecting repairs the
+  damage instead of stepping around it. `/accounts/prune-duplicates` then removes the stale rows,
+  repointing before deleting so an instruction whose only account row is about to disappear is not
+  broken for good. `account_groups()` + `repoint_instructions()` are shared by the accounts page,
+  the callback and the cleanup: three places used to decide which row survives, and if they ever
+  disagreed one would repoint instructions at a row another was about to delete. **The survivor is
+  the newest row** (last of the group, ordered by `created_at`) — it holds the token the newest
+  authorization minted.
+- **`REQUIRED_SCOPES` vs `SCOPE_FEATURES` — a missing optional scope is not a publishing failure.**
+  The permission check compared the token against every scope the connect *asks* for, so a working
+  X account reported "Token is MISSING dm.read, dm.write — that is why publishing fails". Neither
+  has anything to do with publishing. Every platform now declares `REQUIRED_SCOPES` (empty = all of
+  `scopes`) and `SCOPE_FEATURES` mapping each optional scope to the feature it powers, and the check
+  reports three states: publishing broken (error), publishing fine but a feature is off (warning,
+  named in words — "reading direct messages", not "dm.read"), or healthy. A test asserts every
+  optional scope has a feature description.
 - **One OAuth round-trip connects EVERY account it covers** (`SocialPlatform.fetch_identities`,
   default `[fetch_identity(...)]`; Instagram returns one Identity per linked Page, each with its own
   page token). This is the structural fix for the point below: if a single login claims all the

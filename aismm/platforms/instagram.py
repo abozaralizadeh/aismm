@@ -245,6 +245,13 @@ class Instagram(SocialPlatform):
         "pages_manage_metadata",
     )
     DEFAULT_SCOPES = REQUIRED_SCOPES + OPTIONAL_SCOPES
+    SCOPE_FEATURES = {
+        "instagram_manage_comments": "reading and answering comments",
+        "instagram_manage_insights": "post and account metrics",
+        "instagram_manage_messages": "reading and answering direct messages",
+        "pages_manage_metadata": "reading direct messages (needed with "
+                                 "instagram_manage_messages)",
+    }
 
     @property
     def scopes(self) -> list[str]:  # type: ignore[override]

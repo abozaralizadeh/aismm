@@ -3,17 +3,44 @@
 {% block content %}
 <h1>Accounts</h1>
 
+{% if superseded %}
+  <div class="flash flash-warning">
+    <strong>{{ superseded | length }} duplicate account row(s).</strong>
+    The same account is connected more than once — an older reconnect added a row
+    instead of updating one. The older copies hold tokens the newest authorization
+    invalidated, so an instruction still pointing at one has quietly stopped
+    publishing.
+    <form method="post" action="{{ url_for('prune_duplicate_accounts') }}"
+          class="inline-form"
+          onsubmit="return confirm('Remove the superseded copies, keeping the newest connection of each?\n\nInstructions pointing at an old copy are moved onto the one that is kept.');">
+      <button class="btn small">Clean them up</button>
+    </form>
+  </div>
+{% endif %}
+
 <h2>Connected <span class="muted small">({{ accounts|length }})</span></h2>
 {% if accounts %}
+{% for platform_name, platform_accounts in grouped.items() %}
+<h3 class="account-group">
+  {{ platform_icon(platform_name, 18) }} {{ platform_name }}
+  <span class="muted small">({{ platform_accounts | length }})</span>
+</h3>
 <div class="account-list">
-  {% for a in accounts %}
+  {% for a in platform_accounts %}
     {% set state = token_state.get(a.id, {}) %}
-    <section class="account-card">
+    {% set status, why = health.get(a.id, ('ok', '')) %}
+    {% set uses = used_by.get(a.id, []) %}
+    <section class="account-card {% if a.id in superseded %}account-superseded{% endif %}">
       <header class="account-head">
         <div class="account-who">
+          <span class="dot dot-{{ 'ok' if status == 'ok' else ('warn' if status == 'warn' else 'danger') }}"
+                title="{{ why or 'No problem detected' }}"></span>
           {{ platform_icon(a.platform.value, 20) }}
-          <span class="badge">{{ a.platform.value }}</span>
           <strong>{{ a.handle or a.external_id or "—" }}</strong>
+          {% if a.id in superseded %}
+            <span class="badge badge-failed" title="A newer connection of this same account exists">
+              superseded</span>
+          {% endif %}
         </div>
         <div class="account-token small">
           {% if a.expires_at %}
@@ -32,13 +59,21 @@
         </div>
       </header>
 
+      {% if why %}<p class="account-why small">{{ why }}</p>{% endif %}
+
       <dl class="account-facts small">
         <div><dt>Account ID</dt><dd class="mono">{{ a.external_id or a.id }}</dd></div>
         <div><dt>Connected</dt><dd>{{ a.created_at.strftime('%Y-%m-%d') }}</dd></div>
+        <div><dt>Used by</dt><dd>
+          {% if uses %}
+            <span title="{{ uses | join(', ') }}">{{ uses | length }} instruction(s)</span>
+          {% else %}<span class="muted">nothing yet</span>{% endif %}
+        </dd></div>
       </dl>
 
       {% if a.platform.value == 'twitter' %}
         {% set ids = a.meta.get('community_ids') or ([a.meta.get('community_id')] if a.meta.get('community_id') else []) %}
+        {% set cnames = a.meta.get('community_names') or {} %}
         <details class="account-section" {% if ids %}open{% endif %}>
           <summary>
             Posts go to
@@ -46,7 +81,7 @@
               {% if ids | length > 1 %}
                 {{ ids | length }} communities, in rotation
               {% elif ids %}
-                community {{ ids[0] }}
+                {{ cnames.get(ids[0]) or ('community ' ~ ids[0]) }}
               {% else %}
                 the home timeline
               {% endif %}
@@ -54,21 +89,25 @@
           </summary>
           <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}"
                 class="form">
-            <label>Community ID(s)
-              <input type="text" name="community_id" value="{{ ids | join(', ') }}"
-                     placeholder="Blank = home timeline. Several = rotate, one per run">
+            <label>Communities
+              <textarea name="community_id" rows="{{ [ids | length + 1, 3] | max }}"
+                        placeholder="One per line. Blank = home timeline.&#10;1493446837214187523 = AI Builders">{% for cid in ids %}{{ cid }}{% if cnames.get(cid) %} = {{ cnames[cid] }}{% endif %}
+{% endfor %}</textarea>
               <span class="hint">
-                Copy the number from the community URL: <code>x.com/i/communities/ID</code> — X gives
-                this app no way to list the ones you have joined.
+                <strong>One per line</strong>, as <code>ID</code> or <code>ID = Name</code>. Copy the
+                number from the community URL: <code>x.com/i/communities/ID</code>. AISMM asks X for
+                the name when you save; type your own after <code>=</code> if it cannot find one —
+                the name is what you will pick from on an instruction.
                 {% if ids and ids | length > 1 %}
                   <br>The next post goes to
-                  <code>{{ ids[(a.meta.get('community_cursor') or 0) % (ids | length)] }}</code>.
+                  <strong>{{ cnames.get(ids[(a.meta.get('community_cursor') or 0) % (ids | length)])
+                             or ids[(a.meta.get('community_cursor') or 0) % (ids | length)] }}</strong>.
                   <strong>One post per run</strong>, never the same post to several communities:
                   X treats near-identical posts from one account as spam, and a scheduled
                   instruction covers them all anyway with different content each time.
-                {% elif ids %}
-                  <br>Add more, comma-separated, to rotate through several — one per run.
                 {% endif %}
+                <br>This is the DEFAULT. An instruction can pin one of these, or the home
+                timeline, for its own posts.
               </span>
             </label>
             <label class="check">
@@ -111,24 +150,36 @@
       {% endif %}
 
       <footer class="account-actions">
+        <form method="post" action="{{ url_for('reconnect_account', account_id=a.id) }}">
+          <button class="btn small {% if status == 'bad' %}btn-primary{% endif %}"
+                  title="Re-authorize with the same app that connected this account. Updates it in place — it does not add a second one.">
+            Reconnect
+          </button>
+        </form>
         <form method="post" action="{{ url_for('check_account', account_id=a.id) }}">
           <button class="btn small" title="Ask the platform what this stored token actually allows">
             Check permissions
           </button>
         </form>
         <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
-              onsubmit="return confirm('Disconnect {{ a.handle or a.external_id }}?\n\nInstructions targeting it will stop publishing.');">
+              onsubmit="return confirm('Disconnect {{ a.handle or a.external_id }}?{% if uses %}\n\n{{ uses | length }} instruction(s) publish through it and will stop.{% endif %}');">
           <button class="btn btn-danger small">Disconnect</button>
         </form>
       </footer>
     </section>
   {% endfor %}
 </div>
+{% endfor %}
 {% else %}
 <p class="muted">No accounts connected yet — pick a platform below.</p>
 {% endif %}
 
 <h2>Connect another</h2>
+<p class="muted small">
+  To re-authorize an account you already have, use its <strong>Reconnect</strong> button above —
+  it reuses the app that connected it and updates the account in place. Connecting from here
+  with a different app connects a separate thing.
+</p>
 <div class="platform-grid">
   {% for p in platforms %}
   <div class="platform-card">

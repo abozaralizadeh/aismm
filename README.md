@@ -1216,11 +1216,21 @@ pre-truncating or numbering by hand.
 
 ### Posting to an X Community
 
-An X account can post to a **Community** instead of the home timeline. On **Accounts**, set the
-numeric community ID (copy it from `x.com/i/communities/ID` — X gives this app no way to list the
-communities you have joined) and choose who sees the post.
+An X account can post to a **Community** instead of the home timeline. On **Accounts**, list the
+communities — **one per line**, copying the number from `x.com/i/communities/ID`:
 
-**Several communities rotate.** Enter them comma-separated and each run posts to the next one:
+```
+1493446837214187523
+1825401786217210316 = Indie Hackers
+```
+
+AISMM asks X for each community's **name** when you save, and shows the name everywhere after that —
+nobody should have to recognise a 19-digit number. Where X won't answer (not every app tier has the
+endpoint, and a community the account hasn't joined isn't in its listing), write your own label after
+`=`. A label you type always wins over the one X returns. One entry per line, because a name may
+contain commas.
+
+**Several communities rotate.** Each run posts to the next one:
 
 ```
 111, 222, 333   →  Mon → 111 · Wed → 222 · Fri → 333 · Mon → 111 …
@@ -1243,6 +1253,14 @@ set later.
 
 Both settings apply to every post of an auto-generated thread, since the later posts belong to the
 same community and the same audience.
+
+**Per instruction.** What you set on the account is the *default*. Any instruction can pin its own
+destination — one specific community, or the home timeline — and its own answer to *share with
+followers*, which is what lets one account feed a niche community on Mondays and post to the timeline
+on Fridays. The instruction form offers the communities **by name**, grouped by account.
+
+A pinned instruction never touches the account's rotation cursor: it isn't using the rotation, so
+advancing it would walk the other instructions past communities they should have covered.
 
 ### When X returns 503
 

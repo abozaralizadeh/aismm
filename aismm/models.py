@@ -221,6 +221,16 @@ class Instruction(SQLModel, table=True):
     # the brief. Ignored by publish/engage/auto runs. Parsed by
     # aismm/targets.py into typed buckets the per-platform search tools consume.
     engagement_targets: str = ""
+    # Where THIS instruction's X posts go, overriding the account's rotation.
+    # "" inherits the account (rotate through every community it has); "none"
+    # forces the home timeline; anything else is one community id, used for every
+    # run. A brand account often has one instruction for a niche community and
+    # another for the timeline, which the account-wide setting could not express.
+    twitter_community_id: str = ""
+    # Tri-state, as a string because Azure Table storage rejects None: "" inherits
+    # the account's switch, "yes"/"no" override it. Only sent alongside a
+    # community — the field means nothing on a normal post.
+    twitter_share_with_followers: str = ""
     publish_mode: PublishMode = PublishMode.dry_run
     media_pref: MediaPref = MediaPref.auto
     # Label this instruction's posts as AI-generated. On by default (EU AI Act

@@ -147,27 +147,91 @@ def community_ids(account) -> list[str]:
     return ids
 
 
+def parse_community_entries(raw: str) -> list[tuple[str, str]]:
+    """``[(id, name), …]`` from what the operator typed, in order, no repeats.
+
+    Accepts a bare list of ids (``123, 456``) and ids LABELLED by hand
+    (``123 = AI Builders``). The label matters because an id tells nobody
+    anything: X can usually resolve the name itself, but not for every app tier
+    or for a community the account has not joined, and typing it is better than
+    a page full of 19-digit numbers.
+
+    The rule is ONE ENTRY PER LINE once a line is labelled: a name may contain
+    commas ("AI, Robotics & Agents"), so a labelled line runs to its end. Commas
+    and semicolons still separate bare ids, which is what the box used to accept.
+    """
+    seen: set[str] = set()
+    entries: list[tuple[str, str]] = []
+
+    def add(cid: str, name: str = "") -> None:
+        cid = cid.strip()
+        if cid and cid not in seen:
+            seen.add(cid)
+            entries.append((cid, name.strip()))
+
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "=" in line:
+            cid, _, name = line.partition("=")
+            add(cid, name)
+            continue
+        for token in re.split(r"[\s,;]+", line):
+            add(token)
+    return entries
+
+
 def parse_community_ids(raw: str) -> list[str]:
-    """Split what the operator typed into ids, keeping their order, no repeats."""
-    seen, ids = set(), []
-    for part in re.split(r"[\s,;]+", raw or ""):
-        part = part.strip()
-        if part and part not in seen:
-            seen.add(part)
-            ids.append(part)
-    return ids
+    """Just the ids of :func:`parse_community_entries`."""
+    return [cid for cid, _name in parse_community_entries(raw)]
 
 
-def next_community(account) -> str:
+#: An instruction that deliberately posts to the home timeline, rather than one
+#: that has simply not been given a destination of its own.
+HOME_TIMELINE = "none"
+
+
+def community_names(account) -> dict:
+    """``{id: name}`` for the communities this account knows about.
+
+    Names are resolved once, when the operator saves the destination, and cached
+    here — an id is not something anyone recognises, and X charges per call.
+    """
+    catalog = (account.meta or {}).get("community_names") or {}
+    return {str(k): str(v) for k, v in catalog.items() if str(v).strip()}
+
+
+def community_label(account, community_id: str) -> str:
+    """A community's name if we know it, else the bare id."""
+    cid = str(community_id or "").strip()
+    if not cid:
+        return ""
+    return community_names(account).get(cid) or cid
+
+
+def next_community(account, instruction=None) -> str:
     """The community THIS post goes to. Empty string means the home timeline.
 
-    Rotation, not fan-out: one post per run, to the next community in the list.
-    Posting the same content to every community at once is several near-identical
-    posts from one account within seconds, which is what X's duplicate-content
-    rule describes — and it would multiply the cost of a pay-per-use API. A
-    scheduler posting fresh content on a cadence covers every community anyway,
-    with a genuinely different post each time.
+    An INSTRUCTION may pin its own destination, and that wins: one brand account
+    often has one instruction feeding a niche community and another posting to
+    the timeline, which a single account-wide setting cannot express.
+    ``twitter_community_id`` is ``""`` to inherit the account's rotation,
+    ``HOME_TIMELINE`` to force the timeline, or one community id.
+
+    Inheriting means rotation, not fan-out: one post per run, to the next
+    community in the list. Posting the same content to every community at once is
+    several near-identical posts from one account within seconds, which is what
+    X's duplicate-content rule describes — and it would multiply the cost of a
+    pay-per-use API. A scheduler posting fresh content on a cadence covers every
+    community anyway, with a genuinely different post each time.
     """
+    pinned = str(getattr(instruction, "twitter_community_id", "") or "").strip()
+    if pinned == HOME_TIMELINE:
+        return ""
+    if pinned:
+        return pinned
+
     ids = community_ids(account)
     if not ids:
         return ""
@@ -176,6 +240,21 @@ def next_community(account) -> str:
     except (TypeError, ValueError):
         cursor = 0
     return ids[cursor % len(ids)]
+
+
+def shares_with_followers(account, instruction=None) -> bool:
+    """Whether to set X's "Also share with followers" on this post.
+
+    Tri-state on the instruction: ``""`` inherits the account's switch, ``"yes"``
+    and ``"no"`` override it. The same post can be worth broadcasting from one
+    instruction and not from another.
+    """
+    override = str(getattr(instruction, "twitter_share_with_followers", "") or "").strip().lower()
+    if override in {"yes", "1", "true", "on"}:
+        return True
+    if override in {"no", "0", "false", "off"}:
+        return False
+    return bool((account.meta or {}).get("share_with_followers"))
 
 
 # X phrases the outreach-reply refusal a few ways; match on the stable parts so a
@@ -250,16 +329,29 @@ class Twitter(SocialPlatform):
     token_endpoint = f"{API}/oauth2/token"
     scopes = ["tweet.read", "tweet.write", "users.read", "media.write",
               "like.write", "dm.read", "dm.write", "offline.access"]
+    # Publishing needs these; the rest power engagement features that an account
+    # connected before they existed simply does not have.
+    REQUIRED_SCOPES = ("tweet.read", "tweet.write", "users.read", "media.write",
+                       "offline.access")
+    SCOPE_FEATURES = {"like.write": "liking posts",
+                      "dm.read": "reading direct messages",
+                      "dm.write": "answering direct messages"}
     use_pkce = True
     token_auth_style = "basic"
 
-    def after_publish(self, *, account, store, result) -> None:
+    def after_publish(self, *, account, store, result, instruction=None) -> None:
         """Move the community rotation on by one, once the post is live.
 
         Here rather than inside ``publish`` because it must happen only when the
         post actually landed: advancing on a failed attempt would silently skip a
         community for a whole cycle.
+
+        An instruction that PINNED its destination never used the rotation, so it
+        must not advance it either — otherwise a daily pinned instruction would
+        walk the cursor past the communities the rotating instructions feed.
         """
+        if str(getattr(instruction, "twitter_community_id", "") or "").strip():
+            return
         ids = community_ids(account)
         if len(ids) < 2:
             return
@@ -393,7 +485,7 @@ class Twitter(SocialPlatform):
 
             # Chosen ONCE for the whole thread: its later posts belong to the
             # same community as the first.
-            community_id = next_community(account)
+            community_id = next_community(account, instruction)
             first_id = ""
             reply_to = ""
             for index, text in enumerate(posts):
@@ -405,7 +497,7 @@ class Twitter(SocialPlatform):
                     # community, so this is the difference between reaching your
                     # audience and reaching a room. Sent ONLY with a community:
                     # the field means nothing on a normal post.
-                    if (account.meta or {}).get("share_with_followers"):
+                    if shares_with_followers(account, instruction):
                         payload["share_with_followers"] = True
                 # X's own "Made with AI" label — the switch its app shows under
                 # Content disclosures. Set on EVERY post of a thread: each post
@@ -542,6 +634,54 @@ class Twitter(SocialPlatform):
         return [{"id": str(c.get("id", "")), "name": c.get("name", ""),
                  "description": c.get("description", "")}
                 for c in payload.get("data", []) or [] if c.get("id")]
+
+    async def community_name(self, access_token: str, community_id: str) -> str:
+        """One community's NAME, from ``GET /2/communities/:id``.
+
+        A 19-digit id is not something anyone recognises, and an operator picking
+        a destination should see "AI Builders", not 1493446837214187523. Used to
+        label ids the account listing did not cover — a community the operator
+        pasted from a URL without having joined it, say.
+
+        Best effort by design: X is pay-per-use and this endpoint is not
+        available to every app tier, so a failure means "we could not learn the
+        name", never "this id is wrong". The caller falls back to the id and the
+        operator can type a label instead.
+        """
+        cid = str(community_id or "").strip()
+        if not cid:
+            return ""
+        try:
+            payload = await self._get(access_token, f"communities/{cid}",
+                                      {"community.fields": "id,name"})
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Could not look up X community %s: %s", cid, exc)
+            return ""
+        return str((payload.get("data") or {}).get("name") or "")
+
+    async def resolve_community_names(self, access_token: str, account: Account,
+                                      ids: list[str]) -> dict:
+        """``{id: name}`` for the given ids, as far as X will tell us.
+
+        Tries the account's joined-communities listing FIRST — one call for all of
+        them — and only then looks up individually whatever it did not cover.
+        """
+        names: dict[str, str] = {}
+        wanted = [str(i).strip() for i in (ids or []) if str(i).strip()]
+        if not wanted:
+            return names
+        try:
+            for community in await self.list_communities(access_token, account):
+                if community["id"] in wanted and community["name"]:
+                    names[community["id"]] = community["name"]
+        except Exception as exc:  # noqa: BLE001 - the per-id lookup still runs
+            logger.info("Could not list X communities for %s: %s", account.handle, exc)
+        for cid in wanted:
+            if cid not in names:
+                name = await self.community_name(access_token, cid)
+                if name:
+                    names[cid] = name
+        return names
 
     async def list_mentions(self, access_token: str, account: Account, *,
                             limit: int = 10) -> list[dict]:

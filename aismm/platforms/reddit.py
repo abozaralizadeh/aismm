@@ -109,6 +109,8 @@ class Reddit(SocialPlatform):
     auth_endpoint = f"{WWW}/api/v1/authorize"
     token_endpoint = f"{WWW}/api/v1/access_token"
     scopes = ["identity", "submit", "read", "privatemessages"]
+    REQUIRED_SCOPES = ("identity", "submit", "read")
+    SCOPE_FEATURES = {"privatemessages": "reading and answering direct messages"}
     token_auth_style = "basic"          # client id/secret as HTTP Basic
     scope_sep = " "
     # Without duration=permanent Reddit issues NO refresh token and the access

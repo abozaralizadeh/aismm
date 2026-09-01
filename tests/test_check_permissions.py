@@ -134,7 +134,7 @@ def test_a_missing_scope_is_named_on_x(dash, store, monkeypatch):
     account = _account(store, PlatformName.twitter,
                        granted_scopes=["tweet.read", "users.read"])   # no tweet.write
     page = _check(dash, account)
-    assert "MISSING" in page
+    assert "Publishing will FAIL" in page
     assert "tweet.write" in page
 
 
@@ -147,7 +147,7 @@ def test_a_full_scope_set_reads_healthy_on_x(dash, store, monkeypatch):
     monkeypatch.setattr(Twitter, "fetch_identity", identity)
     account = _account(store, PlatformName.twitter,
                        granted_scopes=list(Twitter.scopes))
-    assert "everything publishing needs is granted" in _check(dash, account)
+    assert "Looks healthy" in _check(dash, account)
 
 
 def test_a_rejected_x_token_says_reconnect_and_names_x(dash, store, monkeypatch):
@@ -174,7 +174,7 @@ def test_an_account_with_no_recorded_scopes_is_not_called_healthy(dash, store, m
     monkeypatch.setattr(Twitter, "fetch_identity", identity)
     page = _check(dash, _account(store, PlatformName.twitter))
     assert "No scope list is available" in page
-    assert "everything publishing needs is granted" not in page
+    assert "Looks healthy" not in page
 
 
 def test_the_page_advice_is_only_given_for_instagram(dash, store, monkeypatch):
@@ -189,3 +189,69 @@ def test_the_page_advice_is_only_given_for_instagram(dash, store, monkeypatch):
     page = _check(dash, account)
     assert "ticking this account's Page" not in page
     assert "Disconnect and reconnect to grant them" in page
+
+
+# --- optional scopes are not a publishing failure ---------------------------------------- #
+# Reported: a WORKING X account reported "Token is MISSING dm.read, dm.write —
+# that is why publishing fails". Neither scope has anything to do with
+# publishing; the check compared against every scope the connect asks for.
+
+def test_a_missing_dm_scope_does_not_claim_publishing_is_broken(dash, store, monkeypatch):
+    from aismm.platforms.twitter import Twitter
+
+    async def identity(_self, _token):
+        return Identity(external_id="9", handle="abo0zar")
+
+    monkeypatch.setattr(Twitter, "fetch_identity", identity)
+    account = _account(store, PlatformName.twitter,
+                       granted_scopes=list(Twitter.REQUIRED_SCOPES) + ["like.write"])
+    page = _check(dash, account)
+    assert "Publishing will FAIL" not in page
+    assert "Publishing works" in page
+
+
+def test_it_names_the_feature_that_is_unavailable_not_just_the_scope(dash, store, monkeypatch):
+    """"dm.read" means nothing to an operator; "reading direct messages" does."""
+    from aismm.platforms.twitter import Twitter
+
+    async def identity(_self, _token):
+        return Identity(external_id="9", handle="abo0zar")
+
+    monkeypatch.setattr(Twitter, "fetch_identity", identity)
+    account = _account(store, PlatformName.twitter,
+                       granted_scopes=list(Twitter.REQUIRED_SCOPES))
+    page = _check(dash, account)
+    assert "reading direct messages" in page
+    assert "answering direct messages" in page
+    assert "liking posts" in page
+
+
+def test_a_missing_publishing_scope_is_still_an_error(dash, store, monkeypatch):
+    from aismm.platforms.twitter import Twitter
+
+    async def identity(_self, _token):
+        return Identity(external_id="9", handle="abo0zar")
+
+    monkeypatch.setattr(Twitter, "fetch_identity", identity)
+    account = _account(store, PlatformName.twitter,
+                       granted_scopes=["tweet.read", "users.read"])
+    page = _check(dash, account)
+    assert "Publishing will FAIL" in page
+    assert "tweet.write" in page
+
+
+def test_every_platform_declares_what_publishing_actually_needs():
+    """Without the split, an optional scope reads as a publishing failure."""
+    from aismm.models import PlatformName as P
+    from aismm.platforms.registry import get_platform
+
+    for name in P:
+        platform = get_platform(name)
+        required = set(getattr(platform, "REQUIRED_SCOPES", ()) or ())
+        declared = set(platform.scopes)
+        assert required <= declared, f"{name.value} requires a scope it never asks for"
+        optional = declared - required if required else set()
+        features = getattr(platform, "SCOPE_FEATURES", {}) or {}
+        for scope in optional:
+            assert scope in features, (
+                f"{name.value}: {scope} is optional but nothing says what it powers")

@@ -41,8 +41,51 @@ from ..auth import oauth
 from . import sso
 from .metrics_display import format_metrics as _format_metrics
 from .platform_icons import icon as platform_icon
+from ..platforms.twitter import HOME_TIMELINE as TW_HOME_TIMELINE
+from ..platforms.twitter import community_ids as twitter_community_ids
 from .. import orchestrator, scheduler
 from ..store import get_store
+
+
+def account_groups(accounts) -> dict:
+    """``(platform, external_id) -> [rows, oldest first]``.
+
+    The LAST row in each group is the survivor — the most recently connected one,
+    holding the token the newest authorization minted. Reconnect and the duplicate
+    cleanup both pick it this way, so they can never disagree about which row is
+    the real account.
+    """
+    groups: dict[tuple, list] = {}
+    for account in accounts:
+        if account.external_id:
+            groups.setdefault((account.platform, account.external_id), []).append(account)
+    for group in groups.values():
+        group.sort(key=lambda a: a.created_at)
+    return groups
+
+
+def repoint_instructions(store, instructions, stale_ids: set, keep_id: str) -> int:
+    """Move every instruction targeting a stale account row onto ``keep_id``.
+
+    An instruction stores account IDs, so a duplicate row is not just untidy: the
+    instruction goes on pointing at a row whose token the newest authorization
+    invalidated, and publishing stops with nothing on the page to explain it.
+    Returns how many instructions were changed.
+    """
+    if not stale_ids:
+        return 0
+    changed = 0
+    for instruction in instructions:
+        ids = list(instruction.account_ids or [])
+        if not any(i in stale_ids for i in ids):
+            continue
+        # dict.fromkeys keeps order and collapses the duplicate that appears when
+        # an instruction targeted BOTH the stale row and the surviving one.
+        instruction.set_account_ids(
+            list(dict.fromkeys(keep_id if i in stale_ids else i for i in ids)))
+        store.upsert_instruction(instruction)
+        changed += 1
+    return changed
 
 
 class ReverseProxyPrefixMiddleware:
@@ -526,8 +569,54 @@ def create_app() -> Flask:
                    "refreshable": bool(store.get_tokens(a.id)[1])}
             for a in rows
         }
-        return render_template("accounts.html", accounts=rows,
-                               token_state=token_state, platforms=_platforms_view())
+
+        # What each account is actually FOR. Disconnecting one that three
+        # instructions publish through is a different decision from disconnecting
+        # an unused one, and the page said nothing either way.
+        used_by: dict[str, list[str]] = {}
+        for instruction in store.list_instructions(workspace_id=_workspace_id()):
+            for account_id in instruction.account_ids or []:
+                used_by.setdefault(account_id, []).append(instruction.name)
+
+        # Duplicates: the same platform account connected twice. Reconnect used to
+        # create a second row rather than updating the first, and the leftovers are
+        # actively harmful — an instruction points at ONE of them, and the other
+        # holds a token the newest authorization invalidated.
+        groups = account_groups(rows)
+        duplicates = {a.id: len(group) for group in groups.values() if len(group) > 1
+                      for a in group}
+        # The survivor is the last of each group — the same rule reconnect and the
+        # cleanup use, so the page can never disagree with them about which row is
+        # the real account.
+        superseded = {a.id for group in groups.values() if len(group) > 1
+                      for a in group[:-1]}
+
+        health = {}
+        for a in rows:
+            state = token_state[a.id]
+            platform = get_platform(a.platform)
+            granted = set((a.meta or {}).get("granted_scopes") or [])
+            required = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
+            if a.id in superseded:
+                health[a.id] = ("bad", "superseded by a newer connection")
+            elif state["stale"] and not state["refreshable"]:
+                health[a.id] = ("bad", "token expired and cannot renew — reconnect")
+            elif granted and (required - granted):
+                health[a.id] = ("bad", "missing a permission publishing needs")
+            elif granted and (set(platform.scopes) - granted):
+                health[a.id] = ("warn", "some optional features are not granted")
+            else:
+                health[a.id] = ("ok", "")
+
+        # Grouped, because a flat list of eight is where duplicates hide.
+        grouped: dict[str, list] = {}
+        for a in rows:
+            grouped.setdefault(a.platform.value, []).append(a)
+
+        return render_template("accounts.html", accounts=rows, grouped=grouped,
+                               token_state=token_state, platforms=_platforms_view(),
+                               used_by=used_by, duplicates=duplicates,
+                               superseded=superseded, health=health)
 
     @app.route("/accounts/<account_id>/community", methods=["POST"])
     def choose_twitter_community(account_id):
@@ -536,15 +625,35 @@ def create_app() -> Flask:
         _require_owner()
         if account.platform is not PlatformName.twitter:
             abort(404)
-        from ..platforms.twitter import parse_community_ids
+        from ..platforms.twitter import parse_community_entries
 
         meta = dict(account.meta)
-        ids = parse_community_ids(request.form.get("community_id", ""))
+        entries = parse_community_entries(request.form.get("community_id", ""))
+        ids = [cid for cid, _name in entries]
         bad = [c for c in ids if not c.isdigit()]
         if bad:
             flash(f"An X Community ID contains digits only — {', '.join(bad)} does not. "
-                  f"Leave the box blank for the home timeline.", "error")
+                  f"Write one per line as `ID = Name`, or leave the box blank for the "
+                  f"home timeline.", "error")
             return redirect(url_for("accounts"))
+
+        # Names, so nothing in this app ever asks a human to recognise a 19-digit
+        # number. A label the operator typed WINS: it is deliberate, and X cannot
+        # always answer (the endpoint is not on every app tier, and a community
+        # the account has not joined is not in its listing).
+        names = dict(meta.get("community_names") or {})
+        typed = {cid: name for cid, name in entries if name}
+        unlabelled = [cid for cid in ids if cid not in typed and cid not in names]
+        if unlabelled:
+            try:
+                token = tokens.valid_access_token_sync(account, store)
+                resolved = asyncio.run(get_platform(PlatformName.twitter)
+                                       .resolve_community_names(token, account, unlabelled))
+                names.update(resolved)
+            except Exception as exc:  # noqa: BLE001 - a missing name is cosmetic
+                logger.info("Could not resolve X community names: %s", exc)
+        names.update(typed)
+        names = {cid: name for cid, name in names.items() if cid in ids}
 
         share = request.form.get("share_with_followers") == "on"
         previous = meta.get("community_ids") or ([meta["community_id"]]
@@ -552,6 +661,7 @@ def create_app() -> Flask:
         if ids:
             meta["community_ids"] = ids
             meta["community_id"] = ids[0]        # the single-value form, still read by older code
+            meta["community_names"] = names
             meta["share_with_followers"] = share
             # Only reset the rotation when the LIST changed; re-saving the same
             # communities to flip the followers switch should not send the next
@@ -562,19 +672,22 @@ def create_app() -> Flask:
             # No community, no choice to remember: the flag only exists to widen
             # a community post, and leaving it set would silently apply to a
             # community added later.
-            for key in ("community_id", "community_ids", "share_with_followers",
-                        "community_cursor"):
+            for key in ("community_id", "community_ids", "community_names",
+                        "share_with_followers", "community_cursor"):
                 meta.pop(key, None)
         account.set_meta(meta)
         store.upsert_account(account)
 
+        def _label(cid):
+            return names.get(cid) or cid
+
         if len(ids) > 1:
             flash(f"X posts rotate through {len(ids)} communities, one per run, starting with "
-                  f"{ids[0]}"
+                  f"{_label(ids[0])}"
                   + (" — and go to your followers too." if share
                      else ". Followers will not see them."), "success")
         elif ids:
-            flash(f"X posts go to community {ids[0]}"
+            flash(f"X posts go to {_label(ids[0])}"
                   + (" and to your followers." if share
                      else " only — followers will not see them."), "success")
         else:
@@ -675,16 +788,88 @@ def create_app() -> Flask:
                   f"were recorded, or the provider returned none). {detail}", "success")
             return redirect(url_for("accounts"))
 
-        wanted = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
-        missing = sorted(wanted - set(granted))
-        if missing:
-            fix = ("Disconnect and reconnect, ticking this account's Page in the dialog."
-                   if account.platform is PlatformName.instagram
-                   else "Disconnect and reconnect to grant them.")
-            flash(f"Token is MISSING {', '.join(missing)} — that is why publishing fails. "
-                  f"{fix} {detail}", "error")
+        # Two different answers, and conflating them is what made a perfectly
+        # working X account report "publishing fails" because it had no dm.read.
+        # A missing REQUIRED scope breaks publishing; a missing optional one only
+        # switches off the feature it powers.
+        required = set(getattr(platform, "REQUIRED_SCOPES", ()) or platform.scopes)
+        optional = set(platform.scopes) - required
+        features = getattr(platform, "SCOPE_FEATURES", {}) or {}
+        missing_required = sorted(required - set(granted))
+        missing_optional = sorted(optional - set(granted))
+
+        reconnect = ("Disconnect and reconnect, ticking this account's Page in the dialog."
+                     if account.platform is PlatformName.instagram
+                     else "Disconnect and reconnect to grant them.")
+
+        if missing_required:
+            flash(f"Publishing will FAIL — the token is missing "
+                  f"{', '.join(missing_required)}. {reconnect} {detail}", "error")
+        elif missing_optional:
+            lost = ", ".join(sorted({features[scope] for scope in missing_optional
+                                     if scope in features}))
+            flash(f"Publishing works. Not granted: {', '.join(missing_optional)}"
+                  + (f" — so {lost} {'are' if ',' in lost else 'is'} unavailable "
+                     f"on this account." if lost else ".")
+                  + f" Everything else is fine; reconnect only if you want those. {detail}",
+                  "warning")
         else:
-            flash(f"Looks healthy — everything publishing needs is granted. {detail}", "success")
+            flash(f"Looks healthy — everything is granted. {detail}", "success")
+        return redirect(url_for("accounts"))
+
+    @app.route("/accounts/<account_id>/reconnect", methods=["POST"])
+    def reconnect_account(account_id):
+        """Re-authorize an EXISTING account, with the app that connected it.
+
+        Without this the only route back was the "Connect another" grid at the
+        bottom of the page, where the operator has to remember which app minted
+        this account — and picking the wrong one silently connects a different
+        thing. The account row (and its id, so instructions keep working) is
+        updated in place by the callback.
+        """
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        app_id = (account.meta or {}).get("app_id", "")
+        return redirect(url_for("oauth_start", platform=account.platform.value,
+                                app=app_id))
+
+    @app.route("/accounts/prune-duplicates", methods=["POST"])
+    def prune_duplicate_accounts():
+        """Delete superseded copies of an account, keeping the newest of each.
+
+        Reconnecting used to add a row instead of updating one, so an operator who
+        reconnected a Meta login ended up with every linked account twice. The
+        older copies hold tokens that the newest authorization invalidated, so
+        they are not a harmless mess: an instruction still pointing at one has
+        silently stopped publishing.
+        """
+        store = get_store()
+        _require_owner()
+        scope = _workspace_id()
+        groups = account_groups(store.list_accounts(workspace_id=scope))
+
+        removed, repointed = 0, 0
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            keep, stale = group[-1], group[:-1]
+            stale_ids = {row.id for row in stale}
+            # Repoint BEFORE deleting: an instruction whose only account row is
+            # about to disappear would otherwise be broken for good.
+            repointed += repoint_instructions(
+                store, store.list_instructions(workspace_id=scope), stale_ids, keep.id)
+            for row in stale:
+                store.delete_account(row.id)
+                removed += 1
+
+        if not removed:
+            flash("No duplicate accounts to clean up.", "success")
+        else:
+            note = (f" {repointed} instruction(s) were repointed at the surviving "
+                    f"account." if repointed else "")
+            flash(f"Removed {removed} superseded account row(s), keeping the newest "
+                  f"connection of each.{note}", "success")
         return redirect(url_for("accounts"))
 
     @app.route("/oauth/<platform>/start")
@@ -758,7 +943,21 @@ def create_app() -> Flask:
         if token.expires_in:
             expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=int(token.expires_in))
 
+        # Reconnecting must UPDATE the account, never add a second one.
+        # `upsert_account` keys on the row id, and a fresh Account() mints a new
+        # uuid — so every reconnect used to duplicate every account the login
+        # covers (one Meta login claims every linked Page, so reconnecting one
+        # Instagram account duplicated all of them). Worse than untidy: an
+        # instruction stores account IDs, so the instructions kept pointing at
+        # the OLD rows, whose tokens the re-authorization had just invalidated.
+        # The identity of an account is (platform, external_id) in a workspace.
+        callback_scope = workspaces.scope_for(callback_workspace)
+        groups = account_groups(store.list_accounts(workspace_id=callback_scope))
+        existing_accounts = {key: group[-1] for key, group in groups.items()}
+
         connected = []
+        reconnected = 0
+        adopted = 0
         for identity in identities:
             meta = dict(identity.meta)
             if app_id:
@@ -773,10 +972,33 @@ def create_app() -> Flask:
             # Platforms may override the token to store (Instagram: the PAGE token).
             access = meta.pop("access_token", token.access_token)
             refresh = meta.pop("refresh_token", token.refresh_token)
-            acct = Account(platform=name, handle=identity.handle,
-                           external_id=identity.external_id, expires_at=expires_at,
-                           workspace_id=connect_workspace)
-            acct.set_meta(meta)
+
+            acct = existing_accounts.get((name, identity.external_id))
+            if acct is not None:
+                # Keep the row (and its id, so instructions still point at it) and
+                # its operator-set settings — the X community list, the
+                # share-with-followers switch, the publish ledger and cooldown all
+                # live in meta and are not re-derivable from an OAuth callback.
+                kept = acct.meta or {}
+                merged = {**kept, **meta}
+                acct.handle = identity.handle or acct.handle
+                acct.expires_at = expires_at
+                acct.set_meta(merged)
+                reconnected += 1
+                # Duplicates from before reconnect updated in place: their
+                # instructions are still pointing at a row this authorization has
+                # just invalidated. Move them onto the account being kept, so a
+                # reconnect repairs the damage instead of leaving it.
+                stale = {row.id for row in groups.get((name, identity.external_id), [])
+                         if row.id != acct.id}
+                adopted += repoint_instructions(
+                    store, store.list_instructions(workspace_id=callback_scope),
+                    stale, acct.id)
+            else:
+                acct = Account(platform=name, handle=identity.handle,
+                               external_id=identity.external_id, expires_at=expires_at,
+                               workspace_id=connect_workspace)
+                acct.set_meta(meta)
             store.upsert_account(acct, access_token=access, refresh_token=refresh)
             connected.append((acct, identity.handle or identity.external_id))
 
@@ -785,9 +1007,19 @@ def create_app() -> Flask:
             return redirect(url_for("accounts"))
 
         names = ", ".join(handle for _acct, handle in connected)
-        flash(f"Connected {platform}: {names}"
-              + (f" ({len(connected)} accounts from one login)" if len(connected) > 1 else ""),
-              "success")
+        added = len(connected) - reconnected
+        moved = (f" {adopted} instruction(s) still pointing at an older duplicate now use "
+                 f"this connection." if adopted else "")
+        if reconnected and not added:
+            what = f"Reconnected {platform}: {names}.{moved}"
+        elif reconnected:
+            what = (f"Connected {platform}: {names} "
+                    f"({added} new, {reconnected} refreshed).{moved}")
+        else:
+            what = (f"Connected {platform}: {names}"
+                    + (f" ({len(connected)} accounts from one login)"
+                       if len(connected) > 1 else ""))
+        flash(what, "success")
         _warn_about_collateral_damage(store, [a for a, _ in connected], integ,
                                       workspace_id=connect_workspace)
         return redirect(url_for("accounts"))
@@ -946,6 +1178,27 @@ def create_app() -> Flask:
             instructions_url=instructions_url,
         )
 
+    def _twitter_communities():
+        """Every X community the workspace's accounts post to, with its NAME.
+
+        The instruction form offers a choice, not a text box: an operator should
+        never be asked to recall which 19-digit number is which. Grouped by
+        account, since two accounts can each have their own.
+        """
+        from ..platforms.twitter import community_ids as _ids
+        from ..platforms.twitter import community_names as _names
+
+        groups = []
+        for account in get_store().list_accounts(workspace_id=_workspace_id()):
+            if account.platform is not PlatformName.twitter:
+                continue
+            names = _names(account)
+            options = [{"id": cid, "name": names.get(cid) or cid} for cid in _ids(account)]
+            if options:
+                groups.append({"handle": account.handle or account.external_id,
+                               "options": options})
+        return groups
+
     @app.route("/instructions/new")
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
@@ -957,6 +1210,7 @@ def create_app() -> Flask:
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
+                               twitter_communities=_twitter_communities(),
                                tasks=list(InstructionTask))
 
     @app.route("/instructions/<instruction_id>/edit")
@@ -977,6 +1231,7 @@ def create_app() -> Flask:
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
+                               twitter_communities=_twitter_communities(),
                                tasks=list(InstructionTask))
 
     @app.route("/instructions", methods=["POST"])
@@ -995,6 +1250,22 @@ def create_app() -> Flask:
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.task_type = InstructionTask(f.get("task_type", "publish"))
         instr.engagement_targets = f.get("engagement_targets", "").strip()
+        # X destination. "" inherits the account's rotation, "none" is the home
+        # timeline, anything else is one community id. Validated against the ids
+        # the selected accounts actually have, so a stale pick (the community was
+        # removed from the account) falls back to inheriting rather than posting
+        # somewhere the operator can no longer see.
+        chosen_community = f.get("twitter_community_id", "").strip()
+        if chosen_community and chosen_community != TW_HOME_TIMELINE:
+            available = set()
+            for account in store.list_accounts(workspace_id=_workspace_id()):
+                if account.platform is PlatformName.twitter:
+                    available.update(twitter_community_ids(account))
+            if chosen_community not in available:
+                chosen_community = ""
+        instr.twitter_community_id = chosen_community
+        share = f.get("twitter_share_with_followers", "").strip().lower()
+        instr.twitter_share_with_followers = share if share in {"yes", "no"} else ""
         instr.media_pref = MediaPref(f.get("media_pref", "auto"))
         instr.disclose_ai = f.get("disclose_ai") == "on"
         instr.enabled = f.get("enabled") == "on"

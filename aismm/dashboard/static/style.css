@@ -219,8 +219,12 @@ main.legal hr { border: none; border-top: 1px solid var(--border); margin: 2rem 
 .platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
 .platform-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  min-width: 0; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; text-transform: capitalize;
+  min-width: 0; padding: 1rem; display: flex; flex-direction: column; gap: .5rem;
 }
+/* Capitalize only the platform NAME. Applied to the whole card it also rewrote
+   the app labels an operator typed — "from .env (default)" came out as
+   "From .Env (Default)". */
+.platform-card .platform-name { text-transform: capitalize; }
 .platform-name { font-weight: 600; font-size: 1.05rem;
   display: flex; align-items: center; gap: .45rem; }
 .connect-option { width: 100%; min-width: 0; max-width: 100%; display: flex; align-items: center; gap: .35rem; overflow: hidden; }
@@ -722,3 +726,15 @@ th .sort-active { color: var(--accent); }
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+
+/* A third flash state. "Publishing works, but this feature is off" is neither a
+   success nor an error, and painting it red sent operators to reconnect
+   perfectly healthy accounts. */
+.flash-warning { background: rgba(240,180,80,.12); border-color: var(--warn); }
+
+/* Accounts: grouped by platform, because a flat list is where duplicates hide. */
+.account-group { display: flex; align-items: center; gap: .4rem; margin: 1.4rem 0 .5rem;
+  font-size: 1rem; text-transform: capitalize; }
+.account-group .platform-icon { opacity: .9; }
+.account-why { margin: 0 0 .5rem; color: var(--muted); }
+.account-superseded { opacity: .72; border-style: dashed; }

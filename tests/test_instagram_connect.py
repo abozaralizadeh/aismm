@@ -218,7 +218,7 @@ def test_the_check_names_the_missing_permission(dash, store, monkeypatch):
     monkeypatch.setattr(Instagram, "inspect_token", inspect)
     page = dash.test_client().post(f"/accounts/{account.id}/check",
                                    follow_redirects=True).get_data(as_text=True)
-    assert "MISSING" in page
+    assert "Publishing will FAIL" in page
     assert "pages_show_list" in page
 
 
@@ -231,12 +231,12 @@ def test_the_check_confirms_a_healthy_token(dash, store, monkeypatch):
 
     async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True, "profile_id": "9",
-                "scopes": list(Instagram.REQUIRED_SCOPES)}
+                "scopes": list(Instagram.DEFAULT_SCOPES)}
 
     monkeypatch.setattr(Instagram, "inspect_token", inspect)
     page = dash.test_client().post(f"/accounts/{account.id}/check",
                                    follow_redirects=True).get_data(as_text=True)
-    assert "everything publishing needs is granted" in page
+    assert "Looks healthy" in page
 
 
 def test_checking_an_unknown_account_is_404(dash):
@@ -284,7 +284,7 @@ def test_a_page_token_with_full_scopes_reads_healthy(dash, store, monkeypatch):
 
     async def inspect(_self, _token, _account=None):
         return {"type": "PAGE", "is_valid": True,
-                "scopes": list(Instagram.REQUIRED_SCOPES), "profile_id": "9"}
+                "scopes": list(Instagram.DEFAULT_SCOPES), "profile_id": "9"}
 
     monkeypatch.setattr(Instagram, "inspect_token", inspect)
     page = dash.test_client().post(f"/accounts/{account.id}/check",

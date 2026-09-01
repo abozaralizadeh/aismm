@@ -108,6 +108,14 @@ class SocialPlatform(ABC):
     auth_endpoint: str = ""
     token_endpoint: str = ""
     scopes: list[str] = []
+    # What PUBLISHING actually needs, as opposed to what the connect asks for.
+    # Empty means "all of `scopes`". The distinction only matters for the
+    # accounts page's permission check: an account missing `dm.read` cannot read
+    # DMs, but it publishes perfectly well — reporting that as "publishing fails"
+    # sends the operator to reconnect a working account.
+    REQUIRED_SCOPES: tuple[str, ...] = ()
+    # Optional scope -> the feature it powers, in words an operator recognises.
+    SCOPE_FEATURES: dict[str, str] = {}
     use_pkce: bool = False
     token_auth_style: str = "body"     # "body" | "basic"
     scope_sep: str = " "
@@ -167,7 +175,8 @@ class SocialPlatform(ABC):
         """
         return [await self.fetch_identity(access_token)]
 
-    def after_publish(self, *, account: Account, store, result: "PublishResult") -> None:
+    def after_publish(self, *, account: Account, store, result: "PublishResult",
+                      instruction=None) -> None:
         """Per-platform bookkeeping once a live post has landed. Default: nothing.
 
         An extension point rather than another branch in ``perform_publish``:
