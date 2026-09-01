@@ -490,8 +490,27 @@ RULES
 """
 
 
+def _unavailable_block(unavailable) -> str:
+    """State plainly what this run has NO tool for.
+
+    A run that cannot read DMs must not report that it checked them and found
+    none — that reads as "there is nothing to answer" when the truth is "I was
+    never given the means to look", and it is indistinguishable from a healthy
+    quiet inbox.
+    """
+    items = [i for i in (unavailable or []) if i]
+    if not items:
+        return ""
+    return ("NOT AVAILABLE THIS RUN: " + "; ".join(items) + ".\n"
+            "This platform supports them, but no tool for them was enabled on this "
+            "instruction. Do NOT say you checked them, and do NOT report them as "
+            "having nothing to answer — you cannot see them at all. Say in your "
+            "finish_engagement summary that they were not checked because the tool "
+            "was not available, so the operator can enable it.\n\n")
+
+
 def build_engagement_kickoff(*, account, instruction, platform_caps, state=None,
-                             files=None) -> str:
+                             files=None, unavailable=None) -> str:
     """Compose the first user turn for an ENGAGE run."""
     attachments, continuity, operator = _context_blocks(instruction, state, files)
 
@@ -502,10 +521,12 @@ def build_engagement_kickoff(*, account, instruction, platform_caps, state=None,
         f"{operator}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n\n"
+        f"{_unavailable_block(unavailable)}"
         f"Respond to new comments, mentions and direct messages now. Start by calling "
         f"get_context, then read_memory, then list the account's recent comments/mentions "
-        f"(and DMs, if a DM tool is available) with the read tools. "
-        f"Finish with finish_engagement."
+        f"AND its inbound DMs with the read tools — every read tool you have, not just "
+        f"the comment one. Finish with finish_engagement, and say in the summary which "
+        f"of those you actually read."
     )
 
 
@@ -701,7 +722,7 @@ ALWAYS
 
 
 def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files=None,
-                       performance="") -> str:
+                       performance="", unavailable=None) -> str:
     """Compose the first user turn for an AUTO run (agent decides publish vs engage)."""
     attachments, continuity, operator = _context_blocks(instruction, state, files)
 
@@ -718,8 +739,10 @@ def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files
         f"image:{platform_caps.supports_image} video:{platform_caps.supports_video}; "
         f"recommended orientation: {platform_caps.default_orientation}; "
         f"caption limit: {platform_caps.caption_limit}.\n\n"
-        f"Decide whether to publish a new post or to engage with new comments/mentions, "
-        f"then do that one job. Start by calling get_context, then read_memory, then check "
-        f"the account's recent comments/mentions before you decide. Finish with the single "
-        f"terminal that matches what you did (publish, finish_engagement, or report_failure)."
+        f"{_unavailable_block(unavailable)}"
+        f"Decide whether to publish a new post or to engage with new comments/mentions and "
+        f"DMs, then do that one job. Start by calling get_context, then read_memory, then "
+        f"check the account's recent comments/mentions AND its inbound DMs before you "
+        f"decide. Finish with the single terminal that matches what you did (publish, "
+        f"finish_engagement, or report_failure)."
     )

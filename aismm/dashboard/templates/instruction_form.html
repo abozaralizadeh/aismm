@@ -459,6 +459,18 @@
   <fieldset class="form-section">
     <legend>Tools the agent may use</legend>
     <div class="section-body">
+      {% if tool_gaps %}
+        <div class="flash flash-warning">
+          <strong>This instruction cannot see
+          {{ tool_gaps | map(attribute='what') | unique | join(' or ') }}.</strong>
+          Its accounts support them, but the tools are not ticked below — so a run
+          finds nothing and reports nothing to answer, having never looked. This is
+          what happens to an instruction whose tool list was saved before a tool
+          existed. Tick
+          {% for gap in tool_gaps %}<code>{{ gap.tool }}</code>{% if not loop.last %}, {% endif %}{% endfor %},
+          or clear the selection entirely to allow every tool.
+        </div>
+      {% endif %}
       <div class="field">
         <div class="multiselect" data-multiselect data-total="{{ total }}">
           {# Lets the save route tell "picker submitted, nothing ticked" from

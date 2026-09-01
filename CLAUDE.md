@@ -438,6 +438,18 @@ so `me` is the Page, and no reconnect is forced. It also needs **`pages_manage_m
 `instagram_manage_messages`; both stay in `OPTIONAL_SCOPES` because one unavailable scope kills the
 whole dialog.
 
+**A run must never report finding nothing when it had no tool to look with.** An engage run
+summarised "scanned ... and inbound DMs; no new comments or DMs needed replies" on an account with
+unanswered DMs: `Instruction.tools_json` narrows what `build_tools` offers, and a list ticked before
+the DM tools existed never receives them — so the run truthfully found nothing, having never looked,
+in words that read as "your inbox is empty". `manager_agent._engagement_gaps` compares the
+platform's `Capabilities` against the tool names actually built and passes them to the kickoff as
+`unavailable`; `prompts._unavailable_block` tells the agent it cannot see them, must not claim it
+checked, and must SAY SO in the summary. It is logged as a warning, and
+`dashboard._engagement_tool_gaps` puts the same warning on the instruction's edit page, naming the
+tool to tick. The engage/auto kickoffs now say "AND its inbound DMs … every read tool you have" —
+the old "(and DMs, if a DM tool is available)" invited skipping them.
+
 **`list_dms` RAISES; it must never swallow a failure into `[]`.** That swallow is what hid the bug
 above for weeks: an account that *could not read* DMs looked identical to an account with none. All
 three platforms' tool wrappers already turn an exception into `{"error": …, "message": …}` the agent

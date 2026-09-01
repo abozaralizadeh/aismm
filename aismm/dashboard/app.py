@@ -1213,6 +1213,35 @@ def create_app() -> Flask:
                                twitter_communities=_twitter_communities(),
                                tasks=list(InstructionTask))
 
+    def _engagement_tool_gaps(instr):
+        """Engagement work this instruction's accounts CAN do but it may not.
+
+        A narrowed tool list never receives a tool registered after it was saved,
+        so an instruction ticked before the DM tools existed reports "no DMs
+        needed replies" for ever, having no way to look. Nothing on the page said
+        so — the tool simply was not in the list.
+        """
+        from ..agent.manager_agent import _ENGAGEMENT_TOOLS
+
+        if instr is None or not instr.tools:      # empty list = every tool
+            return []
+        if instr.task_type not in (InstructionTask.engage, InstructionTask.auto):
+            return []
+        enabled = set(instr.tools)
+        gaps, seen = [], set()
+        for account in store_accounts_for(instr):
+            caps = get_platform(account.platform).capabilities
+            for capability, tool, what in _ENGAGEMENT_TOOLS.get(account.platform.value, []):
+                if getattr(caps, capability, False) and tool not in enabled and tool not in seen:
+                    seen.add(tool)
+                    gaps.append({"tool": tool, "what": what,
+                                 "platform": account.platform.value})
+        return gaps
+
+    def store_accounts_for(instr):
+        by_id = {a.id: a for a in get_store().list_accounts(workspace_id=_workspace_id())}
+        return [by_id[i] for i in (instr.account_ids or []) if i in by_id]
+
     @app.route("/instructions/<instruction_id>/edit")
     def edit_instruction(instruction_id):
         store = get_store()
@@ -1227,6 +1256,7 @@ def create_app() -> Flask:
                                    instr.schedule, starts_at=instr.schedule_start_at),
                                next_run=_next_run_info(instr, store),
                                tool_groups=_tool_catalog(instr.tools),
+                               tool_gaps=_engagement_tool_gaps(instr),
                                llm_options=_llm_options(),
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),

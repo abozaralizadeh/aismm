@@ -33,6 +33,38 @@ logger = logging.getLogger("aismm.agent")
 MAX_TURNS = 30
 
 
+# What an engagement run needs a tool for, and the capability that says the
+# platform can do it at all. Keyed by the READ tool, since a run that cannot read
+# cannot reply either.
+_ENGAGEMENT_TOOLS = {
+    "instagram": [("supports_comments", "instagram_recent_comments", "comments"),
+                  ("supports_dms", "instagram_dms", "direct messages")],
+    "twitter": [("supports_comments", "x_replies", "replies and mentions"),
+                ("supports_dms", "x_dms", "direct messages")],
+    "reddit": [("supports_dms", "reddit_dms", "direct messages")],
+    "youtube": [("supports_comments", "youtube_comments", "comments")],
+}
+
+
+def _engagement_gaps(caps, tool_names: set, account: Account) -> list[str]:
+    """Things this platform CAN do that this run has no tool for.
+
+    Reported live: an engage run summarised "scanned ... and inbound DMs; no new
+    comments or DMs needed replies" on an account with unanswered DMs. The DM
+    tools were never in its tool set — the instruction had narrowed its tool
+    selection before those tools existed, and `build_tools` only ever offers what
+    was ticked — so the run truthfully found nothing, having never looked.
+
+    Telling the agent what it is missing is the difference between a misleading
+    summary and one the operator can act on.
+    """
+    gaps = []
+    for capability, tool, what in _ENGAGEMENT_TOOLS.get(account.platform.value, []):
+        if getattr(caps, capability, False) and tool not in tool_names:
+            gaps.append(f"{what} (no `{tool}` tool this run)")
+    return gaps
+
+
 def _performance_block(store: Store, account: Account) -> str:
     """Render the "how recent posts did" kickoff section for this account.
 
@@ -175,13 +207,15 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                                            build_outreach_kickoff)
     else:
         agent_name, instructions, build = "SocialManager", MANAGER_INSTRUCTIONS, build_kickoff
+    tools = build_tools(state, instruction.tools)
     agent = Agent(
         name=agent_name,
         instructions=instructions,
-        tools=build_tools(state, instruction.tools),
+        tools=tools,
         model=model,
         model_settings=agent_model_settings(temperature=0.8),
     )
+    tool_names = {getattr(t, "name", "") for t in tools}
     if prompt_override.strip():
         # A retry sends exactly what the operator edited — no memory, note or
         # performance is re-inlined, so what they read in the box is what runs.
@@ -189,6 +223,19 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     else:
         build_kwargs = dict(account=account, instruction=instruction,
                             platform_caps=caps, state=instruction_state, files=attachments)
+        # What this run genuinely CANNOT do, so the agent does not report having
+        # checked something it was never given a tool for. An instruction that
+        # narrowed its tool list before a tool existed never receives it, and the
+        # run then truthfully says "no DMs needed replies" having never looked.
+        if engage or auto:
+            gaps = _engagement_gaps(caps, tool_names, account)
+            if gaps:
+                logger.warning(
+                    "Instruction %r cannot check %s on %s: the tool is not enabled for this "
+                    "instruction. Tick it in the instruction's tool list, or clear the list "
+                    "to allow every tool.",
+                    instruction.name, "; ".join(gaps), account.handle or account.external_id)
+            build_kwargs["unavailable"] = gaps
         # Close the feedback loop: a run that may PUBLISH sees how its recent posts
         # performed, from turn one. Engage and outreach runs post nothing, so they
         # are skipped (and their kickoff builders take no performance kwarg).
