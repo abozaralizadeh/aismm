@@ -434,9 +434,15 @@ instagram` and `POST /{page-id}/messages` (Meta's own Instagram Messaging guide)
 id for `/conversations` errors. `Instagram._messaging_target` is the single place that decides:
 `meta["page_id"]` (recorded at connect by BOTH `fetch_identity` and `fetch_identities`), falling
 back to **`me`** for accounts connected before it was stored — the account token IS the page token,
-so `me` is the Page, and no reconnect is forced. It also needs **`pages_manage_metadata`** next to
-`instagram_manage_messages`; both stay in `OPTIONAL_SCOPES` because one unavailable scope kills the
-whole dialog.
+so `me` is the Page, and no reconnect is forced. `instagram_manage_messages` stays in
+`OPTIONAL_SCOPES`. **Do NOT add `pages_manage_metadata` to the default scopes** — Meta's older
+Messenger guide lists it for Instagram messaging (mostly for webhook subscription, which this app
+does not use: it polls `/conversations`), but it is not offered on every app's Permissions and
+Features page, and putting it in `DEFAULT_SCOPES` broke a working login outright with
+`Invalid Scopes: pages_manage_metadata` — the exact hazard this file already warns about, repeated.
+It lives in `EXTRA_SCOPES`: documented, never requested, opt in via `INSTAGRAM_SCOPES` if your app
+has it. `list_dms` raises Graph's own error plus what to check, so whether a scope is really the
+blocker is answered by Meta rather than guessed.
 
 **A run must never report finding nothing when it had no tool to look with.** An engage run
 summarised "scanned ... and inbound DMs; no new comments or DMs needed replies" on an account with

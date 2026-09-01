@@ -524,18 +524,52 @@ def test_the_page_id_is_recorded_at_connect(monkeypatch):
     assert identities[0].meta["page_id"] == IG_PAGE
 
 
-def test_the_messaging_scopes_are_both_requested():
-    """Meta's guide requires pages_manage_metadata alongside
-    instagram_manage_messages for /{page-id}/conversations."""
-    scopes = _ig().DEFAULT_SCOPES
-    assert "instagram_manage_messages" in scopes
-    assert "pages_manage_metadata" in scopes
+def test_the_dm_scope_is_requested():
+    assert "instagram_manage_messages" in _ig().DEFAULT_SCOPES
 
 
-def test_the_messaging_scopes_stay_optional():
-    """One unavailable scope kills the WHOLE dialog, so these must never be able
-    to take publishing down with them."""
+def test_the_dm_scope_stays_optional():
+    """One unavailable scope kills the WHOLE dialog, so it must never be able to
+    take publishing down with it."""
     ig = _ig()
-    for scope in ("instagram_manage_messages", "pages_manage_metadata"):
-        assert scope in ig.OPTIONAL_SCOPES
-        assert scope not in ig.REQUIRED_SCOPES
+    assert "instagram_manage_messages" in ig.OPTIONAL_SCOPES
+    assert "instagram_manage_messages" not in ig.REQUIRED_SCOPES
+
+
+def test_pages_manage_metadata_is_never_requested_by_default():
+    """Adding it to the default set broke a working login outright:
+
+        Invalid Scopes: pages_manage_metadata
+
+    It is not offered on every app's Permissions and Features page, so an app
+    cannot even ask for it — and Meta refuses the WHOLE dialog over one scope it
+    does not have, taking publishing down with it. Meta's older Messenger guide
+    lists it for Instagram messaging, mostly for webhook subscription, which this
+    app does not use: it polls /conversations instead. Opt in via INSTAGRAM_SCOPES
+    if your app has it and the read is genuinely refused without it.
+    """
+    ig = _ig()
+    assert "pages_manage_metadata" not in ig.DEFAULT_SCOPES
+    assert "pages_manage_metadata" not in ig.scopes
+    assert "pages_manage_metadata" in ig.EXTRA_SCOPES     # documented, not requested
+
+
+def test_a_refused_read_names_what_to_check(monkeypatch):
+    """The likely causes are all invisible from the error alone: a scope never
+    granted, a Page the login missed, or an account connected before any of it."""
+    _ig_transport(monkeypatch, lambda r: httpx.Response(
+        400, json={"error": {"message": "(#200) Permissions error", "code": 200}}))
+    with pytest.raises(RuntimeError) as caught:
+        _run(_ig().list_dms("t", _ig_account()))
+    message = str(caught.value)
+    assert "Permissions error" in message           # Graph's own words survive
+    assert "RECONNECTED" in message
+    assert "instagram_manage_messages" in message
+    assert "linked Page" in message
+
+
+def test_the_failure_names_the_node_it_asked(monkeypatch):
+    """Page id vs `me` vs the IG user id is the first thing to check."""
+    _ig_transport(monkeypatch, lambda r: httpx.Response(400, json={"error": {}}))
+    with pytest.raises(RuntimeError, match=IG_PAGE):
+        _run(_ig().list_dms("t", _ig_account()))

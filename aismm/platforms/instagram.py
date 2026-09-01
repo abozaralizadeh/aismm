@@ -207,8 +207,9 @@ class Instagram(SocialPlatform):
         # The Instagram Messaging API (GET /{page-id}/conversations, POST
         # /{page-id}/messages) reads and answers DMs — messaging hangs off the
         # linked PAGE, not the IG user id. Needs the App-Review gated
-        # `instagram_manage_messages` AND `pages_manage_metadata`, both kept
-        # OPTIONAL below so an app without them can still connect for publishing.
+        # `instagram_manage_messages`, kept OPTIONAL below so an app without it
+        # can still connect for publishing. See EXTRA_SCOPES for why
+        # pages_manage_metadata is deliberately NOT requested.
         supports_dms=True,
     )
     auth_endpoint = f"https://www.facebook.com/{GRAPH_VERSION}/dialog/oauth"
@@ -237,20 +238,26 @@ class Instagram(SocialPlatform):
         "instagram_manage_comments",   # reply/hide/delete comments
         "instagram_manage_insights",   # media + account metrics
         "instagram_manage_messages",   # read + answer DMs
-        # Required alongside instagram_manage_messages: Meta's own Instagram
-        # messaging guide lists instagram_basic + instagram_manage_messages +
-        # pages_manage_metadata for /{page-id}/conversations. Without it the
-        # conversations read is refused, which is indistinguishable from an
-        # empty inbox unless the error is surfaced.
-        "pages_manage_metadata",
+    )
+    # Scopes NOT requested by default, however useful, because an app that has
+    # not been granted them cannot even ask: Meta refuses the whole dialog with
+    # "Invalid Scopes: …" and the operator cannot connect anything at all.
+    #
+    # `pages_manage_metadata` is listed by Meta's own Instagram messaging guide
+    # alongside instagram_manage_messages for GET /{page-id}/conversations, and
+    # adding it here to the DEFAULT set immediately broke a working login — the
+    # exact failure this file already warns about, made twice. If DM reading is
+    # refused for permissions, request this in App Review and then add it via
+    # INSTAGRAM_SCOPES; the DM read reports Meta's own error, so you will see
+    # whether it is really the blocker rather than guessing.
+    EXTRA_SCOPES = (
+        "pages_manage_metadata",       # Instagram messaging, per Meta's guide
     )
     DEFAULT_SCOPES = REQUIRED_SCOPES + OPTIONAL_SCOPES
     SCOPE_FEATURES = {
         "instagram_manage_comments": "reading and answering comments",
         "instagram_manage_insights": "post and account metrics",
         "instagram_manage_messages": "reading and answering direct messages",
-        "pages_manage_metadata": "reading direct messages (needed with "
-                                 "instagram_manage_messages)",
     }
 
     @property
@@ -859,17 +866,34 @@ class Instagram(SocialPlatform):
         IGSID, which is the RECIPIENT a reply is sent to (``POST /{page-id}/
         messages`` addresses the person, not a thread id).
 
-        Needs ``instagram_manage_messages`` AND ``pages_manage_metadata``; an
-        account connected before those were granted must be reconnected. A failure
+        Needs ``instagram_manage_messages``; an account connected before it was
+        granted must be reconnected. A failure
         RAISES rather than returning ``[]`` — the tool layer turns it into a
         message the agent can act on, and "cannot read DMs" must not look like
         "no DMs", which is exactly how this went unnoticed.
         """
-        payload = await self._graph_get(
-            access_token, f"{self._messaging_target(account)}/conversations",
-            {"platform": "instagram",
-             "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
-             "limit": max(1, min(limit, 50))})
+        target = self._messaging_target(account)
+        try:
+            payload = await self._graph_get(
+                access_token, f"{target}/conversations",
+                {"platform": "instagram",
+                 "fields": f"id,updated_time,messages.limit(10){{{self.MESSAGE_FIELDS}}}",
+                 "limit": max(1, min(limit, 50))})
+        except Exception as exc:  # noqa: BLE001 - re-raised, never swallowed
+            # Graph's own words plus what to check. Raised, not returned as [] —
+            # "cannot read DMs" must never look like "no DMs". The extra line
+            # matters because the likely causes are all invisible from here: a
+            # scope the app was never granted, a Page the login did not cover, or
+            # an account connected before any of this existed.
+            raise RuntimeError(
+                f"Could not read Instagram conversations for "
+                f"{account.handle or account.external_id} (via {target}): {exc}\n"
+                f"Check, in order: the account has been RECONNECTED since "
+                f"instagram_manage_messages was added; the login covered this "
+                f"account's Page; and the app has instagram_manage_messages "
+                f"approved. Instagram messaging runs through the linked Page, not "
+                f"the Instagram user id."
+            ) from exc
         # Our own outbound messages come back as `from` = the IG business account
         # on some threads and the Page on others, so both count as "me".
         mine = {str(account.external_id or ""), str((account.meta or {}).get("page_id") or "")}

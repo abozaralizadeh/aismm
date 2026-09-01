@@ -35,9 +35,15 @@ GUIDES: dict[str, dict] = {
             "`pages_show_list` and `pages_read_engagement`. Publishing to accounts you "
             "don't own needs App Review.",
             "⚠️ Meta rejects the *entire* login dialog if your app cannot request even "
-            "one scope — \"Invalid Scopes: …\". `instagram_manage_insights` needs App "
-            "Review; if the dialog refuses, drop it from `INSTAGRAM_SCOPES` in your .env "
-            "and add it back once it is approved.",
+            "one scope — \"Invalid Scopes: …\". `instagram_manage_insights` and "
+            "`instagram_manage_messages` need App Review; if the dialog refuses, drop the "
+            "one it names from `INSTAGRAM_SCOPES` in your .env and add it back once it is "
+            "approved. Only add a scope your app's **Permissions and Features** page "
+            "actually lists — one it has never been offered refuses the whole dialog, "
+            "publishing included.",
+            "Answering **DMs** needs `instagram_manage_messages`, and a reconnect after it "
+            "is granted. Messaging runs through the linked Facebook Page, so the login must "
+            "cover that Page.",
             "⚠️ **Several Instagram accounts? Tick EVERY Page in ONE login.** A single "
             "Connect claims every Page the login administers, so they all arrive at once. "
             "Doing them one at a time breaks the earlier ones: this app holds a single "
