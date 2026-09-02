@@ -56,6 +56,29 @@ async def _check(account) -> int:
         print(f"  Token           : could not inspect — {exc}")
 
     failures = 0
+
+    # The RAW conversation list, before any filtering of ours. This line is what
+    # separates "Instagram did not return the thread" from "we dropped it" — a
+    # distinction that cost several rounds of guessing.
+    try:
+        raw = await platform._graph_get(
+            token, f"{target}/conversations",
+            {"platform": "instagram",
+             "fields": "id,updated_time,participants,messages.limit(1){id,from,created_time}",
+             "limit": 50})
+        threads_raw = raw.get("data") or []
+        print(f"  Threads (raw)   : {len(threads_raw)} returned by Graph")
+        for convo in threads_raw:
+            names = ", ".join(
+                str(person.get("username") or person.get("id", "?"))
+                for person in ((convo.get("participants") or {}).get("data") or [])) or "?"
+            print(f"      · {names}   updated {convo.get('updated_time', '?')}")
+        if (raw.get("paging") or {}).get("next"):
+            print("      (more pages exist — list_dms follows them)")
+    except Exception as exc:  # noqa: BLE001
+        failures += 1
+        print(f"  Threads (raw)   : FAILED — {exc}")
+
     try:
         dms = await platform.list_dms(token, account, limit=50)
         threads = {d.get("thread_id") or d.get("conversation_id") for d in dms}
@@ -72,10 +95,13 @@ async def _check(account) -> int:
         if not dms:
             print("      (an EMPTY list here means Instagram really returned no inbound "
                   "messages — the call itself succeeded)")
-        print("      NOTE: Instagram never returns a Requests-folder thread that has "
-              "been\n            inactive for 30+ days, and a DM from a non-follower "
-              "STARTS in Requests.\n            Accept it in the Instagram app and it "
-              "becomes visible here.")
+        print("      NOTE: a thread missing from BOTH lists above was not returned by "
+              "Instagram\n            at all. Check, in order: is the DM on THIS account "
+              "(run this with no\n            --handle to scan every connected one); is it "
+              "sitting unaccepted in\n            Requests or the General tab (a DM from a "
+              "non-follower starts in\n            Requests — accept it in the app and it "
+              "appears here); has that\n            Requests thread been inactive for 30+ "
+              "days, which the API cannot reach.")
     except Exception as exc:  # noqa: BLE001
         failures += 1
         print(f"  DMs             : FAILED\n      {exc}")
@@ -107,6 +133,9 @@ async def main() -> int:
     if not accounts:
         print("No matching Instagram account.")
         return 1
+    if not (args.account or args.handle) and len(accounts) > 1:
+        print(f"Scanning all {len(accounts)} connected Instagram account(s) — a DM you "
+              f"cannot find\nis often simply on a different one.")
 
     failures = sum([await _check(a) for a in accounts])
     print("\nNothing failed." if not failures
