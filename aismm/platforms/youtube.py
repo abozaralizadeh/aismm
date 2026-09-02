@@ -14,17 +14,34 @@ The caption's first line becomes the title; the remainder becomes the descriptio
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 
 from .. import disclosure
 from ..assets import read_bytes
+from ..config import YOUTUBE_PRIVACY_CHOICES, settings
 from ..models import Account, PlatformName
 from .base import Capabilities, Identity, PublishResult, SocialPlatform
 from .registry import register
 
 logger = logging.getLogger("aismm.platforms.youtube")
+
+def resolve_privacy(instruction=None) -> str:
+    """Visibility for this upload: the instruction's choice, else the deployment's.
+
+    Read through ``settings`` rather than ``os.getenv`` — config is a frozen
+    singleton built at import, and a stray getenv is invisible to the tests that
+    pin the environment. An unrecognised value falls back to the default rather
+    than being sent to YouTube, which rejects it with a generic 400.
+    """
+    chosen = str(getattr(instruction, "youtube_privacy", "") or "").strip().lower()
+    if chosen in YOUTUBE_PRIVACY_CHOICES:
+        return chosen
+    if chosen:
+        logger.warning("Ignoring unknown YouTube privacy %r; using %s",
+                       chosen, settings.youtube_privacy)
+    return settings.youtube_privacy
+
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
@@ -90,9 +107,10 @@ class YouTube(SocialPlatform):
         # Read up front: the bytes may live in blob storage rather than on disk.
         video_bytes = read_bytes(asset_path)
         title, _, description = caption.partition("\n")
+        privacy = resolve_privacy(instruction)
         metadata = {
             "snippet": {"title": title[:100] or "Untitled", "description": description.strip()},
-            "status": {"privacyStatus": os.getenv("YOUTUBE_PRIVACY", "private"),
+            "status": {"privacyStatus": privacy,
                        "selfDeclaredMadeForKids": False,
                        # containsSyntheticMedia drives YouTube's altered/synthetic
                        # content disclosure ("How this content was made").
@@ -117,8 +135,26 @@ class YouTube(SocialPlatform):
             put.raise_for_status()
             data = put.json()
         video_id = data.get("id", "")
+        # YouTube can accept the upload and LOCK it private anyway: an API project
+        # that has not passed the compliance audit has every upload forced to
+        # private, and that cannot be appealed — the video has to be re-uploaded
+        # through an audited client. Reporting "published" over a silently private
+        # video is the worst outcome, so compare what we asked for with what came
+        # back and say so on the run.
+        landed = str(((data.get("status") or {}).get("privacyStatus") or "")).lower()
+        notice = ""
+        if landed and landed != privacy:
+            notice = (
+                f"YouTube published this as {landed.upper()}, not {privacy}. An API project "
+                f"that has not passed YouTube's compliance audit has every upload locked to "
+                f"private, and the lock cannot be appealed — the video must be re-uploaded "
+                f"through an audited client. Request an audit for this Google Cloud project, "
+                f"or set the visibility by hand in YouTube Studio."
+            )
+            logger.warning("YouTube downgraded %s from %s to %s", video_id, privacy, landed)
         return PublishResult(url=f"https://youtu.be/{video_id}" if video_id else "",
-                             external_id=video_id, raw=data)
+                             external_id=video_id,
+                             raw={**data, **({"notice": notice} if notice else {})})
 
     async def fetch_post_metrics(self, access_token: str, account: Account, *,
                                  external_id: str) -> dict | None:

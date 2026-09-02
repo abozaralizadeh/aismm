@@ -97,6 +97,11 @@ class LLMSettings:
     supports_temperature: bool | None = None
 
 
+#: What YouTube uploads default to when an instruction does not say. "private"
+#: is the safe default AND what an unaudited API project is forced to anyway.
+YOUTUBE_PRIVACY_CHOICES = ("private", "unlisted", "public")
+
+
 @dataclass(frozen=True)
 class ImageSettings:
     api_key: str = ""
@@ -317,6 +322,11 @@ class Settings:
     # Days a generated asset stays on local disk once blob storage has a copy.
     # The local folder is a CACHE when blob is configured; without pruning a VM
     # fills up and the next run fails trying to write its media. 0 disables it.
+    # Default privacy for a YouTube upload; an instruction may override it.
+    # NOTE: an API project that has not passed YouTube's compliance audit has its
+    # uploads LOCKED to private whatever is requested, and the lock cannot be
+    # appealed — the video must be re-uploaded through an audited client.
+    youtube_privacy: str = "private"
     asset_retention_days: int = 14
     # How many days back the performance feedback loop keeps polling a published
     # post for fresh metrics (likes/views/…). A months-old post's counts barely
@@ -434,6 +444,9 @@ def load_settings() -> Settings:
             apim_api_version=os.getenv("APIM_API_VERSION", "2025-04-01-preview"),
             supports_temperature=_opt_bool("LLM_SUPPORTS_TEMPERATURE"),
         ),
+        youtube_privacy=(os.getenv("YOUTUBE_PRIVACY", "private").strip().lower()
+                         if os.getenv("YOUTUBE_PRIVACY", "private").strip().lower()
+                         in YOUTUBE_PRIVACY_CHOICES else "private"),
         image=ImageSettings(
             api_key=os.getenv("AZURE_OPENAI_API_KEY_DALLE", ""),
             endpoint=os.getenv("AZURE_OPENAI_ENDPOINT_DALLE", ""),

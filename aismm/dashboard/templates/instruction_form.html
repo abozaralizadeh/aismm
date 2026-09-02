@@ -172,6 +172,32 @@
         </div>
       </label>
 
+      {% if has_youtube %}
+        {% set privacy = (instruction.youtube_privacy if instruction else '') %}
+        <label data-publish-only>
+          <span class="field-label">YouTube visibility</span>
+          <select name="youtube_privacy">
+            <option value="" {% if not privacy %}selected{% endif %}>
+              Use the deployment default ({{ settings.youtube_privacy }})</option>
+            {% for choice in youtube_privacy_choices %}
+              <option value="{{ choice }}" {% if privacy == choice %}selected{% endif %}>
+                {{ choice | capitalize }}</option>
+            {% endfor %}
+          </select>
+          <span class="hint">
+            What this instruction's uploads are published as. <strong>Public</strong> goes
+            live immediately; <strong>unlisted</strong> is reachable by link only;
+            <strong>private</strong> is you only.
+            <br>⚠️ A Google Cloud project that has <strong>not passed YouTube's API
+            compliance audit</strong> has every upload locked to private whatever is
+            requested here, and that lock cannot be appealed — the video has to be
+            re-uploaded through an audited client. If that happens the run says so.
+            <a href="https://developers.google.com/youtube/v3/guides/quota_and_compliance_audits"
+               target="_blank" rel="noopener">Request an audit ↗</a>
+          </span>
+        </label>
+      {% endif %}
+
       {% if twitter_communities %}
         {% set pinned = instruction.twitter_community_id if instruction else '' %}
         <details class="account-section" {% if pinned %}open{% endif %}>

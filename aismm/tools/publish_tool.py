@@ -420,6 +420,12 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     # anyway, or the next scheduled run knocks again and Meta extends the block.
     reconciled = bool((result.raw or {}).get("reconciled"))
     publish_error = (result.raw or {}).get("publish_error", "")
+    # A platform may accept a post and quietly change something about it — YouTube
+    # locks an unaudited project's uploads to private however they were requested.
+    # Reporting a clean "published" over that is the worst outcome, so whatever
+    # the platform wants the operator to know rides here onto the run and the
+    # agent's result.
+    notice = str((result.raw or {}).get("notice") or "").strip()
     if reconciled:
         logger.warning("Publish reconciled for %s: Instagram errored (%s) but the post is live "
                        "at %s", account.handle or account.external_id, publish_error, result.url)
@@ -445,13 +451,15 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     run.log = (run.log + f"\nPublished {kind} post: {result.url}"
                + (f"\nRECONCILED: Instagram reported an error ({publish_error}) but the post "
                   f"is live. Publishing paused so the next run does not knock again."
-                  if reconciled else "")).strip()
+                  if reconciled else "")
+               + (f"\nNOTE: {notice}" if notice else "")).strip()
     store.update_run(run)
     state["result"] = {"mode": "live", "url": result.url, "kind": kind,
                        **({"reconciled": True} if reconciled else {})}
     return {"status": "published", "mode": "live", "url": result.url,
             **({"note": f"Instagram reported {publish_error!r} but the post IS live."}
                if reconciled else {}),
+            **({"notice": notice} if notice else {}),
             "reminder": ("This IS published and recorded. Call update_memory now to advance "
                          "your position past this item so the next run does not repeat it.")}
 

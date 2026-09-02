@@ -21,7 +21,7 @@ from flask import (
 from markupsafe import Markup, escape
 from werkzeug.utils import secure_filename
 
-from ..config import settings
+from ..config import YOUTUBE_PRIVACY_CHOICES, settings
 from ..assets import browser_url, public_url
 from .. import attachments, cooldown, llm_access, tokens, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
@@ -1199,6 +1199,10 @@ def create_app() -> Flask:
                                "options": options})
         return groups
 
+    def _has_youtube() -> bool:
+        return any(a.platform is PlatformName.youtube
+                   for a in get_store().list_accounts(workspace_id=_workspace_id()))
+
     @app.route("/instructions/new")
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
@@ -1211,6 +1215,8 @@ def create_app() -> Flask:
                                video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
+                               has_youtube=_has_youtube(),
+                               youtube_privacy_choices=YOUTUBE_PRIVACY_CHOICES,
                                tasks=list(InstructionTask))
 
     def _engagement_tool_gaps(instr):
@@ -1262,6 +1268,8 @@ def create_app() -> Flask:
                                video_options=_provider_options("video"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
+                               has_youtube=_has_youtube(),
+                               youtube_privacy_choices=YOUTUBE_PRIVACY_CHOICES,
                                tasks=list(InstructionTask))
 
     @app.route("/instructions", methods=["POST"])
@@ -1281,6 +1289,8 @@ def create_app() -> Flask:
         instr.task_type = InstructionTask(f.get("task_type", "publish"))
         instr.engagement_targets = f.get("engagement_targets", "").strip()
         instr.engagement_policy = f.get("engagement_policy", "").strip()
+        privacy = f.get("youtube_privacy", "").strip().lower()
+        instr.youtube_privacy = privacy if privacy in YOUTUBE_PRIVACY_CHOICES else ""
         # X destination. "" inherits the account's rotation, "none" is the home
         # timeline, anything else is one community id. Validated against the ids
         # the selected accounts actually have, so a stale pick (the community was

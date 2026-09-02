@@ -228,6 +228,11 @@ class Instruction(SQLModel, table=True):
     # operator knows which this is. Empty falls back to the prompt's stated
     # default, which the instruction always overrides.
     engagement_policy: str = ""
+    # YouTube visibility for THIS instruction's uploads: "" inherits the
+    # deployment default (YOUTUBE_PRIVACY), else private/unlisted/public. Per
+    # instruction because one channel commonly runs a public series and a
+    # private/unlisted staging instruction from the same account.
+    youtube_privacy: str = ""
     # Where THIS instruction's X posts go, overriding the account's rotation.
     # "" inherits the account (rotate through every community it has); "none"
     # forces the home timeline; anything else is one community id, used for every

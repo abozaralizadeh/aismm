@@ -659,6 +659,16 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
   transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a
   size instead of letting the API fail with an unexplained error.
+- **YouTube visibility is per instruction** (`Instruction.youtube_privacy` → `youtube.
+  resolve_privacy`; `""` inherits `settings.youtube_privacy`, env `YOUTUBE_PRIVACY`). It used to be
+  a bare `os.getenv` inside the platform — deployment-wide, and invisible to the tests that pin the
+  environment, which is exactly what the "no `os.getenv` outside config.py" rule exists to stop.
+  **An API project that has not passed YouTube's compliance audit has EVERY upload locked to
+  private** whatever is requested, and the lock cannot be appealed (the video must be re-uploaded
+  through an audited client) — so `publish` compares the requested `privacyStatus` with the one in
+  the response and puts the difference in `PublishResult.raw["notice"]`. `publish_tool` appends any
+  `notice` to `run.log` and returns it to the agent: a clean "published" over a silently private
+  video is the worst outcome. Absence of `status` in the response is NOT evidence of a downgrade.
 - **AI disclosure is per instruction too** (`Instruction.disclose_ai` checkbox). The global
   `AI_DISCLOSURE_ENABLED` is the master — an instruction may opt out below it, never back on.
 

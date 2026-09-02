@@ -280,6 +280,7 @@ configured, the same code simply retries in place.
 |---|---|
 | `LLM_PROVIDER` | `azure` or `apim`. |
 | `AZURE_OPENAI_MODEL` | Chat deployment name (both providers). |
+| `YOUTUBE_PRIVACY` | Default visibility for YouTube uploads: `private` (default), `unlisted` or `public`. Each instruction can override it. |
 | `LLM_SUPPORTS_TEMPERATURE` | Whether the model accepts `temperature`. Unset = work it out from the name; reasoning models (o1/o3/o4, gpt-5.x) reject it. |
 | `AZURE_OPENAI_API_KEY` / `_ENDPOINT` / `_API_VERSION` | Azure-direct LLM. |
 | `APIM_BASE_URL` / `APIM_SUBSCRIPTION_KEY` / `APIM_KEY_HEADER` / `APIM_API_VERSION` | APIM LLM. |
