@@ -61,11 +61,14 @@ async def _check(account) -> int:
     # separates "Instagram did not return the thread" from "we dropped it" — a
     # distinction that cost several rounds of guessing.
     try:
+        # Deliberately ONE message per thread and a small page: this probe exists
+        # to answer "did Graph return the thread", and asking for more is what
+        # made the real read fail with "reduce the amount of data" on a busy inbox.
         raw = await platform._graph_get(
             token, f"{target}/conversations",
             {"platform": "instagram",
              "fields": "id,updated_time,participants,messages.limit(1){id,from,created_time}",
-             "limit": 50})
+             "limit": 15})
         threads_raw = raw.get("data") or []
         print(f"  Threads (raw)   : {len(threads_raw)} returned by Graph")
         for convo in threads_raw:
@@ -78,6 +81,25 @@ async def _check(account) -> int:
     except Exception as exc:  # noqa: BLE001
         failures += 1
         print(f"  Threads (raw)   : FAILED — {exc}")
+
+    # A thread you can see in the app but not here is almost always sitting in a
+    # folder the API does not serve. Meta documents folders as UNSUPPORTED for
+    # Instagram, so this is an experiment, not a feature — but one call answers
+    # "is it in Requests/General" without an afternoon of accept-and-retry.
+    for folder in ("inbox", "other", "page_done", "pending"):
+        try:
+            probe = await platform._graph_get(
+                token, f"{target}/conversations",
+                {"platform": "instagram", "folder": folder,
+                 "fields": "id,participants", "limit": 15})
+            found = probe.get("data") or []
+            names = "; ".join(
+                ", ".join(str(person.get("username") or person.get("id", "?"))
+                          for person in ((convo.get("participants") or {}).get("data") or []))
+                for convo in found) or "—"
+            print(f"  folder={folder:<10}: {len(found)} thread(s)  {names}")
+        except Exception as exc:  # noqa: BLE001 - an unsupported folder is a RESULT
+            print(f"  folder={folder:<10}: not served — {str(exc).splitlines()[0][:90]}")
 
     try:
         dms = await platform.list_dms(token, account, limit=50)

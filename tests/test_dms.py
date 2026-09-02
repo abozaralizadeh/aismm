@@ -687,3 +687,134 @@ def test_the_human_agent_tag_is_never_sent(monkeypatch):
     _run(_ig().send_dm("t", _ig_account(), recipient_id="555", text="hi"))
     assert "HUMAN_AGENT" not in sent["body"].upper()
     assert "human_agent" not in inspect.getsource(ig.Instagram.send_dm).split('"""')[2]
+
+
+# --- Graph refuses an expensive QUERY; the fix is to ask for less ---------------------- #
+# Live: a busy inbox answered `500 Please reduce the amount of data you're asking
+# for [code=1]` while a quiet account on the same app worked. The cost of one call
+# is `limit` × `messages.limit`, and the first version asked for 50 × 20 = 1000
+# message objects — a request tuned on the account with no DMs, failing on the one
+# that had them.
+
+def _too_much(request):
+    return httpx.Response(500, json={"error": {
+        "message": "Please reduce the amount of data you're asking for", "code": 1}})
+
+
+def test_the_first_conversations_page_is_small(monkeypatch):
+    asked = []
+
+    def handler(request):
+        asked.append(request.url.params)
+        return httpx.Response(200, json={"data": []})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account(), limit=200))
+    assert int(asked[0]["limit"]) <= 15
+
+
+def test_an_over_large_query_is_retried_smaller(monkeypatch):
+    attempts = []
+
+    def handler(request):
+        attempts.append((int(request.url.params["limit"]), request.url.params["fields"]))
+        if len(attempts) == 1:
+            return _too_much(request)
+        return httpx.Response(200, json={"data": [{"id": "c1", "messages": {"data": [
+            _msg("m1", "555", "hello", "2026-09-02T10:00:00+0000")]}}]})
+
+    _ig_transport(monkeypatch, handler)
+    items = _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert [i["id"] for i in items] == ["m1"]          # it recovered
+    assert attempts[1][0] < attempts[0][0]             # fewer conversations
+    assert "messages.limit(10)" in attempts[1][1]      # and fewer messages each
+
+
+def test_it_keeps_shrinking_until_graph_accepts(monkeypatch):
+    attempts = []
+
+    def handler(request):
+        attempts.append(int(request.url.params["limit"]))
+        if len(attempts) < 4:
+            return _too_much(request)
+        return httpx.Response(200, json={"data": []})
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert attempts == sorted(attempts, reverse=True)
+    assert attempts[-1] >= 1
+
+
+def test_it_gives_up_rather_than_looping_forever(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return _too_much(request)
+
+    _ig_transport(monkeypatch, handler)
+    with pytest.raises(RuntimeError, match="reduce the amount of data"):
+        _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert len(calls) < 12                             # bounded, not a hang
+
+
+def test_only_the_too_large_error_is_retried(monkeypatch):
+    """A permission or token error fails identically at any size — retrying it
+    just spends calls."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(403, json={"error": {
+            "message": "(#200) Permissions error", "code": 200}})
+
+    _ig_transport(monkeypatch, handler)
+    with pytest.raises(RuntimeError):
+        _run(_ig().list_dms("t", _ig_account()))
+    assert len(calls) == 1
+
+
+def test_the_retry_resumes_from_the_same_cursor(monkeypatch):
+    """Shrinking must not silently skip the page it was refused on."""
+    seen = []
+
+    def handler(request):
+        after = request.url.params.get("after")
+        seen.append(after)
+        if len(seen) == 1:
+            return httpx.Response(200, json={
+                "data": [{"id": "c1", "messages": {"data": [
+                    _msg("m1", "555", "one", "2026-09-02T10:00:00+0000")]}}],
+                "paging": {"next": "http://n", "cursors": {"after": "CUR"}}})
+        if len(seen) == 2:
+            return _too_much(request)
+        return httpx.Response(200, json={"data": [{"id": "c2", "messages": {"data": [
+            _msg("m2", "666", "two", "2026-09-01T10:00:00+0000")]}}]})
+
+    _ig_transport(monkeypatch, handler)
+    items = _run(_ig().list_dms("t", _ig_account(), limit=40))
+    assert seen[1] == "CUR" and seen[2] == "CUR"      # retried, not skipped
+    assert {i["id"] for i in items} == {"m1", "m2"}
+
+
+# --- a switch in the Instagram app, not a permission we can fix ------------------------- #
+
+def test_message_access_disabled_says_what_to_actually_do(monkeypatch):
+    """Subcode 2534041 is the account holder's own privacy switch. Telling them to
+    reconnect and check scopes sends them the wrong way entirely."""
+    _ig_transport(monkeypatch, lambda r: httpx.Response(403, json={"error": {
+        "message": "(#200) The account owner has disabled access to instagram direct messages.",
+        "code": 200, "error_subcode": 2534041}}))
+    with pytest.raises(RuntimeError) as caught:
+        _run(_ig().list_dms("t", _ig_account()))
+    message = str(caught.value)
+    assert "Allow access to messages" in message
+    assert "no reconnect will fix it" in message
+    assert "RECONNECTED since" not in message         # the wrong advice is absent
+
+
+def test_other_permission_errors_still_get_the_reconnect_advice(monkeypatch):
+    _ig_transport(monkeypatch, lambda r: httpx.Response(403, json={"error": {
+        "message": "(#200) Permissions error", "code": 200}}))
+    with pytest.raises(RuntimeError, match="RECONNECTED since"):
+        _run(_ig().list_dms("t", _ig_account()))

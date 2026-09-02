@@ -493,6 +493,21 @@ automated reply more than **24 hours** after the person's last message. **Never 
 `HUMAN_AGENT`** — it extends the window to 7 days but Meta requires a real person to apply it and
 names loss of API access as the consequence of using it for automation.
 
+**The COST of a `/conversations` call is `limit` × `messages.limit`, and Graph refuses an
+expensive query rather than trimming it.** 50 × 20 = 1000 message objects answered `500 Please
+reduce the amount of data you're asking for [code=1]` on the one account that actually had DMs,
+while the quiet account it was tuned on worked — so the first page is now `DM_CONVERSATION_PAGE`
+(15), and `_read_conversations` HALVES both the page and the nested message limit and retries **the
+same cursor** on `TooMuchData`, down to a floor. Only that error is retried: a permission or token
+failure fails identically at any size, and `code=1` is Graph's catch-all "API Unknown", so the
+MESSAGE is what identifies it — matching on the code alone would swallow real errors.
+
+**Subcode 2534041 is a switch in the Instagram APP, not a permission** — "The account owner has
+disabled access to instagram direct messages". No scope, token or reconnect fixes it; the owner has
+to turn *Settings → Messages and story replies → Connected tools → Allow access to messages* back
+on. `list_dms` swaps its whole remediation paragraph for that one, because the standard "reconnect
+and check your scopes" advice sends the operator the wrong way for hours.
+
 **`list_dms` RAISES; it must never swallow a failure into `[]`.** That swallow is what hid the bug
 above for weeks: an account that *could not read* DMs looked identical to an account with none. All
 three platforms' tool wrappers already turn an exception into `{"error": …, "message": …}` the agent

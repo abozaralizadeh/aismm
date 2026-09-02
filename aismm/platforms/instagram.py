@@ -46,6 +46,17 @@ MAX_MEDIA_PAGE_TOTAL = 500
 # thread, not a message. The per-thread cap only bounds how far back inside a
 # single busy conversation we look.
 MAX_DM_CONVERSATIONS = 200
+# Conversations asked for in ONE call. `limit` × `messages.limit` is the real cost
+# of the request, and 50 × 20 = 1000 message objects made Graph answer
+#   500 "Please reduce the amount of data you're asking for" [code=1]
+# on a busy inbox — a request that works on a quiet account and fails on the one
+# that actually has DMs. Paging is what covers the rest, so a small page costs
+# nothing but a round trip.
+DM_CONVERSATION_PAGE = 15
+# Floors for the adaptive back-off below. One conversation with five messages is
+# the smallest useful question; if Graph refuses that, the size is not the problem.
+DM_MIN_PAGE = 1
+DM_MIN_MESSAGES = 5
 # Graph returns detail for at most the 20 most recent messages of a conversation.
 DM_MESSAGES_PER_CONVERSATION = 20
 # Instagram only allows a free-form reply within 24 hours of the person's last
@@ -199,6 +210,25 @@ def _graph_error(exc: httpx.HTTPStatusError) -> tuple[str, dict]:
             + (f" [{detail}]" if detail else "")), err
 
 
+#: What subcode 2534041 actually needs. It is a switch in the Instagram APP, not
+#: anything about the app registration, the token or the scopes — so the usual
+#: "reconnect and check your scopes" advice sends the operator the wrong way.
+_MESSAGE_ACCESS_DISABLED = (
+    "This one is a setting on the ACCOUNT, not a permission problem — no reconnect "
+    "will fix it. In the Instagram app: Settings and privacy → Messages and story "
+    "replies → Connected tools → turn ON 'Allow access to messages'. Then re-run "
+    "this. (The account owner has to do it; it cannot be set through the API.)"
+)
+
+
+class TooMuchData(RuntimeError):
+    """Graph refused the QUERY as too expensive, not the request as invalid.
+
+    Distinct from every other failure because the fix is mechanical — ask for
+    less and try again — where a permission or token error would just fail again.
+    """
+
+
 def _raise_graph(exc: httpx.HTTPStatusError) -> None:
     """Re-raise a Graph failure with the body included and no token in the text.
 
@@ -209,6 +239,10 @@ def _raise_graph(exc: httpx.HTTPStatusError) -> None:
     code, subcode = err.get("code"), err.get("error_subcode")
     if code in _RATE_LIMIT_CODES or subcode in _BLOCKED_SUBCODES:
         raise RateLimited(message) from None
+    # code=1 is Graph's catch-all "API Unknown", so the MESSAGE is what makes this
+    # one identifiable — matching on the code alone would swallow real errors.
+    if code == 1 and "reduce the amount of data" in (err.get("message") or "").lower():
+        raise TooMuchData(message) from None
     raise RuntimeError(message) from None
 
 
@@ -893,6 +927,52 @@ class Instagram(SocialPlatform):
         """
         return str((account.meta or {}).get("page_id") or "me")
 
+    async def _read_conversations(self, access_token: str, target: str,
+                                  wanted: int) -> list[dict]:
+        """Page ``/conversations``, shrinking the ask when Graph says it is too big.
+
+        The cost of one call is ``limit`` × ``messages.limit``, and Graph answers
+        ``500 … reduce the amount of data`` [code=1] rather than returning a
+        smaller result — so a request tuned on a quiet inbox fails on the busy one
+        that actually has DMs to answer. Halving both and retrying the SAME cursor
+        is the documented remedy; paging still covers everything, it just takes
+        another round trip. Only :class:`TooMuchData` is retried — a permission or
+        token error would fail identically at any size.
+        """
+        collected: list[dict] = []
+        page = min(wanted, DM_CONVERSATION_PAGE)
+        per_thread = DM_MESSAGES_PER_CONVERSATION
+        after = ""
+        while True:
+            params = {
+                "platform": "instagram",
+                "fields": (f"id,updated_time,"
+                           f"messages.limit({per_thread}){{{self.MESSAGE_FIELDS}}}"),
+                "limit": max(1, min(page, wanted - len(collected))),
+            }
+            if after:
+                params["after"] = after
+            try:
+                payload = await self._graph_get(
+                    access_token, f"{target}/conversations", params)
+            except TooMuchData:
+                if page <= DM_MIN_PAGE and per_thread <= DM_MIN_MESSAGES:
+                    raise
+                page = max(DM_MIN_PAGE, page // 2)
+                per_thread = max(DM_MIN_MESSAGES, per_thread // 2)
+                logger.info("Graph refused the conversations query as too large; "
+                            "retrying with %d conversation(s) × %d message(s)",
+                            page, per_thread)
+                continue
+            collected.extend(payload.get("data") or [])
+            if len(collected) >= wanted:
+                break
+            paging = payload.get("paging") or {}
+            after = ((paging.get("cursors") or {}).get("after") or "")
+            if not after or not paging.get("next"):
+                break
+        return collected[:wanted]
+
     async def list_dms(self, access_token: str, account: Account, *,
                        limit: int = 25) -> list[dict]:
         """INBOUND direct messages awaiting a reply, across ALL conversations.
@@ -938,41 +1018,24 @@ class Instagram(SocialPlatform):
         target = self._messaging_target(account)
         wanted = max(1, min(int(limit or 25), MAX_DM_CONVERSATIONS))
         try:
-            conversations: list[dict] = []
-            params = {
-                "platform": "instagram",
-                "fields": (f"id,updated_time,"
-                           f"messages.limit({DM_MESSAGES_PER_CONVERSATION})"
-                           f"{{{self.MESSAGE_FIELDS}}}"),
-                "limit": min(wanted, 50),
-            }
-            while True:
-                payload = await self._graph_get(access_token, f"{target}/conversations",
-                                                params)
-                conversations.extend(payload.get("data") or [])
-                if len(conversations) >= wanted:
-                    break
-                paging = payload.get("paging") or {}
-                after = ((paging.get("cursors") or {}).get("after") or "")
-                if not after or not paging.get("next"):
-                    break
-                params = {**params, "after": after,
-                          "limit": min(wanted - len(conversations), 50)}
-            conversations = conversations[:wanted]
+            conversations = await self._read_conversations(access_token, target, wanted)
         except Exception as exc:  # noqa: BLE001 - re-raised, never swallowed
             # Graph's own words plus what to check. Raised, not returned as [] —
-            # "cannot read DMs" must never look like "no DMs". The extra line
-            # matters because the likely causes are all invisible from here: a
-            # scope the app was never granted, a Page the login did not cover, or
-            # an account connected before any of this existed.
+            # "cannot read DMs" must never look like "no DMs".
+            #
+            # Subcode 2534041 is NOT ours to fix and the generic advice below is
+            # actively misleading for it: the account holder has switched off
+            # "Allow access to messages" in the Instagram app, so no scope, token
+            # or reconnect will help until they turn it back on.
             raise RuntimeError(
                 f"Could not read Instagram conversations for "
                 f"{account.handle or account.external_id} (via {target}): {exc}\n"
-                f"Check, in order: the account has been RECONNECTED since "
-                f"instagram_manage_messages was added; the login covered this "
-                f"account's Page; and the app has instagram_manage_messages "
-                f"approved. Instagram messaging runs through the linked Page, not "
-                f"the Instagram user id."
+                + (_MESSAGE_ACCESS_DISABLED if "2534041" in str(exc) else
+                   "Check, in order: the account has been RECONNECTED since "
+                   "instagram_manage_messages was added; the login covered this "
+                   "account's Page; and the app has instagram_manage_messages "
+                   "approved. Instagram messaging runs through the linked Page, not "
+                   "the Instagram user id.")
             ) from exc
         # Our own outbound messages come back as `from` = the IG business account
         # on some threads and the Page on others, so both count as "me".
