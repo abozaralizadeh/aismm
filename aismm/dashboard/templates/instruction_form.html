@@ -132,6 +132,20 @@
         </label>
       </div>
 
+        <label data-engage-only hidden>
+          <span class="field-label">Reply policy</span>
+          <textarea name="engagement_policy" rows="3"
+            placeholder="Answer every genuine question. Politely decline sales pitches rather than ignoring them. Never reply to anything abusive.">{{ instruction.engagement_policy if instruction else '' }}</textarea>
+          <span class="hint">
+            <strong>Who gets an answer</strong>, in your words — this overrides the agent's
+            default. Whether a cold sales DM deserves a polite decline or silence is a
+            decision about <em>your</em> account, so it is yours to make.
+            Leave it empty and the default applies: answer genuine messages, leave
+            harassment and trolling alone, treat unsolicited promotion as not worth a reply.
+            Either way the run's summary names what it skipped and why.
+          </span>
+        </label>
+
       <label><span class="field-label">Brief / persona / directive <span class="req" title="Required">*</span></span>
         <textarea name="brief" rows="6"
           placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
@@ -600,12 +614,18 @@
   var autoWarn = form.querySelector('[data-auto-warn]');
   var postOnly = Array.prototype.slice.call(form.querySelectorAll('[data-publish-only]'));
   var outreachOnly = Array.prototype.slice.call(form.querySelectorAll('[data-outreach-only]'));
+  // The reply policy applies to every task that answers people, so it shows for
+  // engage, outreach AND auto — auto can choose to engage.
+  var engageOnly = Array.prototype.slice.call(form.querySelectorAll('[data-engage-only]'));
 
   function sync() {
     var v = task.value;
     if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
     postOnly.forEach(function (el) { el.hidden = v === 'engage' || v === 'outreach'; });
     outreachOnly.forEach(function (el) { el.hidden = v !== 'outreach'; });
+    engageOnly.forEach(function (el) {
+      el.hidden = !(v === 'engage' || v === 'outreach' || v === 'auto');
+    });
   }
   task.addEventListener('change', sync);
   sync();

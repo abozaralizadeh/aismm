@@ -36,16 +36,26 @@ from .models import PublishMode, StagedPost, StagedStatus
 logger = logging.getLogger("aismm.engagement")
 
 
-def note_read(state: dict, tool_name: str) -> None:
-    """Record that a read tool actually ran this run.
+def note_read(state: dict, tool_name: str, *, unanswered: int | None = None) -> None:
+    """Record that a read tool ran, and how much it found still unanswered.
 
     The run summary is model-written prose, and an engage run reported "read
     comments across 12 recent posts/reels, all recent mentions, and inbound DMs"
     on an account whose DMs it had not touched. What was READ therefore has to be
     recorded in code, exactly like the reply tally and the publish ledger — a
     claim the model makes about its own behaviour is not evidence.
+
+    ``unanswered`` is the second half of that. A run reporting "0 replied, 0
+    staged, 0 skipped" is ambiguous: it reads as "the inbox was empty" when it can
+    equally mean "I saw messages and chose to answer none of them" — which is what
+    happened to a promotional DM the agent classified as spam and silently
+    dropped. Counting what was WAITING makes the two distinguishable without
+    trusting the model to admit the difference.
     """
     state.setdefault("read_tools_used", set()).add(tool_name)
+    if unanswered is not None:
+        seen = state.setdefault("engagement_seen", {})
+        seen[tool_name] = max(int(unanswered), int(seen.get(tool_name, 0)))
 
 # A reply refused for volume reasons still means the platform is throttling this
 # account; back off like a rate-limited post does.

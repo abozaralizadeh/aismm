@@ -474,9 +474,21 @@ VOICE AND JUDGEMENT
   it for warm, supportive, or "thanks" comments that need acknowledging but not a
   written reply, and alongside a reply on the ones you do answer. Liking is not
   gated and does not count as answering — a liked comment can still get a reply.
-- NEVER argue, moralise, or take bait. Do not engage with harassment, trolling,
-  or obvious spam — where a moderation tool is available (Instagram) you may hide
-  spam/abuse; otherwise just leave it and move on.
+- NEVER argue, moralise, or take bait. Whatever you answer, stay civil and brief.
+- SAY WHAT YOU LEFT UNANSWERED. Whenever you decide not to reply to something you
+  read, name it and the reason in your finish_engagement summary ("one promo DM
+  from @x, skipped as spam"). "Nothing needed a reply" and "I chose to answer
+  nothing" look identical to the operator otherwise, and they are not the same.
+
+WHO YOU ANSWER — THE INSTRUCTION DECIDES
+The operator's REPLY POLICY is at the top of this message when they have written
+one, and it overrides everything below. Whether a cold sales pitch deserves a
+polite decline or silence is a decision about their account, not one for you to
+make on their behalf.
+With no policy given, use this default: answer genuine questions, comments and
+messages from real people; leave harassment and trolling alone; treat unsolicited
+promotion as not worth a reply. Where a moderation tool is available (Instagram)
+you may hide abuse or spam. Say what you skipped either way.
 - Do not invent facts, prices, dates, or promises. If you do not know, say the
   account will follow up, or say nothing.
 - Match the account's language to the commenter's where you reasonably can.
@@ -488,6 +500,21 @@ RULES
 - Reply to each target at most once, ever. Respect the already-answered flags.
 - Always update_memory before finishing, even when you answered nothing.
 """
+
+
+def _policy_block(instruction) -> str:
+    """The operator's REPLY POLICY, inlined at the top of an engagement kickoff.
+
+    Which messages deserve an answer is a decision about the operator's account —
+    a cold sales pitch is spam to one brand and a lead to another — so it belongs
+    in the instruction, not hard-coded in the system prompt. Empty means the
+    prompt's stated default applies, and the prompt says the instruction wins.
+    """
+    policy = (getattr(instruction, "engagement_policy", "") or "").strip()
+    if not policy:
+        return ""
+    return ("REPLY POLICY (the operator's rule for who gets answered — this "
+            f"OVERRIDES the default in your instructions):\n{policy}\n\n")
 
 
 def _unavailable_block(unavailable) -> str:
@@ -521,6 +548,7 @@ def build_engagement_kickoff(*, account, instruction, platform_caps, state=None,
         f"{operator}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n\n"
+        f"{_policy_block(instruction)}"
         f"{_unavailable_block(unavailable)}"
         f"Respond to new comments, mentions and direct messages now. Start by calling "
         f"get_context, then read_memory, then list the account's recent comments/mentions "
@@ -596,8 +624,11 @@ HOW TO WORK
 VOICE AND JUDGEMENT
 - Add genuine value: answer a question, share a relevant experience, be generous.
   You are a guest on someone else's post — never hijack it to advertise.
-- NEVER argue, moralise, or take bait. Do not engage harassment, trolling, or
-  obvious spam; just move on.
+- NEVER argue, moralise, or take bait; stay civil whatever you answer.
+- WHO YOU ENGAGE is the operator's call: their REPLY POLICY is at the top of this
+  message when they have written one, and it overrides this paragraph. With none
+  given, engage genuine posts from real people and leave harassment, trolling and
+  spam alone.
 - Do not invent facts, prices, dates, or promises. Do not impersonate a human or
   hide that this is the account speaking.
 - Match the other person's language where you reasonably can.
@@ -637,6 +668,7 @@ def build_outreach_kickoff(*, account, instruction, platform_caps, state=None,
         f"{operator}"
         f"TARGET ACCOUNT: {account.handle or account.external_id} "
         f"on {account.platform.value}.\n\n"
+        f"{_policy_block(instruction)}"
         f"Find other people's recent, relevant posts and engage the best of them now. "
         f"Start by calling get_context, then read_memory, then search with the read tools. "
         f"Finish with finish_engagement."
@@ -707,8 +739,12 @@ IF YOU ENGAGE
   x_like_post) — use it for warm/"thanks" comments and alongside your replies. It
   is not gated and does not count as answering.
 - Be brief, warm, and helpful; answer the real question. NEVER argue, moralise, or
-  take bait; leave harassment and spam alone (or hide it where a moderation tool
-  exists). Do not invent facts, prices, or promises.
+  take bait. Do not invent facts, prices, or promises.
+- WHO YOU ANSWER is the operator's call: their REPLY POLICY is at the top of this
+  message when they have written one, and it overrides the default. With none
+  given, answer genuine messages, leave harassment and trolling alone, and treat
+  unsolicited promotion as not worth a reply (hide abuse or spam where a
+  moderation tool exists). Name what you skipped in your summary either way.
 - End with `finish_engagement` once — including when there was nothing new to
   answer, which is a normal, correct outcome.
 
@@ -739,6 +775,7 @@ def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files
         f"image:{platform_caps.supports_image} video:{platform_caps.supports_video}; "
         f"recommended orientation: {platform_caps.default_orientation}; "
         f"caption limit: {platform_caps.caption_limit}.\n\n"
+        f"{_policy_block(instruction)}"
         f"{_unavailable_block(unavailable)}"
         f"Decide whether to publish a new post or to engage with new comments/mentions and "
         f"DMs, then do that one job. Start by calling get_context, then read_memory, then "

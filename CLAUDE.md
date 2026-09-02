@@ -468,6 +468,17 @@ it burns the whole run on this exchange and leaves no record; after the nudges t
 the summary says "NOT CHECKED this run: …". `scripts/diagnose_instagram.py` answers the same
 question outside a run: it prints the messaging node, the scopes, and Graph's own error.
 
+**"0 replied, 0 staged, 0 skipped" must not be able to mean two different things.** A promotional
+DM arrived, the agent classified it as spam and skipped it — which the ENGAGE prompt explicitly
+tells it to do — and the run reported the same counts an empty inbox produces, so the operator had
+no way to tell "nothing was waiting" from "I chose to answer nothing". The read tools now record
+how many items were *unanswered and answerable* (`engagement.note_read(..., unanswered=N)` →
+`state["engagement_seen"]`), and `finish_engagement` appends a NOTE when that is non-zero and
+nothing was replied or staged. Counted in code for the same reason as the read guard above: the
+summary is model-written prose. The prompt also requires naming what was skipped and why, and says
+a cold sales pitch counts as spam **unless the brief or note says to answer everything** — that is
+the operator's call, not the model's.
+
 **`list_dms`'s `limit` counts CONVERSATIONS, and every one contributes its latest inbound
 message.** The first version applied it three ways at once — one page of conversations, N messages
 each, then the newest N messages overall — so a quiet old thread holding one unanswered question

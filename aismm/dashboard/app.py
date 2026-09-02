@@ -1280,6 +1280,7 @@ def create_app() -> Flask:
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.task_type = InstructionTask(f.get("task_type", "publish"))
         instr.engagement_targets = f.get("engagement_targets", "").strip()
+        instr.engagement_policy = f.get("engagement_policy", "").strip()
         # X destination. "" inherits the account's rotation, "none" is the home
         # timeline, anything else is one community id. Validated against the ids
         # the selected accounts actually have, so a stale pick (the community was

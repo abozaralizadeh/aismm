@@ -221,6 +221,13 @@ class Instruction(SQLModel, table=True):
     # the brief. Ignored by publish/engage/auto runs. Parsed by
     # aismm/targets.py into typed buckets the per-platform search tools consume.
     engagement_targets: str = ""
+    # WHO this instruction answers, in the operator's own words: which messages
+    # deserve a reply and which to leave alone. Deliberately not hard-coded in
+    # the system prompt — "a cold sales pitch is spam, ignore it" is right for a
+    # brand account and wrong for one that wants every DM answered, and only the
+    # operator knows which this is. Empty falls back to the prompt's stated
+    # default, which the instruction always overrides.
+    engagement_policy: str = ""
     # Where THIS instruction's X posts go, overriding the account's rotation.
     # "" inherits the account (rotate through every community it has); "none"
     # forces the home timeline; anything else is one community id, used for every

@@ -118,6 +118,16 @@ async def perform_finish_engagement(state: dict, summary: str = "") -> dict:
     if failed:
         line += f", {failed} blocked"
     line += "."
+    # "0 replied, 0 staged, 0 skipped" reads as "the inbox was empty", and it is
+    # equally what a run that SAW messages and answered none of them produces —
+    # which is what happened to a promotional DM the agent judged to be spam. The
+    # counts come from the read tools in code, so this cannot be talked around.
+    waiting = sum(int(n) for n in (state.get("engagement_seen") or {}).values())
+    if waiting and not (replied or staged):
+        detail = ", ".join(f"{n} via {tool}" for tool, n in
+                           sorted((state.get("engagement_seen") or {}).items()) if n)
+        line += (f" NOTE: {waiting} unanswered item(s) were visible this run "
+                 f"({detail}) and none were answered — say why below.")
     if summary.strip():
         line += f" {summary.strip()}"
     run.status = status
