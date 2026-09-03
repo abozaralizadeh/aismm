@@ -69,6 +69,23 @@
 </details>
 {% endif %}
 
+{# Which conditional fields apply, decided HERE rather than by the script below:
+   the first paint is then already right (no flash of a field that doesn't
+   apply), and the form still shows the right things with scripting
+   unavailable. The script keeps these true while the operator edits.
+
+   A field applies when BOTH its task and its platform allow it — a YouTube
+   visibility picker needs a YouTube account AND a task that posts. Getting only
+   one of the two right is what put that picker on an Instagram instruction. #}
+{% set task_value = instruction.task_type.value if instruction else 'publish' %}
+{% set task_posts = task_value not in ('engage', 'outreach') %}
+{% set task_engages = task_value in ('engage', 'outreach', 'auto') %}
+{% set yt_privacy = instruction.youtube_privacy if instruction else '' %}
+{% set tw_pinned = instruction.twitter_community_id if instruction else '' %}
+{% set tw_shared = instruction.twitter_share_with_followers if instruction else '' %}
+{% set show_youtube = task_posts and ('youtube' in selected_platforms or yt_privacy) %}
+{% set show_twitter = task_posts and ('twitter' in selected_platforms or tw_pinned or tw_shared) %}
+
 <form method="post" action="{{ url_for('save_instruction') }}" class="form form-wide"
       enctype="multipart/form-data" data-instruction-form>
   {% if instruction %}<input type="hidden" name="id" value="{{ instruction.id }}">{% endif %}
@@ -98,7 +115,7 @@
             </select>
             {# Shown only when Auto is selected (see the script below). The caution
                is a hover/focus info-tip instead of a wall of yellow text. #}
-            <span class="info-tip" data-auto-warn hidden>
+            <span class="info-tip" data-auto-warn {% if task_value != 'auto' %}hidden{% endif %}>
               <span class="info-icon" tabindex="0" role="button"
                     aria-label="Why Auto is less predictable">i</span>
               <span class="info-tip-body hint-warn" role="tooltip">
@@ -123,7 +140,8 @@
            text carries the kind as a sigil (`#`, `r/`, `@`), which is a grammar
            to learn before you can type the first value. The rows are joined back
            into that text on save. #}
-        <div class="field" data-outreach-only hidden>
+        <div class="field" data-outreach-only
+             {% if task_value != 'outreach' %}hidden{% endif %}>
           <span class="field-label">Outreach targets</span>
           <div class="repeat repeat-kind" data-repeat>
             <div class="repeat-head small muted" aria-hidden="true">
@@ -156,7 +174,10 @@
         </div>
       </div>
 
-        <label data-engage-only hidden>
+        {# Only a task that ANSWERS people can have a policy about who gets an
+           answer. On a publishing instruction it is a decision with nothing to
+           apply to. #}
+        <label data-engage-only {% if not task_engages %}hidden{% endif %}>
           <span class="field-label">Reply policy</span>
           <textarea name="engagement_policy" rows="3"
             placeholder="Answer every genuine question. Politely decline sales pitches rather than ignoring them. Never reply to anything abusive.">{{ instruction.engagement_policy if instruction else '' }}</textarea>
@@ -206,7 +227,8 @@
           {% endfor %}
         </div>
         {% if has_youtube or twitter_communities %}
-          <span class="hint" data-platform-note hidden>
+          <span class="hint" data-platform-note data-publish-only
+                {% if show_youtube or show_twitter or not task_posts %}hidden{% endif %}>
             Options that apply to one platform only — YouTube visibility, X communities —
             appear here once you tick an account on that platform.
           </span>
@@ -214,24 +236,25 @@
       </label>
 
       {# ── Platform-scoped fields ──────────────────────────────────────────
-         Shown only while an account on that platform is selected. A YouTube
-         visibility picker on an Instagram-only instruction is a control that
-         cannot do anything: it invites a decision, records it, and then has no
-         effect — which is worse than not offering it. `data-platform-keep` is
-         set when the field already HOLDS a value, so a setting that is in
-         effect never disappears behind a checkbox. Hidden controls still
-         submit, so nothing saved is lost by an unrelated edit. #}
+         Shown only while an account on that platform is selected AND the task
+         actually posts. A YouTube visibility picker on an Instagram-only
+         instruction is a control that cannot do anything: it invites a
+         decision, records it, and then has no effect — which is worse than not
+         offering it. Both halves matter: the same picker on a YouTube account
+         whose task is "respond to comments" publishes nothing to be visible.
+         `data-platform-keep` is set when the field already HOLDS a value, so a
+         setting that is in effect never disappears behind a checkbox. Hidden
+         controls still submit, so nothing saved is lost by an unrelated edit. #}
       {% if has_youtube %}
-        {% set privacy = (instruction.youtube_privacy if instruction else '') %}
         <label data-publish-only data-platform="youtube"
-               {% if privacy %}data-platform-keep{% endif %}
-               {% if 'youtube' not in selected_platforms and not privacy %}hidden{% endif %}>
+               {% if yt_privacy %}data-platform-keep{% endif %}
+               {% if not show_youtube %}hidden{% endif %}>
           <span class="field-label">YouTube visibility</span>
           <select name="youtube_privacy">
-            <option value="" {% if not privacy %}selected{% endif %}>
+            <option value="" {% if not yt_privacy %}selected{% endif %}>
               Use the deployment default ({{ settings.youtube_privacy }})</option>
             {% for choice in youtube_privacy_choices %}
-              <option value="{{ choice }}" {% if privacy == choice %}selected{% endif %}>
+              <option value="{{ choice }}" {% if yt_privacy == choice %}selected{% endif %}>
                 {{ choice | capitalize }}</option>
             {% endfor %}
           </select>
@@ -249,13 +272,15 @@
         </label>
       {% endif %}
 
+      {# Where POSTS go, so it follows the task as well as the platform: an
+         engage or outreach run replies inside someone else's conversation and
+         never chooses a destination. #}
       {% if twitter_communities %}
-        {% set pinned = instruction.twitter_community_id if instruction else '' %}
-        {% set shared = instruction.twitter_share_with_followers if instruction else '' %}
+        {% set pinned = tw_pinned %}
         <details class="account-section" {% if pinned %}open{% endif %}
-                 data-platform="twitter"
-                 {% if pinned or shared %}data-platform-keep{% endif %}
-                 {% if 'twitter' not in selected_platforms and not (pinned or shared) %}hidden{% endif %}>
+                 data-publish-only data-platform="twitter"
+                 {% if pinned or tw_shared %}data-platform-keep{% endif %}
+                 {% if not show_twitter %}hidden{% endif %}>
           <summary>
             X posts go to
             <strong>
@@ -292,14 +317,13 @@
               </span>
             </label>
 
-            {% set share = instruction.twitter_share_with_followers if instruction else '' %}
             <label>Also share with followers
               <select name="twitter_share_with_followers">
-                <option value="" {% if not share %}selected{% endif %}>
+                <option value="" {% if not tw_shared %}selected{% endif %}>
                   Use the account's setting</option>
-                <option value="yes" {% if share == 'yes' %}selected{% endif %}>
+                <option value="yes" {% if tw_shared == 'yes' %}selected{% endif %}>
                   Yes — followers see it too</option>
-                <option value="no" {% if share == 'no' %}selected{% endif %}>
+                <option value="no" {% if tw_shared == 'no' %}selected{% endif %}>
                   No — the community only</option>
               </select>
               <span class="hint">
@@ -454,7 +478,7 @@
             approval = queue for your OK · live = post/send immediately.</span>
         </label>
 
-        <label data-publish-only>Media preference
+        <label data-publish-only {% if not task_posts %}hidden{% endif %}>Media preference
           <select name="media_pref">
             {% for mp in media_prefs %}
               <option value="{{ mp.value }}"
@@ -515,7 +539,7 @@
         </label>
       </div>
 
-      <div class="check-group" data-publish-only>
+      <div class="check-group" data-publish-only {% if not task_posts %}hidden{% endif %}>
         <label class="check">
           <input type="checkbox" name="disclose_ai"
                  {% if not instruction or instruction.disclose_ai %}checked{% endif %}>
@@ -587,8 +611,15 @@
             </div>
 
             <div class="multiselect-list" data-ms-list>
+              {# A platform's tools are hidden unless the instruction targets it:
+                 every one of those factories returns None for a run on another
+                 platform, so ticking them there records a choice with no
+                 effect. Nothing in effect can disappear this way, which is why
+                 there is no `keep` rule here. #}
               {% for group in tool_groups %}
-                <div class="multiselect-group" data-ms-group>
+                <div class="multiselect-group" data-ms-group
+                     {% if group.platform %}data-platform="{{ group.platform }}"{% endif %}
+                     {% if group.platform and group.platform not in selected_platforms %}hidden{% endif %}>
                   <div class="multiselect-group-title" data-ms-group-title>
                     {{ group.title }}
                     {% if group.blurb %}<span class="muted small">— {{ group.blurb }}</span>{% endif %}
@@ -613,6 +644,7 @@
           model fewer choices to weigh — a text-only account has no use for the video tools.
           <code>publish</code> and <code>report_failure</code> stay on whatever you pick, since a run
           has to be able to end. Leave all ticked and tools added in future are included automatically.
+          A platform's own tools appear once you tick an account on that platform.
         </span>
       </div>
     </div>
@@ -683,61 +715,69 @@
 
 {% block scripts %}
 <script>
-// Task-driven conditional UI: the Auto caution appears only for Auto, the
-// post-only fields (media preference, AI label) hide when the task is a pure
-// engagement one (answering comments or reaching out — neither posts), and the
-// outreach targets box appears only for a reach-out run. Hidden controls still
-// submit, so nothing is lost.
+// Conditional fields: shown only where they can actually do something.
+//
+// ONE function decides, because a field can depend on both the task and the
+// accounts — YouTube visibility needs a YouTube account AND a task that posts.
+// Two functions each assigning `el.hidden` is not "two rules ANDed", it is
+// last-writer-wins: the task pass ran on every change and re-showed the
+// YouTube picker on an Instagram-only instruction, undoing the platform pass.
+//
+// The server has already rendered this exact state, so there is no flash of the
+// wrong fields on load and the form is correct without scripting; this keeps it
+// true while the operator edits. Hidden controls still submit, so nothing saved
+// is lost by an unrelated edit.
 (function () {
   var form = document.querySelector('[data-instruction-form]');
   if (!form) { return; }
   var task = form.querySelector('[data-task]');
   var autoWarn = form.querySelector('[data-auto-warn]');
-  var postOnly = Array.prototype.slice.call(form.querySelectorAll('[data-publish-only]'));
-  var outreachOnly = Array.prototype.slice.call(form.querySelectorAll('[data-outreach-only]'));
-  // The reply policy applies to every task that answers people, so it shows for
-  // engage, outreach AND auto — auto can choose to engage.
-  var engageOnly = Array.prototype.slice.call(form.querySelectorAll('[data-engage-only]'));
+  var platformNote = form.querySelector('[data-platform-note]');
+  var conditional = Array.prototype.slice.call(form.querySelectorAll(
+    '[data-publish-only], [data-outreach-only], [data-engage-only], [data-platform]'));
+  var accountBoxes = Array.prototype.slice.call(
+    form.querySelectorAll('input[data-account-platform]'));
+
+  function taskAllows(el, v) {
+    // Neither engage nor outreach publishes anything, so nothing about a POST
+    // applies to them. Auto may choose to publish, so it keeps those fields.
+    if (el.hasAttribute('data-publish-only')) { return v !== 'engage' && v !== 'outreach'; }
+    if (el.hasAttribute('data-outreach-only')) { return v === 'outreach'; }
+    // Answering people: engage, outreach AND auto (auto can choose to engage).
+    if (el.hasAttribute('data-engage-only')) {
+      return v === 'engage' || v === 'outreach' || v === 'auto';
+    }
+    return true;
+  }
 
   function sync() {
     var v = task.value;
-    if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
-    postOnly.forEach(function (el) { el.hidden = v === 'engage' || v === 'outreach'; });
-    outreachOnly.forEach(function (el) { el.hidden = v !== 'outreach'; });
-    engageOnly.forEach(function (el) {
-      el.hidden = !(v === 'engage' || v === 'outreach' || v === 'auto');
-    });
-  }
-  task.addEventListener('change', sync);
-  sync();
-
-  // Platform-scoped fields follow the ACCOUNT ticks, live. The server already
-  // rendered the right state for the saved selection, so there is no flash of
-  // the wrong fields on load; this keeps it true while the operator edits.
-  var platformFields = Array.prototype.slice.call(form.querySelectorAll('[data-platform]'));
-  var accountBoxes = Array.prototype.slice.call(
-    form.querySelectorAll('input[data-account-platform]'));
-  var platformNote = form.querySelector('[data-platform-note]');
-
-  function syncPlatforms() {
     var chosen = {};
     accountBoxes.forEach(function (box) {
       if (box.checked) { chosen[box.dataset.accountPlatform] = true; }
     });
-    var anyShown = false;
-    platformFields.forEach(function (el) {
-      // A field holding a value stays visible whatever is ticked — hiding a
-      // setting that is in effect is how it gets forgotten and then blamed.
-      var show = chosen[el.dataset.platform] || el.hasAttribute('data-platform-keep');
+    var anyPlatformShown = false;
+    conditional.forEach(function (el) {
+      var show = taskAllows(el, v);
+      if (show && el.hasAttribute('data-platform')) {
+        // A field holding a value stays visible whatever is ticked — hiding a
+        // setting that is in effect is how it gets forgotten and then blamed.
+        show = !!chosen[el.dataset.platform] || el.hasAttribute('data-platform-keep');
+        if (show) { anyPlatformShown = true; }
+      }
       el.hidden = !show;
-      if (show) { anyShown = true; }
     });
-    if (platformNote) { platformNote.hidden = anyShown; }
+    if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
+    // Last: the note explains where the platform fields went, so it belongs
+    // only where one COULD appear and none has.
+    if (platformNote) {
+      platformNote.hidden = anyPlatformShown || !taskAllows(platformNote, v);
+    }
   }
-  accountBoxes.forEach(function (box) {
-    box.addEventListener('change', syncPlatforms);
-  });
-  syncPlatforms();
+
+  task.addEventListener('change', sync);
+  accountBoxes.forEach(function (box) { box.addEventListener('change', sync); });
+  sync();
 })();
 
 // Checkbox dropdown with a filter. Plain checkboxes underneath, so the form
@@ -778,10 +818,29 @@ document.querySelectorAll('[data-multiselect]').forEach(function (root) {
     if (e.key === 'Escape') { open(false); toggle.focus(); }
   });
 
-  filter.addEventListener('input', function () {
+  // Two things decide whether a tool is on screen — the filter box and whether
+  // the instruction targets that tool's platform — so ONE function applies
+  // both. Separate handlers would each own `hidden` and undo each other: typing
+  // in the filter would bring back the ten X tools on an Instagram instruction.
+  var accountBoxes = Array.prototype.slice.call(
+    document.querySelectorAll('input[data-account-platform]'));
+
+  function offPlatform(group) {
+    if (!group || !group.dataset.platform || !accountBoxes.length) { return false; }
+    return !accountBoxes.some(function (box) {
+      return box.checked && box.dataset.accountPlatform === group.dataset.platform;
+    });
+  }
+
+  function apply() {
     var q = filter.value.trim().toLowerCase();
     options.forEach(function (o) {
-      o.hidden = q !== '' && o.dataset.name.toLowerCase().indexOf(q) === -1;
+      var group = o.closest('[data-ms-group]');
+      var filtered = q !== '' && o.dataset.name.toLowerCase().indexOf(q) === -1;
+      // Which of the two hid it matters to the bulk buttons below, and `hidden`
+      // alone cannot say.
+      o.toggleAttribute('data-ms-filtered', filtered);
+      o.hidden = filtered || offPlatform(group);
     });
     // Hide a group heading whose every option filtered out.
     groups.forEach(function (g) {
@@ -789,12 +848,20 @@ document.querySelectorAll('[data-multiselect]').forEach(function (root) {
       g.hidden = visible === 0;
     });
     empty.hidden = groups.some(function (g) { return !g.hidden; });
-  });
+  }
 
-  // Bulk actions apply to what is currently VISIBLE, so they compose with the
-  // filter ("instagram" + Clear turns off just those).
+  filter.addEventListener('input', apply);
+  // The ticks live outside this component, so listen where they are.
+  accountBoxes.forEach(function (box) { box.addEventListener('change', apply); });
+  apply();
+
+  // Bulk actions compose with the FILTER ("instagram" + Clear turns off just
+  // those) but ignore the platform hiding, so Clear really does clear: an
+  // off-platform tool left ticked is still SUBMITTED and stored, and the
+  // instruction would record a dozen X tools the operator never chose.
   function setVisible(state) {
-    options.filter(function (o) { return !o.hidden; }).forEach(function (o) {
+    options.forEach(function (o) {
+      if (o.hasAttribute('data-ms-filtered')) { return; }
       var box = o.querySelector('input');
       if (!box.hasAttribute('data-ms-locked')) { box.checked = state; }
     });

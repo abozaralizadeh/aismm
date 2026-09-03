@@ -112,6 +112,7 @@
                   {% for cid in ids + [''] %}
                     <div class="repeat-row" data-repeat-row>
                       <input type="text" name="community_row_id" value="{{ cid }}"
+                             data-community-id
                              inputmode="numeric" placeholder="1493446837214187523"
                              aria-label="Community ID">
                       <input type="text" name="community_row_name"
@@ -142,15 +143,23 @@
                 timeline, for its own posts.
               </span>
             </div>
-            <label class="check">
-              <input type="checkbox" name="share_with_followers"
-                     {% if a.meta.get('share_with_followers') %}checked{% endif %}>
-              Also share with followers
-            </label>
-            <span class="hint">
-              The same switch X shows in its composer. A community post is otherwise visible
-              <strong>only inside that community</strong>. No effect on the home timeline.
-            </span>
+            {# The switch means nothing without a community — X ignores it on a
+               timeline post, and the route clears it when the last community
+               goes. So it appears with the first community ID typed, not only
+               after a save: hiding it on the stored state alone would hide it
+               exactly while someone is adding their first one. #}
+            <div class="field" data-needs-community
+                 {% if not ids and not a.meta.get('share_with_followers') %}hidden{% endif %}>
+              <label class="check">
+                <input type="checkbox" name="share_with_followers"
+                       {% if a.meta.get('share_with_followers') %}checked{% endif %}>
+                Also share with followers
+              </label>
+              <span class="hint">
+                The same switch X shows in its composer. A community post is otherwise visible
+                <strong>only inside that community</strong>. No effect on the home timeline.
+              </span>
+            </div>
             <div class="row"><button class="btn small">Save destination</button></div>
           </form>
         </details>
@@ -235,4 +244,32 @@
   </div>
   {% endfor %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// "Also share with followers" applies to a COMMUNITY post, so it follows the
+// rows above rather than waiting for a save. Server-rendered correct already;
+// this only keeps it true while the form is being edited.
+document.querySelectorAll('[data-needs-community]').forEach(function (block) {
+  var form = block.closest('form');
+  if (!form) { return; }
+  var box = block.querySelector('input[type="checkbox"]');
+
+  function sync() {
+    // Re-queried every time: repeat.js adds and removes rows after load.
+    var filled = Array.prototype.some.call(
+      form.querySelectorAll('[data-community-id]'),
+      function (input) { return input.value.trim() !== ''; });
+    block.hidden = !filled && !(box && box.checked);
+  }
+
+  // `input` covers typing; `click` covers the × that drops the last row —
+  // removing one fires no input event, and repeat.js has already taken the row
+  // out by the time this bubbles up to the form.
+  form.addEventListener('input', sync);
+  form.addEventListener('click', sync);
+  sync();
+});
+</script>
 {% endblock %}

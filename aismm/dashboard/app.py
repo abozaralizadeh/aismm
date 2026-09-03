@@ -2313,28 +2313,35 @@ def _refresh_scheduler() -> None:
 # How the tool picker groups and explains the registry, so a long flat list of
 # 21 names reads as a handful of capabilities. Unknown tools fall into "Other",
 # so registering a new one never breaks the page.
-TOOL_GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
-    ("Essentials", "Reading the brief and finishing the run.",
+#
+# The third element is the PLATFORM whose accounts a group's tools need, or "".
+# A platform group is hidden unless the instruction targets that platform: the
+# eleven Instagram tools on an X-only instruction are eleven decisions that
+# cannot take effect, since each factory returns None for a run that doesn't
+# target its platform. That "no effect either way" is also why hiding a group
+# whose boxes are TICKED is safe — nothing in effect disappears, unlike the
+# platform fields, which need `data-platform-keep` for exactly that reason.
+TOOL_GROUPS: list[tuple[str, str, str, tuple[str, ...]]] = [
+    ("Essentials", "Reading the brief and finishing the run.", "",
      ("get_context", "publish", "finish_engagement", "report_failure")),
-    ("Continuity", "Carrying work across scheduled runs.",
+    ("Continuity", "Carrying work across scheduled runs.", "",
      ("read_memory", "update_memory", "read_attachment")),
-    ("Research", "Finding real, current material to post about.",
+    ("Research", "Finding real, current material to post about.", "",
      ("web_search", "browse_page", "save_media", "describe_image")),
-    ("Media", "Generating images and video.",
+    ("Media", "Generating images and video.", "",
      ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
-    ("Instagram", "Reading the feed, comments and DMs. Ignored on other platforms.",
+    ("Instagram", "Reading the feed, comments and DMs.", "instagram",
      ("instagram_recent_posts", "instagram_comments", "instagram_recent_comments",
       "instagram_reply_to_comment", "instagram_dms", "instagram_reply_to_dm",
       "instagram_moderate_comment", "instagram_insights",
       "instagram_publishing_limit", "instagram_profile", "instagram_mentions")),
-    ("X (Twitter)", "Reading the timeline, replying and DMs. Ignored on other platforms; "
-                    "every X call spends pay-per-use API credits.",
+    ("X (Twitter)", "Reading the timeline, replying and DMs. Every X call spends "
+                    "pay-per-use API credits.", "twitter",
      ("x_recent_posts", "x_mentions", "x_replies", "x_reply_to_post", "x_like_post",
       "x_dms", "x_reply_to_dm", "x_post_metrics", "x_profile", "x_delete_post")),
-    ("YouTube", "Reading and replying to comment threads. Ignored on other platforms.",
+    ("YouTube", "Reading and replying to comment threads.", "youtube",
      ("youtube_comments", "youtube_reply_to_comment")),
-    ("Reddit", "Finding and replying to submissions and private messages. "
-               "Ignored on other platforms.",
+    ("Reddit", "Finding and replying to submissions and private messages.", "reddit",
      ("reddit_search_posts", "reddit_reply", "reddit_dms", "reddit_reply_to_dm")),
 ]
 
@@ -2371,17 +2378,18 @@ def _tool_catalog(selected: list[str]) -> list[dict]:
     available = registered_tool_names()
     chosen = set(selected or available)
     grouped, placed = [], set()
-    for title, blurb, names in TOOL_GROUPS:
+    for title, blurb, platform, names in TOOL_GROUPS:
         rows = [{"name": n, "checked": n in chosen, "always_on": n in ALWAYS_ON}
                 for n in names if n in available]
         placed.update(r["name"] for r in rows)
         if rows:
-            grouped.append({"title": title, "blurb": blurb, "tools": rows})
+            grouped.append({"title": title, "blurb": blurb, "platform": platform,
+                            "tools": rows})
 
     leftover = [{"name": n, "checked": n in chosen, "always_on": n in ALWAYS_ON}
                 for n in available if n not in placed]
     if leftover:
-        grouped.append({"title": "Other", "blurb": "", "tools": leftover})
+        grouped.append({"title": "Other", "blurb": "", "platform": "", "tools": leftover})
     return grouped
 
 

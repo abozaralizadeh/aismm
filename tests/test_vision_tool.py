@@ -231,7 +231,7 @@ def test_the_tool_is_hidden_when_no_llm_is_configured(monkeypatch):
 def test_the_tool_appears_in_the_dashboard_picker():
     from aismm.dashboard.app import TOOL_GROUPS
 
-    assert any("describe_image" in names for _t, _b, names in TOOL_GROUPS)
+    assert any("describe_image" in names for _t, _b, _p, names in TOOL_GROUPS)
 
 
 def test_the_agent_is_told_it_can_look_at_images():

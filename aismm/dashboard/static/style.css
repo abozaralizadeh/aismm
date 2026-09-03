@@ -18,6 +18,17 @@ html {
   --ok: #35c28a; --warn: #f0b429; --danger: #f0616d; --radius: 12px;
 }
 * { box-sizing: border-box; }
+/* The `hidden` attribute is only a USER-AGENT rule (`[hidden] { display: none }`),
+   so ANY author `display` beats it and the element stays on screen — and this
+   file sets `display` on almost every wrapper a conditional field uses
+   (`.form label`, `.field`, `.check-group`, `.btn`, `.info-tip`). That is why a
+   YouTube visibility picker sat on an Instagram-only instruction and a Reply
+   policy on a publishing one, even though both were correctly marked `hidden`:
+   nothing in this dashboard's toggling was broken except this. Every
+   progressive-enhancement control here (`+`/`×` row buttons, the tool panel, the
+   Auto caution) is rendered `hidden` and revealed by script, so the same line is
+   what keeps those from showing up unusable when scripting is unavailable. */
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

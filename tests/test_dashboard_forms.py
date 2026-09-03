@@ -14,6 +14,8 @@ to resolve one.
 """
 import dataclasses
 import datetime as dt
+import json
+import pathlib
 
 import pytest
 
@@ -23,7 +25,7 @@ from aismm.dashboard import app as app_module
 from aismm.dashboard import sso
 from aismm.dashboard.humanize import time_until
 from aismm.models import (
-    Account, ENV_VIDEO_ID, Instruction, PlatformName, ProviderConfig,
+    Account, ENV_VIDEO_ID, Instruction, InstructionTask, PlatformName, ProviderConfig,
 )
 from aismm.workspaces import LOCAL_USER
 
@@ -94,8 +96,8 @@ def test_an_instagram_instruction_hides_the_youtube_and_x_fields(dash, store):
         Instruction(name="Comic", account_ids_json=f'["{accounts["instagram"].id}"]'))
     page = dash().test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
-    for block in _blocks_with(page, "data-platform="):
-        assert "hidden" in block, block
+    assert "hidden" in _platform_field(page, "youtube")
+    assert "hidden" in _platform_field(page, "twitter")
 
 
 def test_a_youtube_instruction_shows_the_visibility_picker_only(dash, store):
@@ -104,10 +106,8 @@ def test_a_youtube_instruction_shows_the_visibility_picker_only(dash, store):
         Instruction(name="Shorts", account_ids_json=f'["{accounts["youtube"].id}"]'))
     page = dash().test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
-    youtube = _one_block(page, 'data-platform="youtube"')
-    twitter = _one_block(page, 'data-platform="twitter"')
-    assert "hidden" not in youtube
-    assert "hidden" in twitter
+    assert "hidden" not in _platform_field(page, "youtube")
+    assert "hidden" in _platform_field(page, "twitter")
 
 
 def test_an_x_instruction_shows_the_community_card(dash, store):
@@ -116,8 +116,8 @@ def test_an_x_instruction_shows_the_community_card(dash, store):
         Instruction(name="Timeline", account_ids_json=f'["{accounts["twitter"].id}"]'))
     page = dash().test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
-    assert "hidden" not in _one_block(page, 'data-platform="twitter"')
-    assert "hidden" in _one_block(page, 'data-platform="youtube"')
+    assert "hidden" not in _platform_field(page, "twitter")
+    assert "hidden" in _platform_field(page, "youtube")
 
 
 def test_a_setting_already_in_effect_is_never_hidden(dash, store):
@@ -131,9 +131,116 @@ def test_a_setting_already_in_effect_is_never_hidden(dash, store):
                     youtube_privacy="private"))
     page = dash().test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
-    youtube = _one_block(page, 'data-platform="youtube"')
+    youtube = _platform_field(page, "youtube")
     assert "data-platform-keep" in youtube
     assert "hidden" not in youtube
+
+
+# --- 1b. the same field also has to suit the TASK ------------------------------------- #
+
+def _instruction_page(dash, store, task, **kwargs):
+    accounts = _all_platforms(store)
+    ids = [accounts[p].id for p in ("instagram", "youtube", "twitter")]
+    instruction = store.upsert_instruction(
+        Instruction(name=f"{task.value} one", task_type=task,
+                    account_ids_json=json.dumps(ids), **kwargs))
+    return dash().test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("task, shown", [(InstructionTask.publish, False),
+                                         (InstructionTask.engage, True),
+                                         (InstructionTask.outreach, True),
+                                         (InstructionTask.auto, True)])
+def test_the_reply_policy_belongs_to_tasks_that_answer_people(dash, store, task, shown):
+    """It was on every instruction, including one that only publishes — a policy
+    about who gets an answer, on a run that answers nobody."""
+    block = _one_block(_instruction_page(dash, store, task), "data-engage-only")
+    assert ("hidden" not in block) is shown
+
+
+@pytest.mark.parametrize("task, shown", [(InstructionTask.publish, True),
+                                         (InstructionTask.auto, True),
+                                         (InstructionTask.engage, False),
+                                         (InstructionTask.outreach, False)])
+def test_post_only_fields_follow_the_task(dash, store, task, shown):
+    """Media preference and the AI label describe a POST. Auto keeps them: it
+    may choose to publish."""
+    page = _instruction_page(dash, store, task)
+    for block in _blocks_with(page, "data-publish-only"):
+        if "data-platform" in block or "data-platform-note" in block:
+            continue        # those have a second condition of their own
+        assert ("hidden" not in block) is shown, block
+
+
+def test_outreach_targets_appear_only_for_an_outreach_run(dash, store):
+    for task in InstructionTask:
+        block = _one_block(_instruction_page(dash, store, task), "data-outreach-only")
+        assert ("hidden" not in block) is (task is InstructionTask.outreach), task.value
+
+
+def test_a_platform_field_needs_the_task_as_well_as_the_account(dash, store):
+    """Both halves, not either: a YouTube account on an instruction that only
+    answers comments publishes nothing for a visibility setting to apply to."""
+    page = _instruction_page(dash, store, InstructionTask.engage)
+    assert "hidden" in _platform_field(page, "youtube")
+    assert "hidden" in _platform_field(page, "twitter")
+    # And with a task that posts, the very same accounts show both.
+    page = _instruction_page(dash, store, InstructionTask.publish)
+    assert "hidden" not in _platform_field(page, "youtube")
+    assert "hidden" not in _platform_field(page, "twitter")
+
+
+def test_the_auto_caution_is_only_on_auto(dash, store):
+    for task in InstructionTask:
+        block = _one_block(_instruction_page(dash, store, task), "data-auto-warn")
+        assert ("hidden" not in block) is (task is InstructionTask.auto), task.value
+
+
+def test_the_hidden_attribute_actually_hides(dash):
+    """Every conditional field here is toggled with `hidden`, which is only a
+    user-agent rule — and this stylesheet sets `display` on `.form label`,
+    `.field`, `.check-group` and `.btn`, all of which outrank it. Without this
+    one rule the YouTube picker stays on screen however correctly it is marked."""
+    css = (pathlib.Path(__file__).resolve().parents[1]
+           / "aismm/dashboard/static/style.css").read_text()
+    assert "[hidden] { display: none !important; }" in css
+
+
+# --- 1c. the tool picker is platform-scoped too --------------------------------------- #
+
+def _tool_group(page, platform):
+    """The picker's group for a platform. It carries the same marker as that
+    platform's FIELD — for the same reason — so the two are told apart by the
+    element they sit on."""
+    blocks = [b for b in _blocks_with(page, f'data-platform="{platform}"')
+              if "multiselect-group" in b]
+    assert len(blocks) == 1, f"{platform} tool group appears {len(blocks)} times"
+    return blocks[0]
+
+
+def test_the_tool_picker_hides_another_platforms_tools(dash, store):
+    """Eleven Instagram tools on an X-only instruction are eleven choices that
+    cannot take effect — each factory returns None for a run on another
+    platform."""
+    accounts = _all_platforms(store)
+    instruction = store.upsert_instruction(
+        Instruction(name="X only", account_ids_json=f'["{accounts["twitter"].id}"]'))
+    page = dash().test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "hidden" not in _tool_group(page, "twitter")
+    assert "hidden" in _tool_group(page, "instagram")
+    assert "hidden" in _tool_group(page, "youtube")
+    # The tools themselves are still in the form, so a hidden box keeps its
+    # state and nothing is silently unticked.
+    assert 'value="instagram_comments"' in page
+
+
+def test_a_platform_independent_tool_group_is_always_shown(dash, store):
+    _all_platforms(store)
+    page = dash().test_client().get("/instructions/new").get_data(as_text=True)
+    research = _one_block(page, 'data-name="web_search"')
+    assert "hidden" not in research
 
 
 def test_the_account_checklist_carries_its_platform(dash, store):
@@ -158,6 +265,15 @@ def _blocks_with(page, marker):
 def _one_block(page, marker):
     blocks = _blocks_with(page, marker)
     assert len(blocks) == 1, f"{marker} appears {len(blocks)} times"
+    return blocks[0]
+
+
+def _platform_field(page, platform):
+    """The FORM field scoped to a platform, not the tool-picker group — both
+    carry `data-platform`, because both are hidden for the same reason."""
+    blocks = [b for b in _blocks_with(page, f'data-platform="{platform}"')
+              if "multiselect-group" not in b]
+    assert len(blocks) == 1, f"{platform} field appears {len(blocks)} times"
     return blocks[0]
 
 
@@ -250,6 +366,33 @@ def test_clearing_every_community_row_means_the_home_timeline(dash, store):
     dash().test_client().post(f"/accounts/{account.id}/community",
                               data={"community_row_id": ""})
     assert "community_ids" not in store.get_account(account.id).meta
+
+
+def _share_block(page):
+    return _one_block(page, "data-needs-community")
+
+
+def test_the_follower_switch_is_hidden_until_there_is_a_community(dash, store):
+    """X ignores ``share_with_followers`` on a timeline post, and the route
+    clears it with the last community — so offering it records a decision that
+    can never take effect."""
+    _account(store, PlatformName.twitter, "x")
+    assert "hidden" in _share_block(
+        dash().test_client().get("/accounts").get_data(as_text=True))
+
+
+def test_the_follower_switch_is_there_when_posts_go_to_a_community(dash, store):
+    _account(store, PlatformName.twitter, "x", community_ids=["123"])
+    assert "hidden" not in _share_block(
+        dash().test_client().get("/accounts").get_data(as_text=True))
+
+
+def test_a_follower_switch_already_on_is_never_hidden(dash, store):
+    """Same rule as the instruction form's ``data-platform-keep``: a setting in
+    effect must not become invisible, whatever else the row says."""
+    _account(store, PlatformName.twitter, "x", share_with_followers=True)
+    assert "hidden" not in _share_block(
+        dash().test_client().get("/accounts").get_data(as_text=True))
 
 
 def test_outreach_targets_are_rows_with_the_kind_picked(dash, store):

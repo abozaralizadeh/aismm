@@ -618,15 +618,31 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   row-shaped control inside a form needs `.form label.my-class`, not `.my-class`. This is why every
   checkbox in the tool picker stacked on top of its own name at first; `.check` solves the same
   problem with `!important`.
-- **A field belonging to a platform the instruction does not target is HIDDEN, not just ignored.**
-  YouTube visibility and the X community picker sat on an Instagram-only instruction, recording
-  decisions that could never take effect. `dashboard/app._selected_platforms` computes the targeted
-  platforms **server-side** so the first paint is already right, and `instruction_form.html` marks
-  each block `data-platform="youtube|twitter"`; the page's `syncPlatforms()` keeps it true as the
-  account ticks change (the checklist is grouped by platform, each with `data-account-platform`).
-  Two rules make this safe: **`data-platform-keep` on a field that already HOLDS a value**, so a
-  setting in effect never becomes invisible, and hidden controls **still submit** — hiding must not
-  be able to wipe a saved value when an operator edits something unrelated.
+- **`[hidden] { display: none !important; }` is load-bearing** ([static/style.css](aismm/dashboard/static/style.css),
+  the first rule in the file). `hidden` is only a USER-AGENT rule, so ANY author `display`
+  declaration beats it — and this stylesheet sets `display` on nearly every wrapper a conditional
+  control uses (`.form label`, `.field`, `.check-group`, `.btn`, `.info-tip`,
+  `.multiselect-option`). Without that one line the attribute is INERT: a YouTube visibility picker
+  sat on an Instagram-only instruction, the tool filter hid nothing, and the `+`/`×` row buttons
+  showed up with scripting off. Nothing in the toggling was ever broken. Every progressive-
+  enhancement control here renders `hidden` and is revealed by script, so removing it breaks the
+  whole dashboard's conditional UI at once; a test asserts the rule exists.
+- **A control that cannot act is HIDDEN, not just ignored — on BOTH axes, task and platform.**
+  YouTube visibility and the X community card sat on an Instagram-only instruction; a Reply policy
+  sat on a pure publishing one — decisions recorded that could never take effect. Two predicates
+  gate the instruction form and are ANDed: the **task** (`data-publish-only` / `data-engage-only` /
+  `data-outreach-only`, mirroring `registry.always_on_for`) and the **platform**
+  (`data-platform="youtube|twitter"`, from `dashboard/app._selected_platforms`). Both are rendered
+  **server-side** so the first paint is already right, and ONE `sync()` owns `el.hidden` — two
+  handlers each assigning it is last-writer-wins, not AND, which is exactly how changing the Task
+  select used to bring the platform fields back. Two rules keep it safe: **`data-platform-keep` on
+  a field that already HOLDS a value**, so a setting in effect never becomes invisible, and hidden
+  controls **still submit** — hiding must not wipe a saved value when an operator edits something
+  unrelated. Same rule outside that form: the tool picker hides another platform's tool GROUP
+  (`TOOL_GROUPS` carries the platform; the factories return `None` off-platform anyway), and
+  "Also share with followers" appears with the first X community ID *typed*, not only after a save.
+  Bulk **Select all/Clear** compose with the filter but ignore the platform hiding — an
+  off-platform tool left ticked is still submitted and stored.
 - **A "one big string" field gets a ROW EDITOR, and the parser stays the one place that knows the
   grammar** ([static/repeat.js](aismm/dashboard/static/repeat.js), `data-repeat` /
   `data-repeat-row` / `data-repeat-add`). X communities were `ID = Name`, one per line, commas
