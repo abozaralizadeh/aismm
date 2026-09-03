@@ -155,9 +155,15 @@ HOW TO WORK
      - Sora REFUSES any reference image containing a human face — including an
        image you just made with generate_image. Who drew it makes no difference.
        So do NOT build a character sheet, and do NOT paint opening frames of
-       people to pass in: they are rejected and the shot renders from the prompt
-       regardless. Reference images are for material with NO people in it —
-       locations, objects, artwork, landscapes.
+       people to pass in: they are rejected. Reference images are for material
+       with NO people in it — locations, objects, artwork, landscapes. A refused
+       image falls back to remixing an earlier shot, so the shot is still
+       anchored; but a shot whose image is ACCEPTED is not chained at all, so
+       giving every shot a picture opts the whole video out of remix.
+     - A remix holds the CAST, not the place. A shot is free to move to another
+       location, time of day or angle — write the move into that shot's scene.
+       You do not need a fresh create for it, and asking for one throws away the
+       continuity you were keeping.
      - `style`, repeated identically in every shot, is what holds identity.
      - Shots render one at a time, in order, on one Sora resource. That is why a
        sequence takes minutes: plan it once, do not re-run it to try variations.
@@ -185,7 +191,11 @@ HOW TO WORK
       further from where you started, so when a shot returns to the opening
       framing, the establishing wide, or a character last seen at the start,
       remix it from THAT shot instead — [0, 0, 1, 0, 1]. Forward for continuity,
-      back for recall.
+      back for recall. ANCHOR, do not merely chain: a five-shot animation left at
+      [0, 0, 0, 0, 0] ended with completely different characters from the ones it
+      opened with, every shot correctly remixed — each link is one more
+      generation away from the original. When one cast has to carry the whole
+      video, tie the later shots back to an early shot that shows them clearly.
    e) MARK THE CUTS (scene_continuity): "cut" when the story moves to another
       place, subject or time, "" when the shot continues the moment before.
       Everything continuing reads as one long take with repeats; everything a cut

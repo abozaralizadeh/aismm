@@ -464,13 +464,18 @@ def test_an_odd_length_is_snapped_to_what_sora_renders(seq):
     assert seq["creates"][0]["seconds"] in (4, 8, 12)
 
 
-# --- a refused image is reported, not silently swapped ------------------------------ #
+# --- a refused image falls back to continuity, never to nothing --------------------- #
+# Reported from a live trailer: seven shots, each with its own panel, and Sora
+# refused the panel on shots 2 and 6. Those two were re-rendered from the prompt
+# alone — no image, no chain, no anchor of any kind — and they were exactly the
+# two whose cast changed. The panel is out of play either way once it is refused;
+# the only thing still to decide is what the shot is tied to.
 
-def test_a_refused_image_retries_that_shot_without_it(monkeypatch, tmp_path):
-    """Not by remixing the previous shot: the operator picked THAT panel for
-    THIS shot, so a remix would quietly answer a different request."""
-    paths = _panels(monkeypatch, tmp_path, 2)
+@pytest.fixture()
+def refuse_one(monkeypatch, tmp_path):
+    """Refuse the reference on shot 2 only, and record every call."""
     calls = {"creates": [], "remixes": []}
+    state = {"remix_fails": False}
 
     async def failover(prompt, seconds, size, *, ref_image_bytes=None, **kw):
         calls["creates"].append(ref_image_bytes)
@@ -484,7 +489,9 @@ def test_a_refused_image_retries_that_shot_without_it(monkeypatch, tmp_path):
 
     async def remix(resource, base, prompt):
         calls["remixes"].append(base)
-        return b"remixed", "remix-1"
+        if state["remix_fails"]:
+            raise RuntimeError("remix unavailable")
+        return b"remixed", f"remix-{len(calls['remixes'])}"
 
     monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
     monkeypatch.setattr(sequence_tool, "create_clip", create)
@@ -495,16 +502,73 @@ def test_a_refused_image_retries_that_shot_without_it(monkeypatch, tmp_path):
     monkeypatch.setattr(sequence_tool.video, "extract_last_frame", lambda c, s: b"tail")
     monkeypatch.setattr(sequence_tool, "save_bytes", lambda data, ext: "/assets/seq.mp4")
     monkeypatch.setattr(sequence_tool, "public_url", lambda p: "https://host/seq.mp4")
+    calls["state"] = state
+    return calls
 
+
+def test_a_refused_image_falls_back_to_remixing_the_sequence(refuse_one, monkeypatch,
+                                                             tmp_path):
+    """Rung 1, and the fix for the reported bug: an earlier clip of this same
+    sequence carries the cast the refused panel was chosen to supply."""
+    paths = _panels(monkeypatch, tmp_path, 2)
     result = _run_sequence(["a", "b"], reference_asset_paths=paths)
-    assert calls["remixes"] == []                       # retried, not substituted
-    assert calls["creates"][-1] is None                 # ...without the image
+    assert refuse_one["remixes"] == ["job-1"]
+    assert result["shots"][1]["how"] == "remix(shot 1, image refused)"
+
+
+def test_the_shot_that_lost_its_image_is_not_counted_as_using_one(refuse_one,
+                                                                  monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 2)
+    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
     assert result["reference_images_used"] == 1
     assert result["reference_images_given"] == 2
     assert any("rejects images containing human faces" in note
                for note in result["reference_notes"])
     assert any("describe the character IN `style`" in note
                for note in result["reference_notes"])
+
+
+def test_a_refused_image_on_shot_one_reuses_no_picture_it_does_not_have(refuse_one,
+                                                                       monkeypatch,
+                                                                       tmp_path):
+    """There is nothing to fall back ON at the start, so the prompt is all there
+    is — and that is exactly the case the result has to flag."""
+    path = _panels(monkeypatch, tmp_path, 1)[0]
+
+    async def refuse_first(prompt, seconds, size, *, ref_image_bytes=None, **kw):
+        refuse_one["creates"].append(ref_image_bytes)
+        if ref_image_bytes is not None:
+            raise RuntimeError("input_reference contains a human face")
+        return b"clip", "job-1", {"endpoint": "https://e"}
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", refuse_first)
+    result = _run_sequence(["a", "b"], reference_asset_paths=[path, ""])
+    assert result["shots"][0]["how"] == "create(image refused)"
+    assert any("no earlier clip" in note for note in result["reference_notes"])
+
+
+def test_a_second_refusal_borrows_a_picture_sora_already_accepted(refuse_one,
+                                                                  monkeypatch, tmp_path):
+    """Rung 2 — "use another photo". Only reachable when the remix itself fails,
+    but a picture Sora has already taken is the last anchor available."""
+    paths = _panels(monkeypatch, tmp_path, 2)
+    refuse_one["state"]["remix_fails"] = True
+    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    assert refuse_one["remixes"] == ["job-1"]              # tried, and failed
+    assert result["shots"][1]["how"] == "create+image(shot 1's, image refused)"
+    assert refuse_one["creates"][-1] is not None           # a real picture went out
+
+
+def test_a_shot_with_its_own_picture_is_reported_as_unchained(seq, monkeypatch,
+                                                              tmp_path):
+    """The trailer planned scene_remix_from=[0,1,2,2,4,5,6] and not one shot was
+    remixed, because a supplied image wins — and nothing said so."""
+    paths = _panels(monkeypatch, tmp_path, 3)
+    result = _run_sequence(["a", "b", "c"], reference_asset_paths=paths,
+                           scene_remix_from=[0, 1, 2])
+    assert seq["remixes"] == []
+    assert any("NOT chained from an earlier shot" in note
+               for note in result["timing_notes"])
 
 
 def test_an_unreadable_image_is_named_in_the_result(seq, monkeypatch, tmp_path):

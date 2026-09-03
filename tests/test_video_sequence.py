@@ -674,6 +674,79 @@ def test_a_source_whose_shot_failed_is_not_used(monkeypatch, sora):
     assert [r["base"] for r in sora["remixes"]] == ["job-1"]
 
 
+# --- pin the cast, let the story move -------------------------------------------------- #
+# Reported from a live YouTube run: a five-shot children's animation whose chain
+# was PERFECT — create, remix(1), remix(2), remix(3), remix(4) — and whose
+# characters changed completely anyway. The continuity clause was ordering Sora to
+# keep the source clip's "location, lighting and framing exactly" while the scene
+# below it asked for twilight, drizzle and a different place. A prompt at war with
+# itself is settled by regenerating, and the cast is what gets regenerated.
+
+def test_every_shot_says_the_characters_are_the_ones_in_style():
+    for index in (1, 3, 5):
+        prompt = build_clip_prompt("she crosses the meadow", STYLE, index=index, total=5,
+                                   continues_from_frame=False)
+        assert "CAST" in prompt
+        assert "Do not redesign, recast, replace or add characters" in prompt
+
+
+def test_the_cast_survives_a_change_of_place_and_time():
+    """The whole point: the scene may move, the characters may not change."""
+    prompt = build_clip_prompt("twilight on the hill, silver drizzle", STYLE, index=4,
+                               total=5, continues_from_frame=False,
+                               continues_from_remix=True, remix_source_shot=3)
+    assert "the same characters go with it, unchanged" in prompt
+
+
+def test_a_continuing_shot_no_longer_demands_the_old_light_and_place():
+    """This is the contradiction that shipped: 'keep the lighting exactly' above
+    a scene that asks for twilight."""
+    prompt = build_clip_prompt("twilight falls", STYLE, index=2, total=3,
+                               continues_from_frame=False, continues_from_remix=True)
+    assert "location, lighting and framing exactly" not in prompt
+    assert "Framing, location, time of day and lighting follow the shot below" in prompt
+    assert "NEXT moment, not another take" in prompt        # still advances
+
+
+def test_a_cut_may_land_in_another_light():
+    prompt = build_clip_prompt("the same hill at night", STYLE, index=3, total=4,
+                               continues_from_frame=False, continues_from_remix=True,
+                               is_cut=True, remix_source_shot=2)
+    assert "same characters, wardrobe, world and art style" in prompt
+    assert "in whatever place, light and time of day it describes" in prompt
+
+
+def test_a_single_clip_gets_no_cast_contract():
+    """Nothing to be consistent WITH, and the style block already said it."""
+    assert "CAST" not in build_clip_prompt("x", STYLE, index=1, total=1,
+                                           continues_from_frame=False)
+
+
+# --- a long forward chain drifts, and the agent has to be told ------------------------- #
+
+def test_a_long_forward_chain_is_reported_as_a_drift_risk(sora):
+    """Five shots, every one remixing its neighbour, [0,0,0,0,0] — the exact
+    shape of the run whose cast changed. Nothing in the result said so."""
+    result = _sequence(scenes=["a", "b", "c", "d", "e"], continuity="remix")
+    note = " ".join(result["timing_notes"])
+    assert "generations from where the video started" in note
+    assert "scene_remix_from" in note
+
+
+def test_a_sequence_that_re_anchors_is_left_alone(sora):
+    """[0, 0, 1, 1, 1] is the fix, so it must not also be scolded."""
+    result = _sequence(scenes=["a", "b", "c", "d", "e"], continuity="remix",
+                       scene_remix_from=[0, 0, 1, 1, 1])
+    assert "generations from where the video started" not in " ".join(
+        result.get("timing_notes", []))
+
+
+def test_a_short_chain_is_not_worth_a_warning(sora):
+    result = _sequence(scenes=["a", "b", "c"], continuity="remix")
+    assert "generations from where the video started" not in " ".join(
+        result.get("timing_notes", []))
+
+
 # --- faststart: browser progressive playback ----------------------------------------- #
 # A freshly-encoded MP4 puts the moov atom AFTER mdat, so the dashboard <video>
 # starts then stalls part-way while the player seeks back for metadata. Every

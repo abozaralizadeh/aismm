@@ -45,6 +45,22 @@ paying for the same rejection on every remaining shot is pure waste. Reference
 images remain useful for material with no people in it: locations, objects,
 artwork, landscapes.
 
+**A refused image is not a reason to render a shot unanchored.** The picture is
+out of play whatever we do next, so the only question left is what this shot is
+tied to, and any anchor from this sequence beats none: remix an earlier clip,
+else re-use a picture Sora has already accepted here, and only then fall back to
+the prompt alone — reported, because that shot is where the look will have moved.
+A seven-shot trailer had exactly two unanchored shots and they were exactly the
+two whose cast changed.
+
+**Pin the cast, let the story move.** The continuity clause used to demand the
+source clip's "location, lighting and framing exactly" and then hand Sora a scene
+that moved to a hill at twilight in the rain. A prompt that contradicts itself is
+settled by regenerating, and what gets regenerated is the characters. So
+``_CAST_CONTRACT`` states the invariant — the characters, their designs and the
+art style — on every shot, and the continuity clause now says the framing, place,
+time of day and light follow the scene.
+
 **Remix is the chain, and its SOURCE is a per-shot decision.** Every shot after
 the first edits an earlier clip of this same sequence — including cuts, where the
 source fixes the look and the prompt asks for a new moment. The default source is
@@ -106,6 +122,10 @@ MAX_CLIPS = 12                      # 12 × 12s = 144s, well past any platform's
 # Stop only when the failures look systemic (a dead resource, no credits) rather
 # than incidental. Below this a failed shot is skipped and the sequence goes on.
 _MAX_SHOT_FAILURES = 3
+# How many consecutive forward links before the drift is worth reporting. Four
+# shots chained one after another puts the last three generations from the first,
+# which is where a cast visibly stops being the same cast.
+_CHAIN_DRIFT_LINKS = 3
 # Moved to sora_client so generate_video can use it too.
 
 
@@ -253,11 +273,27 @@ def plan_segments(target_seconds: int, prefer: int = 12) -> dict:
             "note": note}
 
 
+# What must NEVER change, said separately from what the shot is free to change.
+# The continuity clause used to order "keep its subject, wardrobe, LOCATION,
+# LIGHTING and framing exactly" and then hand Sora a scene that moved to a hill
+# at twilight in the rain — a prompt at war with itself. A model resolves that by
+# regenerating, and what it regenerates is the cast: a five-shot children's
+# animation ended with different animals than it started with. Pin the people,
+# let the story move.
+_CAST_CONTRACT = (
+    "CAST — this never changes, whatever else the shot changes: the characters are "
+    "exactly the ones described in STYLE, with the same designs, faces, proportions, "
+    "wardrobe, colours and art style in every shot of this video. Do not redesign, "
+    "recast, replace or add characters. When the shot moves to another place, another "
+    "time of day or another angle, the same characters go with it, unchanged."
+)
+
+
 def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
                       continues_from_frame: bool, continues_from_remix: bool = False,
                       is_cut: bool = False, from_supplied_image: bool = False,
                       remix_source_shot: int = 0) -> str:
-    """Assemble one clip's prompt: style + continuity contract + this scene.
+    """Assemble one clip's prompt: style + cast contract + continuity + this scene.
 
     The style block is repeated in EVERY clip — that is lever 1. When a reference
     frame is attached, the prompt says so explicitly — that is lever 2. A remix
@@ -280,6 +316,11 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
     parts = []
     if style.strip():
         parts.append(f"STYLE (keep identical in every shot): {style.strip()}")
+    if style.strip() and total > 1:
+        # On every shot, including the first and including a shot whose chain
+        # broke — a clip rendered from the prompt alone is exactly where the cast
+        # is most likely to change, so it needs this most.
+        parts.append(_CAST_CONTRACT)
     if from_supplied_image:
         parts.append(
             "SOURCE IMAGE: the supplied reference is a still of THIS story's "
@@ -296,9 +337,10 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
         parts.append(
             f"CUT: the video you are editing is shot {remix_source_shot} of this "
             f"sequence, and it is there ONLY to fix the look — same characters, "
-            f"wardrobe, world, lighting and art style. This is a NEW shot: a "
-            f"different angle, subject or moment. Do NOT continue or repeat that "
-            f"shot's action or framing. Show what is described below as its own moment."
+            f"wardrobe, world and art style. This is a NEW shot: a different angle, "
+            f"subject or moment. Do NOT continue or repeat that shot's action or "
+            f"framing. Show what is described below as its own moment, in whatever "
+            f"place, light and time of day it describes."
         )
     elif is_cut:
         # A cut with nothing to edit from: the style block is all that holds it.
@@ -319,11 +361,12 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
         which = (f"shot {remix_source_shot} of this sequence" if remix_source_shot
                  else "the PREVIOUS shot of this sequence")
         parts.append(
-            f"CONTINUITY: the video you are editing is {which}. Keep its subject, "
-            f"wardrobe, location, lighting and framing exactly, and ADVANCE the "
-            f"action to what is described below — this is the NEXT moment, not "
-            f"another take of the same one. Do not restart the scene or repeat the "
-            f"previous action."
+            f"CONTINUITY: the video you are editing is {which}. Keep its cast, "
+            f"wardrobe, world and art style exactly, and ADVANCE the action to what "
+            f"is described below — this is the NEXT moment, not another take of the "
+            f"same one. Do not restart the scene or repeat the previous action. "
+            f"Framing, location, time of day and lighting follow the shot below: "
+            f"change them where it asks, leave them as they are where it does not."
         )
     elif index > 1:
         parts.append(
@@ -415,6 +458,10 @@ async def perform_create_sequence(
     # one rather than only its neighbour. A shot that failed leaves "" here and is
     # not offered as a source.
     job_by_shot: dict[int, str] = {}
+    # Supplied pictures Sora has actually ACCEPTED, by shot. A refusal is about
+    # the picture, not the account, so one that already went through is known
+    # usable — the only substitute worth spending a create on.
+    accepted_seeds: dict[int, bytes] = {}
 
     reference: bytes | None = None      # the previous shot's final frame
     refused_seeds: list[int] = []
@@ -517,29 +564,68 @@ async def perform_create_sequence(
                                                              else "create")
             except Exception as exc:  # noqa: BLE001
                 detail = format_http_error(exc) if hasattr(exc, "response") else str(exc)
-                # A refused SUPPLIED image is retried without it: the operator
-                # picked that panel for this shot, so remixing the previous shot
-                # would silently answer a different request. The style block still
-                # carries the look.
+                # A refused SUPPLIED image falls back to the sequence's own
+                # continuity, in that order of preference. The picture is out of
+                # play either way — Sora will not look at it — so the only
+                # question left is what anchors this shot, and ANY anchor from
+                # this sequence beats none. Rendering it from the prompt alone is
+                # what dropped two strangers into the middle of a seven-shot
+                # trailer: shots 2 and 6 were the only unanchored ones, and they
+                # were the only ones whose cast changed.
                 if from_image and _looks_like_reference_rejection(detail):
-                    logger.info("Reference image refused for shot %d (%s); rendering it "
-                                "from the prompt alone", index, detail[:160])
+                    logger.info("Reference image refused for shot %d (%s); falling back "
+                                "to this sequence's own continuity", index, detail[:160])
                     refused_seeds.append(index)
                     frames_refused = True
-                    retry_prompt = build_clip_prompt(
-                        scene, style, index=index, total=len(scenes),
-                        continues_from_frame=False, is_cut=is_cut)
-                    try:
-                        if resource is None:
-                            clip, job_id, resource = await create_clip_with_failover(
-                                retry_prompt, seconds, size)
-                        else:
+                    # 1. Edit an earlier clip of this sequence. The strongest
+                    #    anchor there is: it carries the cast, wardrobe, world and
+                    #    light the refused panel was picked to supply.
+                    if index > 1 and resource is not None and source_job:
+                        try:
+                            retry_prompt = build_clip_prompt(
+                                scene, style, index=index, total=len(scenes),
+                                continues_from_frame=False, continues_from_remix=True,
+                                is_cut=is_cut, remix_source_shot=source_shot)
+                            clip, job_id = await remix_clip(resource, source_job,
+                                                            retry_prompt)
+                            how = f"remix(shot {source_shot}, image refused)"
+                        except Exception as remix_exc:  # noqa: BLE001
+                            logger.warning("Remix after a refused image failed too: %s",
+                                           remix_exc)
+                    # 2. Another picture Sora has already taken from this
+                    #    sequence. A different panel of the same story is a poorer
+                    #    match than the one chosen for this shot, and still far
+                    #    better than an unanchored clip.
+                    if clip is None and accepted_seeds and resource is not None:
+                        donor = max(accepted_seeds)
+                        try:
+                            sub_prompt = build_clip_prompt(
+                                scene, style, index=index, total=len(scenes),
+                                continues_from_frame=False, is_cut=is_cut,
+                                from_supplied_image=True)
                             clip, job_id = await create_clip(
-                                resource, retry_prompt, seconds, size, None)
-                        how = "create(image refused)"
-                    except Exception as retry_exc:  # noqa: BLE001
-                        logger.warning("Shot %d failed without its image too: %s",
-                                       index, retry_exc)
+                                resource, sub_prompt, seconds, size,
+                                accepted_seeds[donor])
+                            how = f"create+image(shot {donor}'s, image refused)"
+                        except Exception as sub_exc:  # noqa: BLE001
+                            logger.warning("Substitute reference from shot %d was "
+                                           "refused too: %s", donor, sub_exc)
+                    # 3. Nothing to anchor to — the prompt and `style` alone.
+                    if clip is None:
+                        retry_prompt = build_clip_prompt(
+                            scene, style, index=index, total=len(scenes),
+                            continues_from_frame=False, is_cut=is_cut)
+                        try:
+                            if resource is None:
+                                clip, job_id, resource = await create_clip_with_failover(
+                                    retry_prompt, seconds, size)
+                            else:
+                                clip, job_id = await create_clip(
+                                    resource, retry_prompt, seconds, size, None)
+                            how = "create(image refused)"
+                        except Exception as retry_exc:  # noqa: BLE001
+                            logger.warning("Shot %d failed without its image too: %s",
+                                           index, retry_exc)
                 # Azure refuses input_reference containing faces — exactly where
                 # GenBox loses continuity. Fall back to remixing the PREVIOUS shot
                 # rather than making an unrelated clip (or replaying shot 1).
@@ -576,6 +662,8 @@ async def perform_create_sequence(
         previous_job_id = job_id or previous_job_id
         if job_id:
             job_by_shot[index] = job_id
+        if seed is not None and how == "create+image":
+            accepted_seeds[index] = seed
 
         # Measure what was ACTUALLY rendered. A remix takes only a prompt and
         # inherits its source's duration, so a shot that asked for 8s and fell
@@ -628,7 +716,10 @@ async def perform_create_sequence(
               "clips_merged": len(clips), "shots": details}
     asked_for = sum(1 for path in supplied if path)
     if asked_for:
-        used = sum(1 for row in details if row.get("how", "").startswith("create+image"))
+        # Exact match: a shot that fell back to ANOTHER shot's picture did not get
+        # the one it was given, and counting it here would report a match that was
+        # never made.
+        used = sum(1 for row in details if row.get("how", "") == "create+image")
         result["reference_images_used"] = used
         result["reference_images_given"] = asked_for
         notes = list(seed_notes)
@@ -636,10 +727,52 @@ async def perform_create_sequence(
             notes.append(
                 f"Sora refused the reference image on shot(s) "
                 f"{', '.join(str(i) for i in refused_seeds)} — it rejects images "
-                f"containing human faces. Those shots came from the prompt and style "
-                f"alone, so describe the character IN `style` to keep them consistent.")
+                f"containing human faces. Those shots fell back to this sequence's own "
+                f"continuity instead (`how` says what each one used); describe the "
+                f"character IN `style` too, since that is what survives every refusal.")
+        stranded = [row["shot"] for row in details
+                    if row.get("how", "") == "create(image refused)"]
+        if stranded:
+            notes.append(
+                f"shot(s) {', '.join(str(s) for s in stranded)} had no earlier clip and "
+                f"no accepted picture to fall back on, so they were rendered from the "
+                f"prompt and `style` alone — that is where the look is most likely to "
+                f"have changed. Check them before publishing.")
         if notes:
             result["reference_notes"] = notes
+
+    # A supplied picture WINS over the chain for its shot, so a sequence carrying
+    # one on every shot is never chained at all and `scene_remix_from` — which the
+    # agent sat and planned — is silently ignored. On the trailer that prompted
+    # this, all seven shots had a panel and not one shot was remixed.
+    unchained = [row["shot"] for row in details
+                 if row.get("how", "") == "create+image" and row["shot"] > 1]
+    if unchained and mode in {"remix", "auto"}:
+        timing_notes.append(
+            f"shot(s) {', '.join(str(s) for s in unchained)} used their own reference "
+            f"image, so they were NOT chained from an earlier shot — a supplied image "
+            f"wins over the remix, and scene_remix_from does not apply to them. Their "
+            f"consistency rests on those pictures and on `style`.")
+
+    # Every forward link is another generation away from the opening, so a long
+    # unbroken chain drifts — which is how a five-shot children's animation ended
+    # with a different cast than it began with, every shot correctly remixed.
+    longest = run = 0
+    for row in details:
+        how = row.get("how", "")
+        if how.startswith(f"remix(shot {row['shot'] - 1}"):
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+    if longest >= _CHAIN_DRIFT_LINKS:
+        timing_notes.append(
+            f"{longest} shots in a row each remixed the shot just before them, so the "
+            f"last of them is {longest} generations from where the video started and "
+            f"the look drifts a little at every link. If the characters or the style "
+            f"changed by the end, re-run with scene_remix_from anchoring the later "
+            f"shots to an early one that shows them clearly — e.g. [0, 0, 1, 1, 1] "
+            f"rather than all zeros.")
 
     warnings = []
     if timing_notes:
@@ -829,10 +962,16 @@ def _make_create_sequence(state: dict):
                 reference image containing a human face — including one you just
                 drew with ``generate_image``, because who made it is irrelevant.
                 Do not build a character sheet to pass in here and do not paint
-                opening frames of people; it is refused and the shot is rendered
-                from the prompt anyway. Useful for locations, objects, artwork,
-                logos and landscapes. When people are on camera, identity comes
-                from ``style`` and continuity comes from remix.
+                opening frames of people; it is refused. Useful for locations,
+                objects, artwork, logos and landscapes. When people are on camera,
+                identity comes from ``style`` and continuity comes from remix.
+
+                A refused image does not leave the shot adrift: it falls back to
+                remixing an earlier shot, then to a picture already accepted in
+                this sequence, then to the prompt alone — ``how`` says which, and
+                only the last of those is a consistency risk. But note that a shot
+                WITH an accepted picture is not chained at all, so giving every
+                shot its own image opts the whole video out of remix.
             reference_asset_path: Shorthand for a single image on shot 1.
 
         Returns the merged ``asset_path``, its **measured** duration, and per-shot

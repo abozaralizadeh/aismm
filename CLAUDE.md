@@ -819,9 +819,34 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
 - **A supplied image is a LOOK, not a paused video** (`from_supplied_image` in `build_clip_prompt`).
   The continuity wording tells Sora to *resume* from the frame; applied to a panel the operator
   chose, that asks it to continue an action that never happened. A supplied image wins over the
-  chained frame at that index — naming a panel for a shot is more specific than "continue" — and a
-  refused one is retried WITHOUT it rather than remixing the previous shot, which would quietly
-  answer a different request.
+  chained frame at that index — naming a panel for a shot is more specific than "continue" — which
+  also means **a shot with its own picture is not chained at all**, so giving every shot a reference
+  silently opts the whole video out of remix and `scene_remix_from` never applies. A seven-shot
+  trailer planned `[0, 1, 2, 2, 4, 5, 6]` and remixed nothing. That case is now a `timing_notes`
+  entry naming the unchained shots.
+- **A refused reference falls back to the sequence's own continuity, never to nothing.** The
+  earlier rule — retry that shot WITHOUT the image, since a remix "would quietly answer a different
+  request" — is REVERSED: the picture is out of play either way (Sora will not look at it), so the
+  only question left is what anchors the shot, and any anchor from this sequence beats none. On the
+  trailer above, shots 2 and 6 were the only unanchored ones and the only two whose cast changed.
+  `perform_create_sequence` now walks three rungs and records which one it used in `how`: **remix an
+  earlier shot** (`remix(shot N, image refused)`), else **borrow a picture Sora has already
+  ACCEPTED** in this run (`accepted_seeds` → `create+image(shot N's, image refused)`; a refusal is
+  about the picture, not the account, so one that already went through is known usable), else the
+  prompt and `style` alone (`create(image refused)`), which is reported as `stranded`.
+- **Pin the CAST, let the story move** (`_CAST_CONTRACT`, on every shot of a multi-shot video). The
+  continuity clause used to order "keep its subject, wardrobe, LOCATION, LIGHTING and framing
+  exactly" and the scene below it would ask for twilight on a hill in the rain — a prompt at war
+  with itself. A model resolves that by regenerating, and what it regenerates is the *characters*: a
+  five-shot children's animation whose remix chain was completely intact still ended with different
+  animals than it opened with. So the invariant (characters, designs, wardrobe, colours, art style)
+  is stated separately and absolutely, while place, time of day, light and framing explicitly follow
+  the shot. The contract goes on the first shot and on a shot whose chain broke too — a clip
+  rendered from the prompt alone is exactly where the cast is most likely to change.
+- **Every forward link is another generation away from shot 1** (`_CHAIN_DRIFT_LINKS`). `[0, 0, 0,
+  0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
+  `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,
+  1]`). Reported rather than rewritten — where to re-anchor is a directing decision.
 - **`seconds_each` defaults to 12, deliberately.** The agent was picking 4s clips and the result read
   as a slideshow; 12s is fewer seams, less drift and room for the action to move. Per-shot lengths
   are the rhythm lever, not the default.
