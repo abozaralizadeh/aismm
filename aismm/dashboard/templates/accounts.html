@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Accounts · AISMM{% endblock %}
 {% block content %}
-<h1>Accounts</h1>
+<div class="page-head">
+  <div class="page-heading">
+    <h1>Accounts</h1>
+    <p class="page-sub muted">The accounts this workspace posts from, what each one is set to,
+      and the health of its token.</p>
+  </div>
+  <a class="btn btn-primary" href="#connect">+ Connect an account</a>
+</div>
 
 {% if superseded %}
   <div class="flash flash-warning">
@@ -89,15 +96,40 @@
           </summary>
           <form method="post" action="{{ url_for('choose_twitter_community', account_id=a.id) }}"
                 class="form">
-            <label>Communities
-              <textarea name="community_id" rows="{{ [ids | length + 1, 3] | max }}"
-                        placeholder="One per line. Blank = home timeline.&#10;1493446837214187523 = AI Builders">{% for cid in ids %}{{ cid }}{% if cnames.get(cid) %} = {{ cnames[cid] }}{% endif %}
-{% endfor %}</textarea>
+            {# One row per community, ID and Name as their own fields. The old
+               single box asked the operator to learn a grammar (`ID = Name`,
+               one per line, commas mean something else) before they could type
+               two values — and a 19-digit number beside a free-text label is
+               exactly what two inputs are for. A blank row is always rendered,
+               so a community can be added without scripting too. #}
+            <div class="field">
+              <span class="field-label">Communities</span>
+              <div class="repeat" data-repeat>
+                <div class="repeat-head small muted" aria-hidden="true">
+                  <span>Community ID</span><span>Name</span><span></span>
+                </div>
+                <div data-repeat-rows>
+                  {% for cid in ids + [''] %}
+                    <div class="repeat-row" data-repeat-row>
+                      <input type="text" name="community_row_id" value="{{ cid }}"
+                             inputmode="numeric" placeholder="1493446837214187523"
+                             aria-label="Community ID">
+                      <input type="text" name="community_row_name"
+                             value="{{ cnames.get(cid, '') }}" placeholder="AI Builders"
+                             aria-label="Community name">
+                      <button type="button" class="btn small repeat-remove"
+                              data-repeat-remove hidden
+                              title="Remove this community" aria-label="Remove this community">×</button>
+                    </div>
+                  {% endfor %}
+                </div>
+                <button type="button" class="btn small" data-repeat-add hidden>+ Add a community</button>
+              </div>
               <span class="hint">
-                <strong>One per line</strong>, as <code>ID</code> or <code>ID = Name</code>. Copy the
-                number from the community URL: <code>x.com/i/communities/ID</code>. AISMM asks X for
-                the name when you save; type your own after <code>=</code> if it cannot find one —
-                the name is what you will pick from on an instruction.
+                Copy the number from the community URL:
+                <code>x.com/i/communities/ID</code>. AISMM asks X for the name when you save;
+                type your own if it cannot find one — the name is what you will pick from on
+                an instruction. Leave every row empty for the home timeline.
                 {% if ids and ids | length > 1 %}
                   <br>The next post goes to
                   <strong>{{ cnames.get(ids[(a.meta.get('community_cursor') or 0) % (ids | length)])
@@ -109,7 +141,7 @@
                 <br>This is the DEFAULT. An instruction can pin one of these, or the home
                 timeline, for its own posts.
               </span>
-            </label>
+            </div>
             <label class="check">
               <input type="checkbox" name="share_with_followers"
                      {% if a.meta.get('share_with_followers') %}checked{% endif %}>
@@ -174,7 +206,7 @@
 <p class="muted">No accounts connected yet — pick a platform below.</p>
 {% endif %}
 
-<h2>Connect another</h2>
+<h2 id="connect">Connect another</h2>
 <p class="muted small">
   To re-authorize an account you already have, use its <strong>Reconnect</strong> button above —
   it reuses the app that connected it and updates the account in place. Connecting from here

@@ -1,9 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Settings · AISMM{% endblock %}
 {% block content %}
-<h1>Settings</h1>
-<p class="muted">Configuration is loaded from your <code>.env</code>. This page is read-only —
-edit <code>.env</code> and restart to change it.</p>
+<div class="page-head">
+  <div class="page-heading">
+    <h1>Settings</h1>
+    <p class="page-sub muted">What this deployment is wired to, plus the connections you
+      add and share yourself.</p>
+  </div>
+</div>
+<p class="muted">The <code>.env</code> block below is read-only — edit <code>.env</code> and
+restart to change it. Everything under <em>connections</em> is editable here.</p>
+
+{# Suggestions for the "share with" boxes, ONCE per page: an id must be unique,
+   and every sharing form on this page offers the same people. #}
+{% if share_people %}
+  <datalist id="share-people">
+    {% for email in share_people %}<option value="{{ email }}">{% endfor %}
+  </datalist>
+{% endif %}
 
 <h2>LLM</h2>
 <div class="table-scroll">
@@ -80,6 +94,65 @@ edit <code>.env</code> and restart to change it.</p>
   </label>
 {% endmacro %}
 
+{# --- sharing (the same fields for llm / image / video) ---------------------
+   A connection belongs to whoever created it. Sharing lets someone else USE
+   it: they see its name, never its endpoint or key.
+
+   People are named by EMAIL, typed. The old control was a multi-select built
+   from the people this deployment happened to know about already — on a fresh
+   install that is nobody, so the form rendered with no controls at all and
+   "Update sharing" posted an empty body and flashed success. A button that
+   cannot do anything is worse than no button.
+
+   With sign-in switched off there is one implicit local operator and every
+   connection is already theirs, so sharing has nothing to mean. Say that,
+   instead of rendering a form that cannot work. #}
+{% macro share_form(cfg, endpoint) %}
+  {% if not sso_enabled %}
+    <p class="muted small">Sharing needs sign-in. With SSO off the dashboard has a single local
+      operator, and every connection already belongs to them.</p>
+  {% elif cfg.is_env and not is_site_owner %}
+    <p class="muted small">Only the deployment owner can share the <code>.env</code> connection.</p>
+  {% else %}
+    <form class="form share-form" method="post" action="{{ url_for(endpoint, config_id=cfg.id) }}">
+      {% if not cfg.is_env %}
+        <label class="check">
+          <input type="checkbox" name="shared_with_workspace"
+                 {% if cfg.shared_with_workspace %}checked{% endif %}>
+          Share with everyone in this workspace (they see the name only)
+        </label>
+      {% endif %}
+      {% if is_site_owner %}
+        <div class="field">
+          <span class="field-label">Shared with</span>
+          {# Each row carries its own hidden input, so removing the row is what
+             stops the sharing — no "keep?" checkbox to reason about. #}
+          <div class="repeat" data-repeat data-repeat-min="0">
+            <div data-repeat-rows>
+              {% for person in cfg.shared_with %}
+                <div class="share-row" data-repeat-row>
+                  <input type="hidden" name="shared_with" value="{{ person }}">
+                  <span class="mono small">{{ person }}</span>
+                  <button type="button" class="btn small repeat-remove" data-repeat-remove
+                          title="Stop sharing with {{ person }}"
+                          aria-label="Stop sharing with {{ person }}">×</button>
+                </div>
+              {% else %}
+                <p class="muted small">Not shared with anyone yet.</p>
+              {% endfor %}
+            </div>
+          </div>
+          <input type="email" name="share_add" list="share-people" autocomplete="off"
+                 placeholder="colleague@example.com" aria-label="Share with someone else">
+          <span class="hint">They can then pick this connection on their own instructions —
+            the name only, never the key. Removing someone takes it away from their next run.</span>
+        </div>
+      {% endif %}
+      <div class="actions"><button class="btn small" type="submit">Update sharing</button></div>
+    </form>
+  {% endif %}
+{% endmacro %}
+
 <h3>Your connections</h3>
 {% if owned_configs %}
   {% for cfg in owned_configs %}
@@ -102,25 +175,7 @@ edit <code>.env</code> and restart to change it.</p>
         <p class="muted">The deployment default is configured from <code>.env</code> and cannot be
           edited here. Share it with specific people below.</p>
       {% endif %}
-      <form class="form" method="post" action="{{ url_for('share_llm_config', config_id=cfg.id) }}">
-        {% if not cfg.is_env %}
-          <label class="check">
-            <input type="checkbox" name="shared_with_workspace"
-                   {% if cfg.shared_with_workspace %}checked{% endif %}>
-            Share with everyone in this workspace (they see the name only)
-          </label>
-        {% endif %}
-        {% if is_site_owner %}
-          <label>Share with specific people (name only)
-            <select name="shared_with" multiple size="4">
-              {% for email in share_people %}
-                <option value="{{ email }}" {% if email in cfg.shared_with %}selected{% endif %}>{{ email }}</option>
-              {% endfor %}
-            </select>
-          </label>
-        {% endif %}
-        <div class="actions"><button class="btn small" type="submit">Update sharing</button></div>
-      </form>
+      {{ share_form(cfg, 'share_llm_config') }}
     </div>
   {% endfor %}
 {% else %}
@@ -146,29 +201,6 @@ edit <code>.env</code> and restart to change it.</p>
   </table>
   </div>
 {% endif %}
-
-{# --- shared sharing form (identical fields for llm/image/video) --------- #}
-{% macro share_form(cfg, endpoint) %}
-  <form class="form" method="post" action="{{ url_for(endpoint, config_id=cfg.id) }}">
-    {% if not cfg.is_env %}
-      <label class="check">
-        <input type="checkbox" name="shared_with_workspace"
-               {% if cfg.shared_with_workspace %}checked{% endif %}>
-        Share with everyone in this workspace (they see the name only)
-      </label>
-    {% endif %}
-    {% if is_site_owner %}
-      <label>Share with specific people (name only)
-        <select name="shared_with" multiple size="4">
-          {% for email in share_people %}
-            <option value="{{ email }}" {% if email in cfg.shared_with %}selected{% endif %}>{{ email }}</option>
-          {% endfor %}
-        </select>
-      </label>
-    {% endif %}
-    <div class="actions"><button class="btn small" type="submit">Update sharing</button></div>
-  </form>
-{% endmacro %}
 
 {% macro image_fields(cfg) %}
   {% set c = cfg.config if cfg else {} %}
@@ -203,22 +235,41 @@ edit <code>.env</code> and restart to change it.</p>
     <input type="text" name="name" value="{{ cfg.name if cfg else '' }}"
            placeholder="e.g. My Sora pool" required>
   </label>
-  <label>Endpoints (comma-separated for a pool)
-    <input type="text" name="endpoints_csv" value="{{ c.endpoints_csv if cfg else '' }}"
-           placeholder="https://a.openai.azure.com, https://b.openai.azure.com" required>
-  </label>
-  <label>Models (comma-separated, aligned to endpoints)
-    <input type="text" name="models_csv" value="{{ c.models_csv if cfg else 'sora-2' }}">
-  </label>
+  {% set eps = (c.get('endpoints_csv', '') if cfg else '').split(',') | map('trim') | select | list %}
+  {% set mods = (c.get('models_csv', '') if cfg else '').split(',') | map('trim') | select | list %}
+  <div class="field">
+    <span class="field-label">Sora resources</span>
+    <div class="repeat repeat-3" data-repeat>
+      <div class="repeat-head small muted" aria-hidden="true">
+        <span>Endpoint</span><span>Model</span><span>API key</span><span></span>
+      </div>
+      <div data-repeat-rows>
+        {% for i in range(eps|length + 1) %}
+          <div class="repeat-row" data-repeat-row>
+            <input type="url" name="pool_endpoint" value="{{ eps[i] if i < eps|length else '' }}"
+                   placeholder="https://a.openai.azure.com" aria-label="Endpoint">
+            <input type="text" name="pool_model" value="{{ mods[i] if i < mods|length else '' }}"
+                   placeholder="sora-2" aria-label="Model">
+            <input type="password" name="pool_key" autocomplete="new-password"
+                   placeholder="{{ 'stored' if i < eps|length else '' }}" aria-label="API key"
+                   data-repeat-blank-placeholder>
+            <button type="button" class="btn small repeat-remove" data-repeat-remove hidden
+                    title="Remove this resource" aria-label="Remove this resource">×</button>
+          </div>
+        {% endfor %}
+      </div>
+      <button type="button" class="btn small" data-repeat-add hidden>+ Add a resource</button>
+    </div>
+    <span class="hint">One Azure resource per row; a job stays on the resource that
+      created it, so the pool balances between runs. Keys are encrypted and never shown
+      back — leave every key blank to keep the stored ones, or type them all at once
+      (they are stored aligned to the endpoints, so a changed list needs them again).</span>
+  </div>
   <label>API version
     <input type="text" name="api_version" value="{{ c.api_version if cfg else 'preview' }}">
   </label>
   <label>Max attempts (0 = auto)
     <input type="number" name="max_attempts" min="0" value="{{ c.max_attempts if cfg else '0' }}">
-  </label>
-  <label>API keys (comma-separated, aligned to endpoints)
-    <input type="password" name="keys_csv" autocomplete="new-password"
-           placeholder="{{ 'leave blank to keep the stored keys' if cfg else '' }}">
   </label>
   <label class="check">
     <input type="checkbox" name="enabled" {% if not cfg or cfg.enabled %}checked{% endif %}>

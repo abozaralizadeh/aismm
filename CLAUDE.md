@@ -573,8 +573,10 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
 - **Dashboard mobile rules** ([static/style.css](aismm/dashboard/static/style.css)): a new `<table>`
   must be wrapped in `<div class="table-scroll">` or the whole page scrolls sideways on a phone, and
   form controls must stay **16px on touch** (`@media (pointer: coarse)`) or iOS Safari zooms on focus
-  and never returns. `tests/test_responsive.py` enforces both; it also covers the viewport tag, the
-  scrollable nav, and 44px tap targets.
+  and never returns — a template using a new `input[type=…]` must add it to all three
+  `.form input[type=…]` rule lists, since they enumerate types rather than matching every input.
+  `tests/test_responsive.py` enforces both; it also covers the viewport tag, the scrollable nav, and
+  44px tap targets.
 - **`describe_image` must NEVER proof-read our own generated image.** It reads text
   approximately and is worst at exactly what is worth checking — phone numbers, non-Latin scripts,
   RTL, small print. A live run failed because it read a *correct* Persian footer as garbled and a
@@ -616,6 +618,52 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   row-shaped control inside a form needs `.form label.my-class`, not `.my-class`. This is why every
   checkbox in the tool picker stacked on top of its own name at first; `.check` solves the same
   problem with `!important`.
+- **A field belonging to a platform the instruction does not target is HIDDEN, not just ignored.**
+  YouTube visibility and the X community picker sat on an Instagram-only instruction, recording
+  decisions that could never take effect. `dashboard/app._selected_platforms` computes the targeted
+  platforms **server-side** so the first paint is already right, and `instruction_form.html` marks
+  each block `data-platform="youtube|twitter"`; the page's `syncPlatforms()` keeps it true as the
+  account ticks change (the checklist is grouped by platform, each with `data-account-platform`).
+  Two rules make this safe: **`data-platform-keep` on a field that already HOLDS a value**, so a
+  setting in effect never becomes invisible, and hidden controls **still submit** — hiding must not
+  be able to wipe a saved value when an operator edits something unrelated.
+- **A "one big string" field gets a ROW EDITOR, and the parser stays the one place that knows the
+  grammar** ([static/repeat.js](aismm/dashboard/static/repeat.js), `data-repeat` /
+  `data-repeat-row` / `data-repeat-add`). X communities were `ID = Name`, one per line, commas
+  meaning something else; outreach targets carry their kind in a sigil (`#`/`r/`/`@`); the Sora pool
+  was three comma-separated lists that had to line up by position. Each is now one thing per row
+  with its own inputs, and the route rebuilds the stored text (`_community_entries`,
+  `_engagement_targets`, `_sora_rows`) — `twitter.parse_community_entries` and
+  `targets.parse_targets` are still the only grammar definitions. **The free-text field is still
+  accepted when no rows are posted** (a script or bookmarked POST keeps working), one blank row is
+  always rendered server-side so a value can be added without scripting, and JS only adds the `+`/`×`
+  (hence the markup renders them `hidden`). Cloning a row resets a `<select>` by `selectedIndex`
+  (assigning `''` selects nothing) and blanks any `data-repeat-blank-placeholder` — a "stored"
+  placeholder is a lie on a new row.
+- **The Sora pool's three CSVs line up BY POSITION and the keys are never echoed back**, so they can
+  only be replaced as a SET. `save_provider_config` refuses a partial fill ("typing one means typing
+  them all") and refuses blank keys when the endpoint list changed, because either would silently
+  send one resource's key to another. Keying "keep this one" on the endpoint URL would mean reading
+  plaintext secrets in a route — `_decrypt_provider_secrets` is private and stays that way.
+- **Sharing names people by TYPED email.** The old control was a multi-select populated from the
+  people this deployment had already seen — on a fresh install, nobody: the form rendered with no
+  options, "Update sharing" posted an empty body, and it flashed "Sharing updated." A button that
+  cannot do anything is worse than no button. Now each existing share is a row with a hidden
+  `shared_with` (removing the row is what stops the sharing), plus one `share_add` box backed by a
+  `<datalist>`; a rejected address is reported rather than dropped, and the flash says the resulting
+  state (`_sharing_message`), not "updated". With **SSO off** the page says sharing needs sign-in
+  instead of rendering an inert form — there is one implicit local operator who owns everything.
+- **Every column heading on /instructions sorts** (`INSTRUCTION_SORTS` + the `sort_header` macro in
+  `templates/_macros.html`). One key per column, each a **tuple ending in `name.lower()`** so equal
+  values (three paused instructions, four in `dry_run`) keep a stable order instead of shuffling per
+  request. `created_at` has no column but stays a valid key — an unknown key silently rewrites to
+  `name`, so dropping one would break existing links. Each page passes its own filter-preserving URL
+  builder to the macro; `instructions_url` **drops unknown overrides** (the shared macro also resets
+  `page`, and this list is not paged).
+- **A timestamp gets a relative second line, never a replacement** (`dashboard/humanize.time_until`,
+  the `time_until` template global). "in 3 minutes" is the answer to what a *Next run* column is
+  actually asked; the absolute UTC value is what you cross-check against the service log, so both
+  are shown. It returns `""` for anything it cannot read rather than guessing.
 - **Per-instruction tool selection** (`Instruction.tools_json`, `registry.build_tools(state,
   enabled)`). Empty list = ALL, so a newly registered tool is available to instructions that never
   narrowed their choice; `registry.ALWAYS_ON` (`publish`, `report_failure`) is never withheld or a

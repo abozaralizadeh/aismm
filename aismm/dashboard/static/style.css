@@ -142,8 +142,15 @@ main.legal hr { border: none; border-top: 1px solid var(--border); margin: 2rem 
 
 .panel-grid { display: grid; gap: 1rem; margin-bottom: 1rem; }
 .panel-grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+/* A lone <section class="panel"> is a sibling of the .panel-grid blocks around
+   it, and only the GRID carried a bottom margin — so a standalone panel
+   (Performance, Recent activity) sat flush against the next section and the two
+   borders read as one overlapping box. The gap belongs to the panel itself; a
+   panel INSIDE a grid gets none, because the grid's own `gap` already spaces
+   it and a margin there would push the tracks apart unevenly. */
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-         padding: 1.1rem 1.2rem; min-width: 0; }
+         padding: 1.1rem 1.2rem; min-width: 0; margin-bottom: 1rem; }
+.panel-grid > .panel { margin-bottom: 0; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
               margin-bottom: .9rem; }
 .panel-head h2 { margin: 0; font-size: 1.05rem; }
@@ -270,6 +277,24 @@ td.actions-cell .actions { flex-wrap: nowrap; justify-content: flex-end; }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 form { margin: 0; }
 
+/* One page header everywhere: title (+ a line saying what the page is for) on
+   the left, the page's primary action on the right. It wraps rather than
+   squeezing the button off the edge on a phone. */
+.page-head {
+  display: flex; flex-wrap: wrap; gap: .6rem 1rem;
+  align-items: flex-end; justify-content: space-between; margin-bottom: 1.1rem;
+}
+.page-heading { min-width: 0; }
+.page-head h1 { margin: 0; }
+.page-sub { margin: .25rem 0 0; font-size: .9rem; }
+
+/* A visible focus ring for keyboard users, and ONLY for them: :focus-visible
+   leaves a mouse click unringed, which is why the old outline:none reflexes
+   existed. Without this, tabbing through a form on the dark theme is invisible. */
+:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+
 /* Platform brand marks beside the account count. "3 accounts" doesn't say where
    it posts; these do, in less room than the words. Vertically centred against
    the number rather than sitting on the baseline, and given a touch of opacity
@@ -287,6 +312,18 @@ tr:hover .platform-icon { opacity: 1; }
 .badge-failed { background: rgba(240,97,109,.15); border-color: var(--danger); color: var(--danger); }
 .badge-rejected { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
 .badge-off { color: var(--muted); }
+
+/* On/off state, as a word rather than a tick. "✓ vs —" makes the reader learn a
+   key, and neither glyph says which column it belongs to when the row is being
+   skimmed; a coloured word is legible at a glance and — unlike colour alone —
+   still readable to anyone who cannot tell the two hues apart. */
+.state {
+  display: inline-block; padding: .12rem .55rem; border-radius: 999px;
+  font-size: .78rem; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+  border: 1px solid var(--border);
+}
+.state-on { background: rgba(53,194,138,.16); border-color: var(--ok); color: var(--ok); }
+.state-off { background: rgba(154,163,178,.12); color: var(--muted); }
 
 /* Approve form: the button, plus an optional "publish later" datetime beside it.
    The label stays a row (it sits inside .form on some pages, where `.form label`
@@ -311,7 +348,7 @@ tr:hover .platform-icon { opacity: 1; }
 .form { display: flex; flex-direction: column; gap: 1.1rem; max-width: 680px; }
 .form label { display: flex; flex-direction: column; gap: .35rem; font-weight: 600; }
 .form input[type=text], .form input[type=password], .form input[type=datetime-local],
-.form input[type=email], .form input[type=number],
+.form input[type=email], .form input[type=number], .form input[type=url],
 .form textarea, .form select {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text); padding: .55rem .7rem; font: inherit; font-weight: 400;
@@ -330,6 +367,72 @@ tr:hover .platform-icon { opacity: 1; }
              border: 1px solid var(--border); border-radius: 8px; padding: .6rem .7rem; font-weight: 400; }
 .check { flex-direction: row !important; align-items: center; gap: .5rem; font-weight: 400; }
 .check.inline { align-self: end; }
+
+/* ---- repeatable field rows (see static/repeat.js) ----------------------- *
+ * One row per thing, one input per value, a + to add and an × to drop. This
+ * replaces the boxes that asked for several values in one textarea and a
+ * grammar to separate them.
+ *
+ * They sit in a `<div class="field">`, not a <label>: a label associates the
+ * whole group with its first input, so clicking the caption would focus a
+ * field the caption is not about. */
+.repeat { display: flex; flex-direction: column; gap: .4rem; font-weight: 400; }
+/* Column captions, so a row of bare inputs still says which value goes where.
+   The trailing track matches the × button so the captions line up with the
+   fields and not with the button. */
+.repeat-head, .repeat-row {
+  display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 2.1rem;
+  gap: .4rem; align-items: center;
+}
+.repeat-head { text-transform: uppercase; letter-spacing: .04em; font-size: .7rem; }
+/* A KIND picked from a short list, then the value it applies to (an outreach
+   target). The picker needs only its longest word. */
+.repeat-kind .repeat-head, .repeat-kind .repeat-row {
+  grid-template-columns: minmax(0, .7fr) minmax(0, 1.7fr) 2.1rem;
+}
+/* Three values per row (a Sora resource: endpoint, model, key). The endpoint is
+   a URL and the model a short name, so the tracks are not equal. */
+.repeat-3 .repeat-head, .repeat-3 .repeat-row {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1fr) 2.1rem;
+}
+.repeat-row > input { min-width: 0; }
+.repeat-remove {
+  padding: .3rem 0; line-height: 1; font-size: 1.1rem; color: var(--muted);
+  justify-content: center;
+}
+.repeat-remove:hover { color: var(--danger); border-color: var(--danger); }
+[data-repeat-add] { align-self: flex-start; }
+
+/* A row that is a saved VALUE rather than an editable pair (the people a
+   connection is shared with): the address, then the × pushed to the end. */
+.share-row { display: flex; align-items: center; gap: .5rem; }
+.share-row .repeat-remove { margin-left: auto; }
+.share-form input[type=email] { max-width: 26rem; }
+
+@media (max-width: 560px) {
+  /* Two fields side by side under 560px leave ~7 characters each. Stack them
+     and drop the captions — the placeholders already say what each one is. */
+  .repeat-head { display: none; }
+  .repeat-row { grid-template-columns: minmax(0, 1fr) 2.6rem; }
+  .repeat-row > input:first-child { grid-column: 1 / -1; }
+  /* Three of them side by side is worse still, so every field takes the width
+     and the × keeps the narrow track, under the fields it removes. A kind picker
+     stacks the same way — the select is the row's first child, so the rule above
+     (which names `input`) would leave it in the narrow track. */
+  .repeat-3 .repeat-row > input,
+  .repeat-kind .repeat-row > select, .repeat-kind .repeat-row > input { grid-column: 1 / -1; }
+  .repeat-3 .repeat-remove, .repeat-kind .repeat-remove { grid-column: 2; }
+}
+
+/* Accounts inside a checklist, grouped under their platform mark. The heading
+   is not a label — clicking it must not toggle anything — so it is a span. */
+.check-platform { display: flex; flex-direction: column; gap: .3rem; }
+.check-platform + .check-platform { margin-top: .55rem; padding-top: .55rem;
+  border-top: 1px solid var(--border); }
+.check-platform-head { display: flex; align-items: center; gap: .4rem;
+  color: var(--muted); font-size: .74rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; }
+.check-platform .check { padding-left: .3rem; }
 
 /* --- instruction form: wider column + grouped sections --- */
 /* The instruction form has paired grids and a tool picker, so the 680px prose
@@ -522,10 +625,20 @@ tr:hover .platform-icon { opacity: 1; }
   color: var(--text); padding: .45rem .6rem; font: inherit; font-size: .9rem;
 }
 .filters input[type=search] { flex: 1 1 18rem; min-width: 12rem; }
-th .sort { color: var(--muted); }
+
+/* Sortable column headings. The whole heading is the link — a caret on its own
+   is a 3-character hit area, which is a miss on a phone, and the column NAME is
+   where everyone clicks. The caret is always in the DOM (transparent until the
+   column is active) so changing the sort never shifts the header row sideways. */
+th .sort {
+  display: inline-flex; align-items: center; gap: .3rem;
+  color: var(--muted); white-space: nowrap; border-radius: 6px;
+}
 th .sort:hover { color: var(--text); text-decoration: none; }
 th .sort-active { color: var(--accent); }
-.sort-arrow { font-size: .7rem; }
+.sort-arrow { font-size: .7rem; opacity: 0; transition: opacity .12s ease; }
+th .sort:hover .sort-arrow { opacity: .5; }
+th .sort-active .sort-arrow { opacity: 1; }
 .nowrap { white-space: nowrap; }
 .pager { display: flex; gap: .5rem; align-items: center; justify-content: center; margin: 1.25rem 0; }
 
@@ -568,7 +681,7 @@ th .sort-active { color: var(--accent); }
      selectors must list every input type the form uses — a bare `input` here
      loses on specificity to the `.form input[type=…]` base rule above. */
   .form input[type=text], .form input[type=password], .form input[type=datetime-local],
-  .form input[type=email], .form input[type=number],
+  .form input[type=email], .form input[type=number], .form input[type=url],
   .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea {
     font-size: 16px;
@@ -621,7 +734,7 @@ th .sort-active { color: var(--accent); }
  * max-width:720px block above would have missed. */
 @media (pointer: coarse) {
   .form input[type=text], .form input[type=password], .form input[type=datetime-local],
-  .form input[type=email], .form input[type=number],
+  .form input[type=email], .form input[type=number], .form input[type=url],
   .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
   .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }

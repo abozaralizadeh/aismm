@@ -1,0 +1,21 @@
+{# Shared table chrome.
+
+   `sort_header` renders a column heading you can click to sort by. The whole
+   heading is the link, not a small caret beside it: a 3-character hit area is a
+   miss on a phone, and an operator scanning a table expects the *name* to be the
+   control. `url` is the view's own filter-preserving URL builder (Jinja macros
+   can't take **kwargs, so each page passes its own).
+
+   The caret is always in the DOM — `.sort-arrow` is transparent until the column
+   is active — so switching sort never shifts the header row sideways. #}
+{% macro sort_header(key, label, filters, url) -%}
+  {% set active = filters.sort == key %}
+  {% set next_dir = 'asc' if active and filters.dir == 'desc' else 'desc' %}
+  <a class="sort {% if active %}sort-active{% endif %}"
+     href="{{ url(sort=key, dir=next_dir, page=1) }}"
+     title="Sort by {{ label|lower }}{{ ' (ascending)' if next_dir == 'asc' else ' (descending)' }}"
+     {% if active %}aria-sort="{{ 'descending' if filters.dir == 'desc' else 'ascending' }}"{% endif %}>
+    <span>{{ label }}</span>
+    <span class="sort-arrow" aria-hidden="true">{{ '▾' if not active or filters.dir == 'desc' else '▴' }}</span>
+  </a>
+{%- endmacro %}

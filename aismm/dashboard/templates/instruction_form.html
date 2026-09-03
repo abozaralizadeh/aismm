@@ -119,17 +119,41 @@
           </span>
         </label>
 
-        <label data-outreach-only hidden>
+        {# One target per row, its KIND picked rather than spelled: the stored
+           text carries the kind as a sigil (`#`, `r/`, `@`), which is a grammar
+           to learn before you can type the first value. The rows are joined back
+           into that text on save. #}
+        <div class="field" data-outreach-only hidden>
           <span class="field-label">Outreach targets</span>
-          <textarea name="engagement_targets" rows="2"
-            placeholder="prompt engineering, #AI, r/MachineLearning, @openai">{{ instruction.engagement_targets if instruction else '' }}</textarea>
+          <div class="repeat repeat-kind" data-repeat>
+            <div class="repeat-head small muted" aria-hidden="true">
+              <span>Kind</span><span>Value</span><span></span>
+            </div>
+            <div data-repeat-rows>
+              {% for row in target_rows + [{'kind': 'keyword', 'value': ''}] %}
+                <div class="repeat-row" data-repeat-row>
+                  <select name="target_kind" aria-label="Target kind">
+                    {% for kind, label in [('keyword', 'Keyword'), ('hashtag', 'Hashtag'),
+                                           ('subreddit', 'Subreddit'), ('account', 'Account')] %}
+                      <option value="{{ kind }}" {% if row.kind == kind %}selected{% endif %}>
+                        {{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <input type="text" name="target_value" value="{{ row.value }}"
+                         placeholder="prompt engineering" aria-label="Target">
+                  <button type="button" class="btn small repeat-remove" data-repeat-remove hidden
+                          title="Remove this target" aria-label="Remove this target">×</button>
+                </div>
+              {% endfor %}
+            </div>
+            <button type="button" class="btn small" data-repeat-add hidden>+ Add a target</button>
+          </div>
           <span class="hint">
-            What to search for on a <strong>Reach out to others</strong> run — comma-separated
-            keywords, <code>#hashtags</code>, <code>r/subreddits</code> and <code>@accounts</code>.
-            Keywords &amp; hashtags drive X search; subreddits &amp; keywords drive Reddit. Leave it
+            What to search for on a <strong>Reach out to others</strong> run. Keywords &amp;
+            hashtags drive X search; subreddits &amp; keywords drive Reddit. Leave every row
             empty to let the agent infer targets from the brief.
           </span>
-        </label>
+        </div>
       </div>
 
         <label data-engage-only hidden>
@@ -159,22 +183,49 @@
     <legend>Accounts &amp; schedule</legend>
     <div class="section-body">
       <label><span class="field-label">Target accounts <span class="req" title="At least one is required to post">*</span></span>
+        {# Grouped by platform with its mark: a flat list of handles makes you
+           read every row to answer "does this instruction touch X at all?", and
+           that is the question the fields below depend on. #}
         <div class="checklist">
-          {% for a in accounts %}
-            <label class="check">
-              <input type="checkbox" name="account_ids" value="{{ a.id }}"
-                     {% if instruction and a.id in instruction.account_ids %}checked{% endif %}>
-              {{ a.platform.value }} · {{ a.handle or a.external_id or a.id[:8] }}
-            </label>
+          {% for platform, group in accounts|groupby('platform.value') %}
+            <div class="check-platform">
+              <span class="check-platform-head">
+                {{ platform_icon(platform, 15) }}<span>{{ platform if platform != 'twitter' else 'X' }}</span>
+              </span>
+              {% for a in group %}
+                <label class="check">
+                  <input type="checkbox" name="account_ids" value="{{ a.id }}"
+                         data-account-platform="{{ a.platform.value }}"
+                         {% if instruction and a.id in instruction.account_ids %}checked{% endif %}>
+                  {{ a.handle or a.external_id or a.id[:8] }}
+                </label>
+              {% endfor %}
+            </div>
           {% else %}
             <span class="muted">No accounts connected. <a href="{{ url_for('accounts') }}">Connect one first.</a></span>
           {% endfor %}
         </div>
+        {% if has_youtube or twitter_communities %}
+          <span class="hint" data-platform-note hidden>
+            Options that apply to one platform only — YouTube visibility, X communities —
+            appear here once you tick an account on that platform.
+          </span>
+        {% endif %}
       </label>
 
+      {# ── Platform-scoped fields ──────────────────────────────────────────
+         Shown only while an account on that platform is selected. A YouTube
+         visibility picker on an Instagram-only instruction is a control that
+         cannot do anything: it invites a decision, records it, and then has no
+         effect — which is worse than not offering it. `data-platform-keep` is
+         set when the field already HOLDS a value, so a setting that is in
+         effect never disappears behind a checkbox. Hidden controls still
+         submit, so nothing saved is lost by an unrelated edit. #}
       {% if has_youtube %}
         {% set privacy = (instruction.youtube_privacy if instruction else '') %}
-        <label data-publish-only>
+        <label data-publish-only data-platform="youtube"
+               {% if privacy %}data-platform-keep{% endif %}
+               {% if 'youtube' not in selected_platforms and not privacy %}hidden{% endif %}>
           <span class="field-label">YouTube visibility</span>
           <select name="youtube_privacy">
             <option value="" {% if not privacy %}selected{% endif %}>
@@ -200,7 +251,11 @@
 
       {% if twitter_communities %}
         {% set pinned = instruction.twitter_community_id if instruction else '' %}
-        <details class="account-section" {% if pinned %}open{% endif %}>
+        {% set shared = instruction.twitter_share_with_followers if instruction else '' %}
+        <details class="account-section" {% if pinned %}open{% endif %}
+                 data-platform="twitter"
+                 {% if pinned or shared %}data-platform-keep{% endif %}
+                 {% if 'twitter' not in selected_platforms and not (pinned or shared) %}hidden{% endif %}>
           <summary>
             X posts go to
             <strong>
@@ -655,6 +710,34 @@
   }
   task.addEventListener('change', sync);
   sync();
+
+  // Platform-scoped fields follow the ACCOUNT ticks, live. The server already
+  // rendered the right state for the saved selection, so there is no flash of
+  // the wrong fields on load; this keeps it true while the operator edits.
+  var platformFields = Array.prototype.slice.call(form.querySelectorAll('[data-platform]'));
+  var accountBoxes = Array.prototype.slice.call(
+    form.querySelectorAll('input[data-account-platform]'));
+  var platformNote = form.querySelector('[data-platform-note]');
+
+  function syncPlatforms() {
+    var chosen = {};
+    accountBoxes.forEach(function (box) {
+      if (box.checked) { chosen[box.dataset.accountPlatform] = true; }
+    });
+    var anyShown = false;
+    platformFields.forEach(function (el) {
+      // A field holding a value stays visible whatever is ticked — hiding a
+      // setting that is in effect is how it gets forgotten and then blamed.
+      var show = chosen[el.dataset.platform] || el.hasAttribute('data-platform-keep');
+      el.hidden = !show;
+      if (show) { anyShown = true; }
+    });
+    if (platformNote) { platformNote.hidden = anyShown; }
+  }
+  accountBoxes.forEach(function (box) {
+    box.addEventListener('change', syncPlatforms);
+  });
+  syncPlatforms();
 })();
 
 // Checkbox dropdown with a filter. Plain checkboxes underneath, so the form

@@ -38,7 +38,7 @@ from ..platforms import setup_guides
 from ..platforms.registry import get_platform
 from ..schedules import describe as describe_schedule
 from ..auth import oauth
-from . import sso
+from . import humanize, sso
 from .metrics_display import format_metrics as _format_metrics
 from .platform_icons import icon as platform_icon
 from ..platforms.twitter import HOME_TIMELINE as TW_HOME_TIMELINE
@@ -397,6 +397,15 @@ def create_app() -> Flask:
         """A run's counters as ordered ``{label, value}`` pills for the templates."""
         return _format_metrics(metrics or {})
 
+    @app.template_global("time_until")
+    def _time_until(when):
+        """"in 3 minutes" / "2 hours ago" beside an absolute UTC timestamp.
+
+        The absolute time is what you cross-check against a log; the relative one
+        is what answers the question actually being asked of a "Next run" column.
+        """
+        return humanize.time_until(when)
+
     @app.template_global("media_url")
     def _media_url(asset_path, download=False):
         """Where a template should point at media: blob first, us as the fallback.
@@ -618,6 +627,35 @@ def create_app() -> Flask:
                                used_by=used_by, duplicates=duplicates,
                                superseded=superseded, health=health)
 
+    def _community_entries(form) -> list:
+        """``[(id, name), …]`` from the accounts page's row editor.
+
+        One ID field and one Name field per row, paired by position — a
+        19-digit number and a free-text label are two different things, and the
+        single textarea they used to share made an operator learn a grammar
+        (``ID = Name``, one entry per line, commas meaning something else)
+        before they could type either.
+
+        The free-text ``community_id`` field is still accepted when no rows are
+        posted: it is the documented shape, ``parse_community_entries`` is the
+        one place that knows that grammar, and a bookmarked POST or a script
+        should keep working.
+        """
+        from ..platforms.twitter import parse_community_entries
+
+        rows = form.getlist("community_row_id")
+        if not rows:
+            return parse_community_entries(form.get("community_id", ""))
+        names = form.getlist("community_row_name")
+        entries, seen = [], set()
+        for index, cid in enumerate(rows):
+            cid = cid.strip()
+            if not cid or cid in seen:      # blank rows and repeats are not entries
+                continue
+            seen.add(cid)
+            entries.append((cid, (names[index] if index < len(names) else "").strip()))
+        return entries
+
     @app.route("/accounts/<account_id>/community", methods=["POST"])
     def choose_twitter_community(account_id):
         store = get_store()
@@ -625,16 +663,14 @@ def create_app() -> Flask:
         _require_owner()
         if account.platform is not PlatformName.twitter:
             abort(404)
-        from ..platforms.twitter import parse_community_entries
-
         meta = dict(account.meta)
-        entries = parse_community_entries(request.form.get("community_id", ""))
+        entries = _community_entries(request.form)
         ids = [cid for cid, _name in entries]
         bad = [c for c in ids if not c.isdigit()]
         if bad:
             flash(f"An X Community ID contains digits only — {', '.join(bad)} does not. "
-                  f"Write one per line as `ID = Name`, or leave the box blank for the "
-                  f"home timeline.", "error")
+                  f"Copy it from the community URL (x.com/i/communities/ID), or leave "
+                  f"every row empty for the home timeline.", "error")
             return redirect(url_for("accounts"))
 
         # Names, so nothing in this app ever asks a human to recognise a 19-digit
@@ -1102,8 +1138,13 @@ def create_app() -> Flask:
                                 platform=record.platform.value if record else None))
 
     # ---- instructions ---------------------------------------------------- #
-    INSTRUCTION_SORTS = {"name": "Name", "created_at": "Created", "schedule": "Schedule",
-                         "next_run": "Next run"}
+    # One key per COLUMN of the table, because every column heading is clickable.
+    # `created_at` has no column of its own but stays: it is the default order a
+    # link elsewhere may still ask for, and dropping a key silently rewrites the
+    # sort to "name" rather than erroring.
+    INSTRUCTION_SORTS = {"name": "Name", "accounts": "Accounts", "schedule": "Schedule",
+                         "next_run": "Next run", "publish_mode": "Publish mode",
+                         "media": "Media", "enabled": "State", "created_at": "Created"}
 
     @app.route("/instructions")
     def instructions():
@@ -1149,15 +1190,25 @@ def create_app() -> Flask:
             info = next_runs.get(instruction.id) or {}
             return info.get("at") or far_future
 
-        keys = {"name": lambda i: i.name.lower(),
-                "created_at": lambda i: i.created_at,
-                "schedule": lambda i: (i.schedule or "").lower(),
-                "next_run": _next_at}
+        # Every key falls back to the name, so equal values (three paused
+        # instructions, four in dry_run) stay in a stable, readable order
+        # instead of shuffling on each request.
+        keys = {"name": lambda i: (i.name.lower(),),
+                "created_at": lambda i: (i.created_at, i.name.lower()),
+                "accounts": lambda i: (len(i.account_ids or []), i.name.lower()),
+                "schedule": lambda i: ((i.schedule or "").lower(), i.name.lower()),
+                "next_run": lambda i: (_next_at(i), i.name.lower()),
+                "publish_mode": lambda i: (i.publish_mode.value, i.name.lower()),
+                "media": lambda i: (i.media_pref.value, i.name.lower()),
+                "enabled": lambda i: (not i.enabled, i.name.lower())}
         rows.sort(key=keys[sort], reverse=descending)
 
         def instructions_url(**overrides):
             params = {"q": search, "enabled": enabled, "mode": mode, "sort": sort,
-                      "dir": "desc" if descending else "asc", **overrides}
+                      "dir": "desc" if descending else "asc"}
+            # The shared sort header also resets `page`; this list isn't paged,
+            # so an unknown key is dropped rather than becoming a dead query arg.
+            params.update({k: v for k, v in overrides.items() if k in params})
             return url_for("instructions",
                            **{k: v for k, v in params.items() if v not in ("", None)})
 
@@ -1203,6 +1254,69 @@ def create_app() -> Flask:
         return any(a.platform is PlatformName.youtube
                    for a in get_store().list_accounts(workspace_id=_workspace_id()))
 
+    def _selected_platforms(instr) -> set:
+        """Which platforms this instruction actually posts to.
+
+        The form hides the fields that belong to a platform it doesn't target —
+        a YouTube visibility picker on an Instagram-only instruction records a
+        decision that can never take effect. Computed server-side so the first
+        paint is already correct; the page's script keeps it true while the
+        account ticks change.
+        """
+        if instr is None:
+            return set()
+        platform_of = {a.id: a.platform.value
+                       for a in get_store().list_accounts(workspace_id=_workspace_id())}
+        return {platform_of[i] for i in (instr.account_ids or []) if i in platform_of}
+
+    # An outreach target's KIND is carried by a sigil in the stored text
+    # (`#ai, r/rust, @openai, prompt engineering`) — the grammar `targets.py`
+    # parses. The form asks for the kind instead of asking an operator to
+    # remember it, and rebuilds the text; `parse_targets` stays the one place
+    # that knows the grammar.
+    TARGET_SIGILS = {"keyword": "", "hashtag": "#", "subreddit": "r/", "account": "@"}
+
+    def _target_rows(instr) -> list[dict]:
+        """``engagement_targets`` → ``[{kind, value}, …]`` for the row editor."""
+        from ..targets import parse_targets
+
+        parsed = parse_targets(instr.engagement_targets if instr else "")
+        rows = []
+        for kind, values in (("keyword", parsed.keywords), ("hashtag", parsed.hashtags),
+                             ("subreddit", parsed.subreddits), ("account", parsed.accounts)):
+            rows += [{"kind": kind, "value": value} for value in values]
+        return rows
+
+    def _engagement_targets(form) -> str:
+        """The rows back as the stored free-text line.
+
+        The free-text ``engagement_targets`` field is still accepted when no rows
+        are posted — it is the documented shape, and a script or a bookmarked
+        POST should keep working.
+        """
+        kinds = form.getlist("target_kind")
+        if not kinds:
+            return form.get("engagement_targets", "").strip()
+        values = form.getlist("target_value")
+        out = []
+        for index, kind in enumerate(kinds):
+            value = (values[index] if index < len(values) else "").strip()
+            # A comma, newline or semicolon SEPARATES targets in the stored text,
+            # so one inside a value cannot survive the round trip — a space is
+            # closer to what was meant than a target split in half. Runs of
+            # whitespace collapse with it: a keyword may be a phrase, but ", "
+            # would otherwise leave a double space inside one.
+            value = re.sub(r"[,\n;\s]+", " ", value).strip()
+            low = value.lower()
+            for prefix in ("/r/", "r/"):        # the operator typed the sigil too
+                if low.startswith(prefix):
+                    value = value[len(prefix):]
+                    break
+            value = value.lstrip("#@").strip()
+            if value:
+                out.append(TARGET_SIGILS.get(kind, "") + value)
+        return ", ".join(dict.fromkeys(out))
+
     @app.route("/instructions/new")
     def new_instruction():
         return render_template("instruction_form.html", instruction=None, state=None,
@@ -1216,6 +1330,8 @@ def create_app() -> Flask:
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
                                has_youtube=_has_youtube(),
+                               selected_platforms=set(),
+                               target_rows=_target_rows(None),
                                youtube_privacy_choices=YOUTUBE_PRIVACY_CHOICES,
                                tasks=list(InstructionTask))
 
@@ -1269,6 +1385,8 @@ def create_app() -> Flask:
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
                                has_youtube=_has_youtube(),
+                               selected_platforms=_selected_platforms(instr),
+                               target_rows=_target_rows(instr),
                                youtube_privacy_choices=YOUTUBE_PRIVACY_CHOICES,
                                tasks=list(InstructionTask))
 
@@ -1287,7 +1405,7 @@ def create_app() -> Flask:
         instr.schedule_start_at = _parse_datetime_local(f.get("schedule_start_at", ""))
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.task_type = InstructionTask(f.get("task_type", "publish"))
-        instr.engagement_targets = f.get("engagement_targets", "").strip()
+        instr.engagement_targets = _engagement_targets(f)
         instr.engagement_policy = f.get("engagement_policy", "").strip()
         privacy = f.get("youtube_privacy", "").strip().lower()
         instr.youtube_privacy = privacy if privacy in YOUTUBE_PRIVACY_CHOICES else ""
@@ -1916,6 +2034,11 @@ def create_app() -> Flask:
                                image_owned=img_owned, image_shared=img_shared,
                                video_owned=vid_owned, video_shared=vid_shared,
                                share_people=people, env_llm_id=ENV_LLM_ID,
+                               # Sharing names PEOPLE, and with sign-in off there
+                               # is one implicit local operator who already owns
+                               # everything — the form would be inert, so the
+                               # page says so instead of rendering it.
+                               sso_enabled=settings.auth.enabled,
                                env_image_id=ENV_IMAGE_ID, env_video_id=ENV_VIDEO_ID)
 
     @app.route("/settings/llm", methods=["POST"])
@@ -1971,6 +2094,50 @@ def create_app() -> Flask:
               "another.", "success")
         return redirect(url_for("settings_view"))
 
+    def _share_recipients(form) -> tuple[list[str], str]:
+        """``(emails, rejected)`` — who a connection is shared with after this save.
+
+        The rows that came back are the ones the operator did NOT remove: each
+        carries its own hidden ``shared_with``, so deleting the row is what stops
+        the sharing. ``share_add`` is the new one they typed.
+
+        Typed rather than picked: the old multi-select was populated from the
+        people this deployment had already seen, which on a fresh install is
+        nobody — so the form rendered with no controls, and "Update sharing"
+        submitted an empty body and reported success. A rejected address is
+        returned rather than dropped, because silently ignoring what someone
+        typed looks exactly like sharing that quietly does not work.
+        """
+        people: list[str] = []
+        for entry in form.getlist("shared_with"):
+            entry = entry.strip().lower()
+            if entry and entry not in people:
+                people.append(entry)
+        typed = form.get("share_add", "").strip().lower()
+        if not typed:
+            return people, ""
+        if "@" not in typed or " " in typed:
+            return people, typed
+        if typed not in people:
+            people.append(typed)
+        return people, ""
+
+    def _sharing_message(cfg) -> str:
+        """What the sharing button actually did, in words.
+
+        "Sharing updated." reads the same whether something changed or the form
+        had nothing to submit — which is precisely the confusion this replaces.
+        """
+        parts = []
+        if getattr(cfg, "shared_with_workspace", False):
+            parts.append("everyone in this workspace")
+        if cfg.shared_with:
+            count = len(cfg.shared_with)
+            parts.append(f"{count} " + ("person" if count == 1 else "people"))
+        if not parts:
+            return f"“{cfg.label}” is private to you."
+        return f"“{cfg.label}” is shared with " + " and ".join(parts) + "."
+
     @app.route("/settings/llm/<config_id>/share", methods=["POST"])
     def share_llm_config(config_id):
         store = get_store()
@@ -1989,13 +2156,43 @@ def create_app() -> Flask:
             cfg.shared_with_workspace = f.get("shared_with_workspace") == "on"
         # People-sharing is the owner's privilege alone.
         if _is_site_owner():
-            people = [p.strip().lower() for p in f.getlist("shared_with") if p.strip()]
+            people, bad = _share_recipients(f)
+            if bad:
+                flash(f"“{bad}” is not an email address, so nothing was shared with it.",
+                      "error")
             cfg.set_shared_with(people)
         store.upsert_llm_config(cfg)
-        flash("Sharing updated.", "success")
+        flash(_sharing_message(cfg), "success")
         return redirect(url_for("settings_view"))
 
     # --- image / video (ProviderConfig) CRUD + share ------------------------ #
+    def _sora_rows(form) -> tuple[list[str], list[str], list[str]]:
+        """``(endpoints, models, keys)`` from the settings page's row editor.
+
+        The pool is stored as three CSVs (``endpoints_csv`` / ``models_csv`` /
+        ``keys_csv``) because that is what ``sora_config`` reads — but three
+        comma-separated boxes that have to line up BY POSITION is a format an
+        operator can only get right by counting commas across all three, and
+        getting it wrong sends one resource's key to another. One resource per
+        row makes the alignment structural; this rebuilds the CSVs from it.
+        """
+        endpoints = form.getlist("pool_endpoint")
+        models = form.getlist("pool_model")
+        keys = form.getlist("pool_key")
+
+        def at(values: list[str], index: int) -> str:
+            return values[index].strip() if index < len(values) else ""
+
+        rows: tuple[list[str], list[str], list[str]] = ([], [], [])
+        for index, endpoint in enumerate(endpoints):
+            endpoint = endpoint.strip()
+            if not endpoint:            # the blank row at the end is not a resource
+                continue
+            rows[0].append(endpoint)
+            rows[1].append(at(models, index) or "sora-2")
+            rows[2].append(at(keys, index))
+        return rows
+
     @app.route("/settings/provider/<kind>", methods=["POST"])
     def save_provider_config(kind):
         if kind not in ("image", "video"):
@@ -2027,14 +2224,33 @@ def create_app() -> Flask:
             key = f.get("api_key", "").strip()
             secrets = {"api_key": key} if key else None
         else:
+            endpoints, models, keys = _sora_rows(f)
+            if not endpoints:
+                flash("A video connection needs at least one Sora resource.", "error")
+                return redirect(url_for("settings_view"))
+            # The stored keys line up with the stored endpoints BY POSITION and are
+            # never echoed back, so they can only be kept as a set: the moment the
+            # resource list changes, or one key is retyped, every key has to be
+            # given again or a key would end up on the wrong resource.
+            typed = [k for k in keys if k]
+            known = [e.strip() for e in cfg.config.get("endpoints_csv", "").split(",")
+                     if e.strip()]
+            if typed and len(typed) != len(keys):
+                flash("Every Sora resource needs its own API key. The stored keys are "
+                      "replaced as a set, so typing one means typing them all.", "error")
+                return redirect(url_for("settings_view"))
+            if not typed and known != endpoints:
+                flash("Type an API key for each Sora resource." if not known else
+                      "The resource list changed, so the stored keys no longer line up "
+                      "with it — type each resource's API key again.", "error")
+                return redirect(url_for("settings_view"))
             cfg.set_config({
-                "endpoints_csv": f.get("endpoints_csv", "").strip(),
-                "models_csv": f.get("models_csv", "").strip() or "sora-2",
+                "endpoints_csv": ", ".join(endpoints),
+                "models_csv": ", ".join(models),
                 "api_version": f.get("api_version", "").strip() or "preview",
                 "max_attempts": f.get("max_attempts", "").strip() or "0",
             })
-            keys = f.get("keys_csv", "").strip()
-            secrets = {"keys_csv": keys} if keys else None
+            secrets = {"keys_csv": ", ".join(keys)} if typed else None
         # An empty secret box means "leave the stored one alone" — secrets are
         # never echoed back to the form, so blanking must not wipe them.
         store.upsert_provider_config(cfg, secrets=secrets)
@@ -2073,10 +2289,13 @@ def create_app() -> Flask:
         else:
             cfg.shared_with_workspace = f.get("shared_with_workspace") == "on"
         if _is_site_owner():
-            people = [p.strip().lower() for p in f.getlist("shared_with") if p.strip()]
+            people, bad = _share_recipients(f)
+            if bad:
+                flash(f"“{bad}” is not an email address, so nothing was shared with it.",
+                      "error")
             cfg.set_shared_with(people)
         store.upsert_provider_config(cfg)
-        flash("Sharing updated.", "success")
+        flash(_sharing_message(cfg), "success")
         return redirect(url_for("settings_view"))
 
     return app

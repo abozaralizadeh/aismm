@@ -257,7 +257,8 @@ def test_the_x_destination_lives_on_the_x_card_only(dash, store, account):
     store.upsert_account(Account(platform=PlatformName.instagram, handle="ig",
                                  external_id="1"), access_token="t")
     page = dash.test_client().get("/accounts").get_data(as_text=True)
-    assert page.count('name="community_id"') == 1
+    # One blank community row on the X card, and nothing on the Instagram one.
+    assert page.count('name="community_row_id"') == 1
 
 
 def test_connecting_comes_after_what_is_already_connected(dash, store, account):

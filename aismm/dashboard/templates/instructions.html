@@ -1,36 +1,36 @@
 {% extends "base.html" %}
+{% from "_macros.html" import sort_header %}
 {% block title %}Instructions · AISMM{% endblock %}
 {% block main_class %}wide{% endblock %}
 {% block content %}
-<div class="row-between">
-  <h1>Instructions <span class="muted small">({{ total }})</span></h1>
+<div class="page-head">
+  <div class="page-heading">
+    <h1>Instructions <span class="muted small">({{ total }})</span></h1>
+    <p class="page-sub muted">What each account posts, when it posts it, and whether it is live.</p>
+  </div>
   <a class="btn btn-primary" href="{{ url_for('new_instruction') }}">+ New instruction</a>
 </div>
 
+{# Sorting lives on the column headings, not in this bar — clicking the name of
+   the column you want sorted is where everyone looks first. The hidden fields
+   carry the active sort through a filter submit so the two don't fight. #}
 <form method="get" action="{{ url_for('instructions') }}" class="filters">
   <input type="search" name="q" value="{{ filters.q }}"
          placeholder="Search name, brief or schedule…">
-  <select name="enabled">
+  <select name="enabled" aria-label="Filter by state">
     <option value="">Enabled &amp; paused</option>
     <option value="1" {% if filters.enabled == '1' %}selected{% endif %}>Enabled only</option>
     <option value="0" {% if filters.enabled == '0' %}selected{% endif %}>Paused only</option>
   </select>
-  <select name="mode">
+  <select name="mode" aria-label="Filter by publish mode">
     <option value="">Any publish mode</option>
     {% for m in modes %}
       <option value="{{ m.value }}" {% if filters.mode == m.value %}selected{% endif %}>{{ m.value }}</option>
     {% endfor %}
   </select>
-  <select name="sort">
-    {% for key, label in sorts.items() %}
-      <option value="{{ key }}" {% if filters.sort == key %}selected{% endif %}>Sort by {{ label }}</option>
-    {% endfor %}
-  </select>
-  <select name="dir">
-    <option value="asc" {% if filters.dir == 'asc' %}selected{% endif %}>Ascending</option>
-    <option value="desc" {% if filters.dir == 'desc' %}selected{% endif %}>Descending</option>
-  </select>
-  <button class="btn small" type="submit">Apply</button>
+  <input type="hidden" name="sort" value="{{ filters.sort }}">
+  <input type="hidden" name="dir" value="{{ filters.dir }}">
+  <button class="btn btn-primary small" type="submit">Filter</button>
   {% if filters.q or filters.enabled or filters.mode %}
     <a class="btn small" href="{{ url_for('instructions') }}">Clear</a>
   {% endif %}
@@ -40,7 +40,16 @@
 <div class="table-scroll">
 <table>
   <thead>
-    <tr><th>Name</th><th>Accounts</th><th>Schedule</th><th>Next run</th><th>Publish mode</th><th>Media</th><th>Enabled</th><th></th></tr>
+    <tr>
+      <th>{{ sort_header('name', 'Name', filters, instructions_url) }}</th>
+      <th>{{ sort_header('accounts', 'Accounts', filters, instructions_url) }}</th>
+      <th>{{ sort_header('schedule', 'Schedule', filters, instructions_url) }}</th>
+      <th>{{ sort_header('next_run', 'Next run', filters, instructions_url) }}</th>
+      <th>{{ sort_header('publish_mode', 'Publish mode', filters, instructions_url) }}</th>
+      <th>{{ sort_header('media', 'Media', filters, instructions_url) }}</th>
+      <th>{{ sort_header('enabled', 'State', filters, instructions_url) }}</th>
+      <th></th>
+    </tr>
   </thead>
   <tbody>
   {% for i in instructions %}
@@ -72,6 +81,10 @@
         {% set nr = next_runs.get(i.id) %}
         {% if nr and nr.at %}
           <span class="nowrap">{{ nr.at.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+          {# The absolute time is what you check against a log; "in 3 minutes"
+             is the question actually being asked of this column. #}
+          {% set soon = time_until(nr.at) %}
+          {% if soon %}<div class="muted nowrap">{{ soon }}</div>{% endif %}
           {% if nr.skipped %}
             <div class="muted">publishing paused until
               {{ nr.blocked_until.strftime('%H:%M') }} UTC — earlier fires are skipped</div>
@@ -81,7 +94,13 @@
       </td>
       <td><span class="badge badge-{{ i.publish_mode.value }}">{{ i.publish_mode.value }}</span></td>
       <td class="small">{{ i.media_pref.value }}</td>
-      <td>{{ "✓" if i.enabled else "—" }}</td>
+      <td>
+        {% if i.enabled %}
+          <span class="state state-on">Enabled</span>
+        {% else %}
+          <span class="state state-off">Paused</span>
+        {% endif %}
+      </td>
       <td class="actions-cell">
         <div class="actions">
         <form method="post" action="{{ url_for('run_instruction_now', instruction_id=i.id) }}">

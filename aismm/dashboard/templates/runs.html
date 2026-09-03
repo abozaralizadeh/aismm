@@ -1,21 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Runs · AISMM{% endblock %}
-
 {# `runs_url` comes from the view: it keeps the current filters and overrides
    only what is passed (Jinja macros can't take **kwargs). #}
-{% macro sort_header(key, label, filters, runs_url) -%}
-  {% set active = filters.sort == key %}
-  {% set next_dir = 'asc' if active and filters.dir == 'desc' else 'desc' %}
-  <a class="sort {% if active %}sort-active{% endif %}"
-     href="{{ runs_url(sort=key, dir=next_dir, page=1) }}">
-    {{ label }}{% if active %} <span class="sort-arrow">{{ '▾' if filters.dir == 'desc' else '▴' }}</span>{% endif %}
-  </a>
-{%- endmacro %}
+{% from "_macros.html" import sort_header %}
+{% block title %}Runs · AISMM{% endblock %}
 
 {% block main_class %}wide{% endblock %}
 {% block content %}
-<div class="row-between runs-heading">
-  <h1>Runs &amp; approvals</h1>
+<div class="page-head runs-heading">
+  <div class="page-heading">
+    <h1>Runs &amp; approvals</h1>
+    <p class="page-sub muted">Everything the agent has done, newest first.</p>
+  </div>
   <span class="muted small" aria-live="polite">Refreshes every 30 seconds</span>
 </div>
 
@@ -156,6 +151,8 @@
       </td>
       <td class="small nowrap">
         <a href="{{ url_for('run_detail', run_id=r.id) }}">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</a>
+        {% set ago = time_until(r.created_at) %}
+        {% if ago %}<div class="muted">{{ ago }}</div>{% endif %}
       </td>
       <td class="small">
         {% if instr %}

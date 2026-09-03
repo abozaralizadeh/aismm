@@ -236,7 +236,11 @@
     <h3>Details</h3>
     <div class="table-scroll">
     <table class="kv">
-      <tr><td>Started</td><td>{{ run.created_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td></tr>
+      <tr><td>Started</td>
+        <td>{{ run.created_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+          {% set ago = time_until(run.created_at) %}
+          {% if ago %}<div class="muted small">{{ ago }}</div>{% endif %}
+        </td></tr>
       <tr><td>Status</td><td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td></tr>
       <tr>
         <td>Instruction</td>

@@ -70,6 +70,9 @@
     <span aria-hidden="true">·</span>
     <a href="{{ url_for('privacy') }}">Privacy Policy</a>
   </footer>
+  {# Repeatable field rows (+ / ×). Shared, because two pages needed the same
+     behaviour and a second copy is how they start to differ. #}
+  <script src="{{ url_for('static', filename='repeat.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
