@@ -73,6 +73,15 @@ But chaining always forward drifts a little further with every link, so
 framing, the establishing wide, or a character last seen at the start remixes
 THAT shot rather than its neighbour. Forward for continuity, back for recall.
 
+**A remix inherits the source clip's AUDIO too** — a clip is picture and sound,
+and the source's spoken line comes over with the frames. A reel planned
+``scene_remix_from=[0, 1, 1]`` said one sentence three times across three
+visibly different scenes, each of which had been written its own line. Every
+clause in the prompt pinned pictures and none mentioned sound, so
+``_AUDIO_CONTRACT`` rides along with every remix: the picture is what is being
+edited, the words are only the ones in this shot's scene, and a shot with no
+line is silent.
+
 **A remix inherits the source clip's duration** (the API takes only a prompt), so
 a chained sequence is uniform at ``seconds_each`` whatever ``scene_seconds`` asks
 for. This is not worked around, because the workaround — rendering a shot fresh
@@ -289,6 +298,22 @@ _CAST_CONTRACT = (
 )
 
 
+# A remix edits the source CLIP, and a clip has a soundtrack: the spoken line
+# comes over with the pictures unless something says otherwise. A live Instagram
+# reel planned scene_remix_from=[0, 1, 1] — shots 2 and 3 both edited from shot 1 —
+# and all three clips said shot 1's sentence, over three visibly different scenes,
+# even though each scene carried its own line. Nothing in the prompt mentioned
+# audio at all; every clause pinned pictures. The scenario had been split
+# correctly, so the split is not where this is fixed.
+_AUDIO_CONTRACT = (
+    "AUDIO: you are editing that clip's PICTURE only. Its speech, narration and "
+    "voiceover do NOT carry over — do not repeat, re-use or re-time any line from "
+    "it. The only words spoken in this shot are the ones written in the shot below; "
+    "if no line is written there, nobody speaks and the shot carries ambient sound "
+    "only."
+)
+
+
 def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
                       continues_from_frame: bool, continues_from_remix: bool = False,
                       is_cut: bool = False, from_supplied_image: bool = False,
@@ -312,6 +337,10 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
       a later shot handed continuity language produces another take of the same
       beat, which is what reads as *repeats*. Saying "new shot, same film" is what
       makes the sequence move.
+
+    Every remix also carries ``_AUDIO_CONTRACT``: the source clip's spoken line
+    comes over with its pictures otherwise, so two shots remixed from the same
+    source say the same sentence twice.
     """
     parts = []
     if style.strip():
@@ -342,6 +371,7 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
             f"framing. Show what is described below as its own moment, in whatever "
             f"place, light and time of day it describes."
         )
+        parts.append(_AUDIO_CONTRACT)
     elif is_cut:
         # A cut with nothing to edit from: the style block is all that holds it.
         parts.append(
@@ -368,6 +398,7 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
             f"Framing, location, time of day and lighting follow the shot below: "
             f"change them where it asks, leave them as they are where it does not."
         )
+        parts.append(_AUDIO_CONTRACT)
     elif index > 1:
         parts.append(
             "CONTINUITY: this is a later shot of the SAME scene and subject as the "
@@ -904,6 +935,10 @@ def _make_create_sequence(state: dict):
             scenes: One description per shot, in order (max 12). Describe only
                 what CHANGES in each — the shared look belongs in ``style``. Each
                 scene must be the NEXT beat, never a restatement of the last.
+
+                Whatever is SAID in a shot goes in that shot's scene, and nowhere
+                else. A shot you write no line for is silent — which is the right
+                answer when the brief asks for a video with little or no talking.
             style: The look to hold constant across every shot: the CHARACTERS
                 (name, age, hair, eyes, build, wardrobe, distinguishing marks),
                 the location, lighting, lens, palette and mood. Repeated verbatim
@@ -912,6 +947,10 @@ def _make_create_sequence(state: dict):
                 when a reference image is refused. If a character matters, they
                 belong here in detail; a character nobody described is a
                 character the model invents.
+
+                Because it is repeated verbatim, a sentence here about a narrator
+                or a speaking voice puts that voice in EVERY clip. Describe how
+                the video looks, not what it says.
             seconds_each: The clip length for the WHOLE video (snapped to 4, 8 or
                 12); a remixed chain renders every shot at this length. Prefer 12:
                 fewer, longer shots read as film, many 4s shots read as a

@@ -863,6 +863,23 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   is stated separately and absolutely, while place, time of day, light and framing explicitly follow
   the shot. The contract goes on the first shot and on a shot whose chain broke too — a clip
   rendered from the prompt alone is exactly where the cast is most likely to change.
+- **A remix carries the source clip's SOUND as well as its picture** (`_AUDIO_CONTRACT`, appended to
+  both remix clauses in `build_clip_prompt`). A live reel planned `scene_remix_from=[0, 1, 1]` — two
+  shots edited from shot 1 — and spoke shot 1's sentence over all three visibly different scenes,
+  each of which had been written its own line. The scenario *was* split correctly, so splitting is
+  not where this is fixed: every clause in the prompt pinned pictures and none mentioned audio. The
+  contract says the picture is what is being edited, the words are only the ones in this shot's
+  scene, and a shot with no line is silent. It rides the REMIX paths only — a created shot has no
+  source to inherit from, and the clause would be noise.
+- **A brief asking for a near-silent video is a DIRECTION, and the prompt had no counterpart for
+  it.** The same reel's brief said "mostly without talking or text"; the agent wrote a voiceover into
+  all three scenes *and* put "Persian dialogue is spoken by a calm female voice" into `style` — which
+  is repeated verbatim, so it asked for a voice in every clip. Every piece of video guidance presumed
+  speech (`plan_shot_timing` "whenever anyone speaks", the over/under pacing rules), so nothing ever
+  said how to honour a brief that asks for little of it. Step (b) of DIRECT IT now decides how much
+  is spoken *from the brief* before anything is written, `style` is documented as looks-only ("a
+  voice described there speaks in every clip"), and a silent shot with real action is explicitly not
+  `under` — `plan_shot_lengths` already scored it `ok`, but only the tool knew that.
 - **Every forward link is another generation away from shot 1** (`_CHAIN_DRIFT_LINKS`). `[0, 0, 0,
   0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
   `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,

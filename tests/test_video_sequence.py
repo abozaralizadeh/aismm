@@ -722,6 +722,71 @@ def test_a_single_clip_gets_no_cast_contract():
                                            continues_from_frame=False)
 
 
+# --- a remix carries the source's SOUND too -------------------------------------------- #
+# Reported from a live Instagram reel: scene_remix_from=[0, 1, 1], so shots 2 and 3
+# were both edited from shot 1 — and all three clips spoke shot 1's sentence, over
+# three visibly different scenes, each of which had been written its own Persian
+# line. The scenario HAD been split correctly. Every clause in the prompt pinned
+# pictures; not one of them mentioned audio, so the line came over with the frames.
+
+def test_a_remixed_shot_is_told_not_to_reuse_the_source_clips_line():
+    prompt = build_clip_prompt("she answers the phone", STYLE, index=2, total=3,
+                               continues_from_frame=False, continues_from_remix=True)
+    assert "AUDIO" in prompt
+    assert "do not repeat, re-use or re-time any line from it" in prompt
+
+
+def test_a_cut_that_is_remixed_gets_the_same_audio_contract():
+    """The cut clause is the other half of the same path — [0, 1, 1] was all cuts."""
+    prompt = build_clip_prompt("the empty waiting room", STYLE, index=3, total=3,
+                               continues_from_frame=False, continues_from_remix=True,
+                               is_cut=True, remix_source_shot=1)
+    assert "PICTURE only" in prompt
+
+
+def test_the_words_of_a_shot_come_only_from_that_shots_scene():
+    """Which is also what makes a silent shot silent, rather than inheriting one."""
+    prompt = build_clip_prompt("a hand turns the dial, no one speaks", STYLE, index=2,
+                               total=3, continues_from_frame=False,
+                               continues_from_remix=True)
+    assert "only words spoken in this shot are the ones written in the shot below" in prompt
+    assert "nobody speaks" in prompt
+
+
+def test_a_shot_with_nothing_to_remix_is_not_given_an_audio_contract():
+    """No source clip, no line to carry over — the clause would be noise."""
+    prompt = build_clip_prompt("she crosses the meadow", STYLE, index=1, total=3,
+                               continues_from_frame=False)
+    assert "AUDIO" not in prompt
+
+
+# --- a brief asking for a near-silent video is a direction ----------------------------- #
+# Same reel: the brief said "mostly without talking or text", and the agent wrote a
+# voiceover line into all three scenes AND put "Persian dialogue is spoken by a calm
+# female voice" into `style` — which is repeated verbatim, so it asked for a voice in
+# every clip. The video guidance presumed speech throughout and had no counterpart.
+
+def test_the_prompt_says_a_near_silent_brief_means_no_lines():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "DECIDE HOW MUCH IS SPOKEN" in p
+    assert "mostly without talking" in p
+    assert "no narrator" in p.lower()
+
+
+def test_the_prompt_warns_that_a_voice_in_style_speaks_in_every_clip():
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "a voice described there speaks in every clip" in p
+
+
+def test_the_auto_prompt_carries_the_same_direction():
+    """An auto run that chooses to publish directs video from the shorter recap."""
+    from aismm.agent.prompts import AUTO_INSTRUCTIONS as p
+
+    assert "near-silent video gets shots with no lines" in p
+
+
 # --- a long forward chain drifts, and the agent has to be told ------------------------- #
 
 def test_a_long_forward_chain_is_reported_as_a_drift_risk(sora):
