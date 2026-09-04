@@ -78,6 +78,31 @@ async def _with_context(state: dict, call):
         return {"error": "x_api_error", "message": str(exc)}
 
 
+# X is pay-per-use and a READ is charged twice over — once as a request, and again
+# for every post object it returns. A model that reads its replies, answers two of
+# them and then reads them again "to check" pays the full price for the second look
+# at a list that has not moved: an engagement read is a snapshot of what OTHER
+# people wrote, and nobody wrote anything new in the ninety seconds since.
+#
+# So the raw platform items are cached for the life of the run and only the VIEW is
+# rebuilt on each call — `already_answered` is recomputed from the ledger every
+# time, so a cached list still shows the agent exactly what it has just handled.
+# The cache is per-run state, so the next scheduled fire reads X afresh.
+_READ_CACHE = "_x_reads"
+
+
+async def _cached_read(state: dict, key: tuple, fetch):
+    """Fetch once per run for a given (tool, arguments) pair.
+
+    A failed read is deliberately NOT cached: an error is not an answer, and the
+    agent retrying after a rate limit must be able to reach X again.
+    """
+    cache = state.setdefault(_READ_CACHE, {})
+    if key not in cache:
+        cache[key] = await fetch()
+    return cache[key]
+
+
 def _post_view(post: dict, account=None) -> dict:
     metrics = post.get("public_metrics", {}) or {}
     view = {
@@ -113,7 +138,9 @@ def _make_recent_posts(state: dict):
             limit: How many posts to return (5–100, newest first).
         """
         async def call(platform, account, token):
-            posts = await platform.list_posts(token, account, limit=limit)
+            posts = await _cached_read(
+                state, ("posts", limit),
+                lambda: platform.list_posts(token, account, limit=limit))
             return {"count": len(posts), "posts": [_post_view(p) for p in posts]}
 
         return await _with_context(state, call)
@@ -136,7 +163,9 @@ def _make_mentions(state: dict):
             limit: How many mentions to return (5–100, newest first).
         """
         async def call(platform, account, token):
-            posts = await platform.list_mentions(token, account, limit=limit)
+            posts = await _cached_read(
+                state, ("mentions", limit),
+                lambda: platform.list_mentions(token, account, limit=limit))
             return {"count": len(posts), "mentions": [_post_view(p, account) for p in posts]}
 
         return await _with_context(state, call)
@@ -162,7 +191,11 @@ def _make_replies(state: dict):
             limit: How many replies to return (newest-ish first).
         """
         async def call(platform, account, token):
-            posts = await platform.list_replies(token, account, limit=limit)
+            # The costliest read on X — a timeline lookup AND a recent search, so
+            # a repeat call is two requests and ~15 post objects for nothing.
+            posts = await _cached_read(
+                state, ("replies", limit),
+                lambda: platform.list_replies(token, account, limit=limit))
             return {"count": len(posts), "replies": [_post_view(p, account) for p in posts]}
 
         return await _with_context(state, call)
@@ -209,7 +242,9 @@ def _make_search(state: dict):
                                 "and pass it as `query`.")}
 
         async def call(platform, account, token):
-            posts = await platform.search_content(token, account, query=q, limit=limit)
+            posts = await _cached_read(
+                state, ("search", q, limit),
+                lambda: platform.search_content(token, account, query=q, limit=limit))
             for p in posts:
                 p["already_answered"] = engagement_ledger.answered(
                     account, _X_TARGET, p.get("id"))
@@ -272,7 +307,9 @@ def _make_dms(state: dict):
             limit: How many messages to return (1–100, newest first).
         """
         async def call(platform, account, token):
-            dms = await platform.list_dms(token, account, limit=limit)
+            dms = await _cached_read(
+                state, ("dms", limit),
+                lambda: platform.list_dms(token, account, limit=limit))
             for d in dms:
                 d["already_answered"] = engagement_ledger.answered(
                     account, _X_DM, d.get("id"))

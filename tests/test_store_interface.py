@@ -239,6 +239,18 @@ def test_metrics_is_callable_with_the_full_keyword_set(name):
     signature.bind_partial(None, access_token="t", account=None, external_id="123")
 
 
+@_pytest.mark.parametrize("name", _METRICS_PLATFORMS, ids=lambda n: n.value)
+def test_bulk_metrics_is_callable_with_the_full_keyword_set(name):
+    """The sweep calls the BULK method, so that is the one that must bind.
+
+    A platform overriding it to save requests (X takes 100 ids per lookup) can
+    drift from the base signature exactly like the single-post call, and the
+    daily job is the only place that would notice.
+    """
+    signature = _inspect.signature(_get_platform_class(name).fetch_post_metrics_bulk)
+    signature.bind_partial(None, access_token="t", account=None, external_ids=["123"])
+
+
 def test_the_preflight_metrics_check_agrees():
     """The deploy gate and the suite must not disagree about the metrics contract."""
     from scripts import preflight

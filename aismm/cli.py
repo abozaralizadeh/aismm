@@ -282,6 +282,12 @@ def cmd_metrics(args) -> int:
     print(f"\n{verb} metrics on {result['updated']} run(s) "
           f"({result['polled']} polled, {result['skipped']} skipped) "
           f"of {result['candidates']} candidate(s) in the last {days} day(s).")
+    if result.get("settled"):
+        # Not an error and not a skip — these are the posts the sweep deliberately
+        # did not pay to re-read, which on a pay-per-use API is the point.
+        print(f"{result['settled']} post(s) were left alone: old enough that their "
+              f"counters have settled, and polled recently enough. Use the run "
+              f"page's refresh button to force one.")
     if not args.apply:
         print("\nRe-run with --apply to write the counters.")
     print()

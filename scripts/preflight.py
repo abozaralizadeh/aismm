@@ -169,23 +169,27 @@ def _check_metrics_signatures() -> None:
             return set()
         return {n for n in signature.parameters if n != "self"}
 
-    required = names(SocialPlatform.fetch_post_metrics)
+    # Both halves: the sweep calls the BULK one and a platform overriding it with
+    # a narrower signature would raise TypeError on the first poll, exactly like
+    # the single-post call it replaced.
     checked = 0
-    for platform in registered_platforms():
-        cls = get_platform_class(platform)
-        if not getattr(cls.capabilities, "supports_metrics", False):
-            continue
-        checked += 1
-        actual = names(cls.fetch_post_metrics)
-        missing = (required - actual) if actual else set()
-        if missing:
-            problems.append(
-                f"{cls.__name__}.fetch_post_metrics() is missing {', '.join(sorted(missing))} — "
-                f"refresh_metrics passes these on every call, so polling "
-                f"{platform.value} would raise TypeError."
-            )
-    if not any("fetch_post_metrics() is missing" in p for p in problems):
-        notes.append(f"Metrics contract: {checked} metrics-capable platform(s) OK")
+    for method in ("fetch_post_metrics", "fetch_post_metrics_bulk"):
+        required = names(getattr(SocialPlatform, method))
+        for platform in registered_platforms():
+            cls = get_platform_class(platform)
+            if not getattr(cls.capabilities, "supports_metrics", False):
+                continue
+            checked += 1
+            actual = names(getattr(cls, method))
+            missing = (required - actual) if actual else set()
+            if missing:
+                problems.append(
+                    f"{cls.__name__}.{method}() is missing {', '.join(sorted(missing))} — "
+                    f"refresh_metrics passes these on every call, so polling "
+                    f"{platform.value} would raise TypeError."
+                )
+    if not any("() is missing" in p for p in problems):
+        notes.append(f"Metrics contract: {checked} metrics-capable platform binding(s) OK")
 
 
 def _check_search_signatures() -> None:

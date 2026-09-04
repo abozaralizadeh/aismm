@@ -16,6 +16,7 @@ from aismm import orchestrator, tokens
 from aismm.agent.prompts import build_performance_block
 from aismm.dashboard.metrics_display import format_metrics
 from aismm.models import Account, PlatformName, Run, RunStatus
+from aismm.platforms.base import SocialPlatform
 from aismm.tools.performance_tool import recent_performance_runs
 
 
@@ -97,7 +98,14 @@ class _Caps:
 
 
 class _FakePlatform:
-    """Stand-in platform: records every external_id it was asked about."""
+    """Stand-in platform: records every external_id it was asked about.
+
+    It borrows the REAL ``fetch_post_metrics_bulk`` default rather than stubbing
+    one, so these tests exercise the fallback a platform without a batch endpoint
+    actually takes — the per-post loop.
+    """
+
+    fetch_post_metrics_bulk = SocialPlatform.fetch_post_metrics_bulk
 
     def __init__(self, metrics, *, supports_metrics=True):
         self._metrics = metrics
@@ -107,6 +115,18 @@ class _FakePlatform:
     async def fetch_post_metrics(self, access_token, account, *, external_id):
         self.polled.append(external_id)
         return self._metrics
+
+
+class _BulkPlatform(_FakePlatform):
+    """A platform that answers many ids in ONE call, like X's GET /2/tweets."""
+
+    def __init__(self, metrics, **kw):
+        super().__init__(metrics, **kw)
+        self.calls: list[list[str]] = []
+
+    async def fetch_post_metrics_bulk(self, access_token, account, *, external_ids):
+        self.calls.append(list(external_ids))
+        return {external_id: dict(self._metrics) for external_id in external_ids}
 
 
 @pytest.fixture()
@@ -159,6 +179,73 @@ def test_refresh_metrics_none_result_leaves_last_values_alone(wired, monkeypatch
     summary = orchestrator.refresh_metrics(store, max_age_days=30)
     assert summary["updated"] == 0 and platform.polled == ["tw1"]
     assert store.get_run(run.id).metrics == {"likes": 5}     # not clobbered
+
+
+def test_one_accounts_posts_are_polled_in_a_single_call(wired, monkeypatch):
+    """The sweep asks ONCE per account, not once per post.
+
+    X bills per request and takes 100 ids on one lookup, so a month of daily
+    posting was costing a request per post per morning for an answer that fits in
+    one. Grouping is what makes the batch endpoint reachable at all.
+    """
+    store, acct, _run = wired
+    for external_id in ("tw2", "tw3"):
+        store.add_run(Run(instruction_id="i", account_id=acct.id,
+                          platform=PlatformName.twitter, status=RunStatus.published,
+                          external_id=external_id))
+    platform = _BulkPlatform({"likes": 7})
+    monkeypatch.setattr(orchestrator, "get_platform", lambda _p: platform)
+    summary = orchestrator.refresh_metrics(store, max_age_days=30)
+    assert summary["updated"] == 3
+    assert len(platform.calls) == 1 and sorted(platform.calls[0]) == ["tw1", "tw2", "tw3"]
+
+
+def test_a_post_whose_counters_have_settled_is_not_re_polled_daily(wired, monkeypatch):
+    """An old post polled recently is skipped; a fresh one is always due.
+
+    Engagement arrives in a burst and then trickles. Re-reading a three-week-old
+    post every morning for 30 days buys nothing and is charged for every time.
+    """
+    store, acct, fresh = wired
+    old = store.add_run(Run(
+        instruction_id="i", account_id=acct.id, platform=PlatformName.twitter,
+        status=RunStatus.published, external_id="tw_old",
+        created_at=datetime.now(timezone.utc) - timedelta(days=20)))
+    old.metrics_updated_at = datetime.now(timezone.utc) - timedelta(hours=24)
+    store.update_run(old)
+    platform = _BulkPlatform({"likes": 1})
+    monkeypatch.setattr(orchestrator, "get_platform", lambda _p: platform)
+    summary = orchestrator.refresh_metrics(store, max_age_days=30)
+    assert summary["settled"] == 1                       # the 20-day-old one waits a week
+    assert platform.calls == [[fresh.external_id]]
+
+
+def test_a_settled_post_comes_back_round_once_its_interval_passes(wired, monkeypatch):
+    """Skipping is a CADENCE, not a retirement — the post is polled again later."""
+    store, acct, _fresh = wired
+    old = store.add_run(Run(
+        instruction_id="i", account_id=acct.id, platform=PlatformName.twitter,
+        status=RunStatus.published, external_id="tw_old",
+        created_at=datetime.now(timezone.utc) - timedelta(days=20)))
+    old.metrics_updated_at = datetime.now(timezone.utc) - timedelta(days=8)
+    store.update_run(old)
+    platform = _BulkPlatform({"likes": 1})
+    monkeypatch.setattr(orchestrator, "get_platform", lambda _p: platform)
+    summary = orchestrator.refresh_metrics(store, max_age_days=30)
+    assert summary["settled"] == 0 and sorted(platform.calls[0]) == ["tw1", "tw_old"]
+
+
+def test_a_post_that_has_never_been_polled_is_always_due(wired, monkeypatch):
+    """The FIRST read is what fills the dashboard in, whatever the post's age."""
+    store, acct, _fresh = wired
+    store.add_run(Run(
+        instruction_id="i", account_id=acct.id, platform=PlatformName.twitter,
+        status=RunStatus.published, external_id="tw_ancient",
+        created_at=datetime.now(timezone.utc) - timedelta(days=25)))
+    platform = _BulkPlatform({"likes": 1})
+    monkeypatch.setattr(orchestrator, "get_platform", lambda _p: platform)
+    orchestrator.refresh_metrics(store, max_age_days=30)
+    assert sorted(platform.calls[0]) == ["tw1", "tw_ancient"]
 
 
 def test_refresh_metrics_off_when_days_zero(wired, monkeypatch):

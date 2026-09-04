@@ -721,6 +721,46 @@ class Twitter(SocialPlatform):
             "impressions": pm.get("impression_count", 0),
         }
 
+    # GET /2/tweets takes up to 100 ids in one request. The daily sweep asks
+    # about every post published inside METRICS_REFRESH_DAYS, so on this
+    # pay-per-use API that is the difference between one request a day and one
+    # per post per day, growing with the account's history.
+    MAX_LOOKUP_IDS = 100
+
+    async def fetch_post_metrics_bulk(self, access_token: str, account: Account, *,
+                                      external_ids: list[str]) -> dict[str, dict]:
+        """Counters for many posts in ONE ``GET /2/tweets?ids=…`` per 100.
+
+        Best-effort per CHUNK: a failed chunk is logged and skipped so one bad id
+        (a deleted post makes the whole lookup partial, not fatal) never stops the
+        sweep. X reports unreadable ids under ``errors`` and simply omits them
+        from ``data``, which is exactly the "absent means not readable" contract
+        the base method documents.
+        """
+        wanted = [str(i) for i in external_ids if i]
+        out: dict[str, dict] = {}
+        for start in range(0, len(wanted), self.MAX_LOOKUP_IDS):
+            chunk = wanted[start:start + self.MAX_LOOKUP_IDS]
+            try:
+                payload = await self._get(access_token, "tweets", {
+                    "ids": ",".join(chunk), "tweet.fields": self.TWEET_FIELDS})
+            except Exception as exc:  # noqa: BLE001 - one chunk must not stop the sweep
+                logger.warning("X bulk metrics for %d post(s) failed: %s", len(chunk), exc)
+                continue
+            for data in payload.get("data", []) or []:
+                post_id = str(data.get("id") or "")
+                if not post_id:
+                    continue
+                pm = data.get("public_metrics") or {}
+                out[post_id] = {
+                    "likes": pm.get("like_count", 0),
+                    "reposts": pm.get("retweet_count", 0),
+                    "replies": pm.get("reply_count", 0),
+                    "quotes": pm.get("quote_count", 0),
+                    "impressions": pm.get("impression_count", 0),
+                }
+        return out
+
     async def profile(self, access_token: str) -> dict:
         """Follower and post counts for the connected account."""
         payload = await self._get(access_token, "users/me", {

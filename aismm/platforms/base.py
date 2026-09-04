@@ -339,6 +339,32 @@ class SocialPlatform(ABC):
         """
         return None
 
+    async def fetch_post_metrics_bulk(self, access_token: str, account: Account, *,
+                                      external_ids: list[str]) -> dict[str, dict]:
+        """Counters for MANY posts at once — ``{external_id: metrics}``.
+
+        The daily sweep re-polls every post published inside
+        ``METRICS_REFRESH_DAYS``, so on a busy account it asks the same question
+        about dozens of posts every morning. Several APIs answer all of them in
+        ONE request (X takes 100 ids on ``GET /2/tweets``), and on a pay-per-use
+        API the difference between 1 request and 60 is money.
+
+        The default loops :meth:`fetch_post_metrics`, so a platform that has no
+        batch endpoint needs nothing and behaves exactly as before. An id whose
+        metrics could not be read is simply ABSENT from the result — the caller
+        distinguishes "read nothing" (``{}``) from "not readable" the same way it
+        does for the single-post call, by whether the key is there.
+        """
+        out: dict[str, dict] = {}
+        for external_id in external_ids:
+            if not external_id:
+                continue
+            metrics = await self.fetch_post_metrics(access_token, account,
+                                                    external_id=external_id)
+            if metrics is not None:
+                out[external_id] = metrics
+        return out
+
     async def search_content(self, access_token: str, account: Account, *,
                              query: str, limit: int = 10, subreddit: str = "") -> list[dict]:
         """Find OTHER accounts' recent posts to engage — the outreach read half.

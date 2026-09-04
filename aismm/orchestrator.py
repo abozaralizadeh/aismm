@@ -299,6 +299,33 @@ def prune_asset_cache(store=None, *, older_than_days: int | None = None,
 # engagement — always win the budget.
 _METRICS_MAX_RUNS = 200
 
+# How often a post is worth re-reading, by how old it is. Engagement arrives in a
+# burst and then trickles: yesterday's post moves between sweeps, a three-week-old
+# one does not, and the daily sweep was re-reading BOTH every morning for the whole
+# 30-day window — the same question, at pay-per-use prices, for an answer that had
+# stopped changing. Each entry is (post age in days, don't re-poll within N hours).
+# The first row whose age threshold the post has not reached wins; anything older
+# than the last row uses its interval.
+_METRICS_CADENCE = ((2, 0), (7, 48), (14, 96), (10**6, 168))
+
+
+def _metrics_due(run, now: datetime) -> bool:
+    """Has this run's post gone long enough without a poll to be worth one?
+
+    A post we have never polled is always due — the first read is the one that
+    fills the dashboard in. After that the interval widens with the post's age
+    (:data:`_METRICS_CADENCE`).
+    """
+    last = _as_utc(run.metrics_updated_at)
+    if last is None:
+        return True
+    created = _as_utc(run.created_at) or now
+    age_days = max((now - created).total_seconds() / 86400.0, 0.0)
+    hours = next(h for threshold, h in _METRICS_CADENCE if age_days < threshold)
+    if hours <= 0:
+        return True
+    return (now - last).total_seconds() >= hours * 3600
+
 
 def refresh_metrics(store=None, *, max_age_days: int | None = None,
                     limit: int = _METRICS_MAX_RUNS, apply: bool = True) -> dict:
@@ -315,6 +342,13 @@ def refresh_metrics(store=None, *, max_age_days: int | None = None,
     failure (deleted post, rate limit, network) is logged and skipped. Tokens are
     resolved once per account and reused across that account's posts.
 
+    Runs are grouped BY ACCOUNT and polled through
+    :meth:`SocialPlatform.fetch_post_metrics_bulk`, which is one request per 100
+    posts on X and the old post-by-post loop everywhere else — the sweep asks the
+    same question about every recent post every morning, and on a pay-per-use API
+    that many requests is real money. ``_metrics_due`` then drops the posts whose
+    counters have stopped moving, so an old post is re-read weekly, not daily.
+
     ``max_age_days`` defaults to ``settings.metrics_refresh_days``; ``0`` there
     turns the scheduled refresh off, but an explicit call (the CLI) may still pass
     a positive value. ``apply=False`` polls and reports without writing.
@@ -322,64 +356,72 @@ def refresh_metrics(store=None, *, max_age_days: int | None = None,
     days = settings.metrics_refresh_days if max_age_days is None else max_age_days
     if days <= 0:
         return {"applied": False, "candidates": 0, "polled": 0, "updated": 0, "skipped": 0,
+                "settled": 0,
                 "skipped_reason": "METRICS_REFRESH_DAYS=0 — the metrics refresh is off."}
 
     store = store or get_store()
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
     runs = store.recent_published_runs(since=since, limit=limit)
 
-    account_cache: dict[str, Account | None] = {}
-    token_cache: dict[str, str | None] = {}
-    polled = updated = skipped = 0
+    # Group first: one token resolution and one platform call per ACCOUNT, rather
+    # than per post. Insertion order keeps the newest posts first within a group.
+    by_account: dict[str, list] = {}
+    settled = 0
     for run in runs:
-        if run.account_id in account_cache:
-            account = account_cache[run.account_id]
-        else:
-            account = store.get_account(run.account_id)
-            account_cache[run.account_id] = account
+        if not _metrics_due(run, now):
+            settled += 1
+            continue
+        by_account.setdefault(run.account_id, []).append(run)
+
+    polled = updated = skipped = 0
+    for account_id, account_runs in by_account.items():
+        account = store.get_account(account_id)
         if not account:
-            skipped += 1
+            skipped += len(account_runs)
             continue
         platform = get_platform(account.platform)
         if not platform.capabilities.supports_metrics:
-            skipped += 1
+            skipped += len(account_runs)
             continue
         # Resolve (and refresh) the token once per account. valid_access_token_sync
         # opens its own event loop, so it must NOT run inside one — this whole
         # function is sync (scheduler thread / CLI), which is why it can.
-        if run.account_id not in token_cache:
-            try:
-                token_cache[run.account_id] = tokens.valid_access_token_sync(account, store)
-            except Exception as exc:  # noqa: BLE001 - a token failure skips the account, not the sweep
-                logger.warning("Metrics: no token for %s (%s): %s",
-                               account.handle or account.external_id,
-                               account.platform.value, exc)
-                token_cache[run.account_id] = None
-        access_token = token_cache[run.account_id]
-        if not access_token:
-            skipped += 1
-            continue
-
-        polled += 1
         try:
-            metrics = _run_async(platform.fetch_post_metrics(
-                access_token, account, external_id=run.external_id))
-        except Exception as exc:  # noqa: BLE001 - one bad post must never stop the sweep
-            logger.warning("Metrics fetch failed for run %s (%s): %s",
-                           run.id[:8], account.platform.value, exc)
+            access_token = tokens.valid_access_token_sync(account, store)
+        except Exception as exc:  # noqa: BLE001 - a token failure skips the account, not the sweep
+            logger.warning("Metrics: no token for %s (%s): %s",
+                           account.handle or account.external_id,
+                           account.platform.value, exc)
+            access_token = None
+        if not access_token:
+            skipped += len(account_runs)
             continue
-        if metrics is None:
-            continue                       # asked, could not read — leave the last values alone
-        if apply:
-            run.set_metrics(metrics)
-            run.metrics_updated_at = datetime.now(timezone.utc)
-            store.update_run(run)
-        updated += 1
 
-    logger.info("Metrics refresh: %d updated of %d polled (%d skipped) across %d candidate run(s)",
-                updated, polled, skipped, len(runs))
+        polled += len(account_runs)
+        try:
+            found = _run_async(platform.fetch_post_metrics_bulk(
+                access_token, account,
+                external_ids=[r.external_id for r in account_runs]))
+        except Exception as exc:  # noqa: BLE001 - one bad account must never stop the sweep
+            logger.warning("Metrics fetch failed for %s (%s): %s",
+                           account.handle or account.external_id,
+                           account.platform.value, exc)
+            continue
+        for run in account_runs:
+            metrics = found.get(run.external_id)
+            if metrics is None:
+                continue                   # asked, could not read — leave the last values alone
+            if apply:
+                run.set_metrics(metrics)
+                run.metrics_updated_at = datetime.now(timezone.utc)
+                store.update_run(run)
+            updated += 1
+
+    logger.info("Metrics refresh: %d updated of %d polled (%d skipped, %d already settled) "
+                "across %d candidate run(s)", updated, polled, skipped, settled, len(runs))
     return {"applied": apply, "candidates": len(runs), "polled": polled,
-            "updated": updated, "skipped": skipped}
+            "updated": updated, "skipped": skipped, "settled": settled}
 
 
 def refresh_run_metrics(run_id: str, store=None, *, apply: bool = True) -> dict | None:

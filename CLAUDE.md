@@ -125,6 +125,26 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 - **Report `errors[]` as well as `detail`** — on a 400 the top-level detail
   is the generic "One or more parameters to your request was invalid" while `errors[].message` names
   the actual parameter.
+- **An X READ is billed twice — as a request AND per post object returned** — so the cost of a
+  feature is `calls × max_results`, not `calls`. Five euro of credit went in two days on an account
+  posting three times a day, and the analytics named both leaks. (1) The daily metrics sweep asked
+  `GET /2/tweets/{id}` **once per post, every morning, for the whole `METRICS_REFRESH_DAYS`
+  window** — a request per post per day, growing with the account's history forever. It is now
+  grouped BY ACCOUNT and goes through `SocialPlatform.fetch_post_metrics_bulk` (base loops
+  `fetch_post_metrics` so every other platform is unchanged; `Twitter` overrides it with
+  `GET /2/tweets?ids=` — **100 ids per request**), and `orchestrator._metrics_due` +
+  `_METRICS_CADENCE` widen the re-poll interval with the post's age: engagement arrives in a burst
+  and then trickles, so a three-week-old post is re-read weekly, not daily. A post never polled is
+  ALWAYS due — the first read is what fills the dashboard in — and `refresh_run_metrics` (the run
+  page's button) is deliberately un-tapered, because that one is a human asking. `settled` is
+  reported separately from `skipped`: it is not a failure, it is the sweep declining to pay.
+  (2) The engagement read tools cache their raw platform items on the run `state`
+  (`twitter_tools._cached_read`), because a model that reads its replies, answers two and reads them
+  again "to check" was paying full price for a list nobody had added to. Only the RAW items are
+  cached and the view is rebuilt per call, so `already_answered` is recomputed from the ledger every
+  time — caching the rendered view would tell the agent a comment is still open after it had
+  replied. A failed read is never cached (an error is not an answer), and the key includes the
+  arguments, so a different search query still costs a search.
 - **Several communities ROTATE, they do not fan out** (`twitter.next_community` +
   `after_publish`). One post per run, to the next id in `meta["community_ids"]`; the cursor advances
   only once the post is LIVE, so a failed attempt doesn't skip a community for a whole cycle.
