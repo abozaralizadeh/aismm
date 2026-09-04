@@ -806,6 +806,40 @@ def test_a_sequence_that_re_anchors_is_left_alone(sora):
         result.get("timing_notes", []))
 
 
+def test_re_anchoring_a_sequence_too_short_to_drift_is_reported(sora):
+    """The mirror of the drift warning, and the other way to get repeats.
+
+    The live 3-shot reel planned [0, 1, 1]: shots 2 and 3 both edited from shot 1
+    in a chain that was never long enough to drift, so the anchoring bought
+    nothing and the two shots played as takes of one beat.
+    """
+    result = _sequence(scenes=["a", "b", "c"], continuity="remix",
+                       scene_remix_from=[0, 1, 1])
+    note = " ".join(result["timing_notes"])
+    assert "chain this short does not drift" in note
+    assert "takes of one beat" in note
+
+
+def test_a_short_sequence_left_at_the_default_is_not_scolded(sora):
+    """Consecutive chaining is the right answer here — say nothing."""
+    result = _sequence(scenes=["a", "b", "c"], continuity="remix")
+    assert "does not drift" not in " ".join(result.get("timing_notes", []))
+
+
+def test_re_anchoring_a_long_sequence_is_left_alone(sora):
+    """[0, 0, 1, 1, 1] over five shots is the documented fix, not a mistake."""
+    result = _sequence(scenes=["a", "b", "c", "d", "e"], continuity="remix",
+                       scene_remix_from=[0, 0, 1, 1, 1])
+    assert "does not drift" not in " ".join(result.get("timing_notes", []))
+
+
+def test_the_prompt_says_to_keep_the_consecutive_default(sora):
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "KEEP THAT DEFAULT" in p
+    assert "two takes of the same beat" in p
+
+
 def test_a_short_chain_is_not_worth_a_warning(sora):
     result = _sequence(scenes=["a", "b", "c"], continuity="remix")
     assert "generations from where the video started" not in " ".join(

@@ -73,6 +73,13 @@ But chaining always forward drifts a little further with every link, so
 framing, the establishing wide, or a character last seen at the start remixes
 THAT shot rather than its neighbour. Forward for continuity, back for recall.
 
+Both directions have a failure, and the tool reports each. Past
+``_CHAIN_DRIFT_LINKS`` consecutive forward links the look has drifted; below it,
+re-anchoring protects against nothing — the chain was never long enough to
+drift — while two shots edited from the SAME source play as two takes of one
+beat. So the default (each shot from the one before) stands unless the sequence
+is long enough to drift or a shot deliberately returns to an earlier framing.
+
 **A remix inherits the source clip's AUDIO too** — a clip is picture and sound,
 and the source's spoken line comes over with the frames. A reel planned
 ``scene_remix_from=[0, 1, 1]`` said one sentence three times across three
@@ -805,6 +812,26 @@ async def perform_create_sequence(
             f"shots to an early one that shows them clearly — e.g. [0, 0, 1, 1, 1] "
             f"rather than all zeros.")
 
+    # The mirror of the warning above, and the other way to get repeats. Anchoring
+    # a shot back to an early one buys protection from drift — but a chain shorter
+    # than _CHAIN_DRIFT_LINKS cannot drift far enough to need it, and two shots
+    # edited from the SAME source play as two takes of one beat. A live 3-shot reel
+    # planned [0, 1, 1]: nothing to protect against, and one sentence spoken over
+    # all three scenes.
+    if len(scenes) <= _CHAIN_DRIFT_LINKS:
+        reanchored = [row["shot"] for row in details
+                      if row.get("how", "").startswith("remix(shot ")
+                      and not row["how"].startswith(f"remix(shot {row['shot'] - 1}")]
+        if reanchored:
+            timing_notes.append(
+                f"shot(s) {', '.join(str(s) for s in reanchored)} were edited from an "
+                f"earlier shot rather than the one just before them, in a "
+                f"{len(scenes)}-shot video. A chain this short does not drift, so "
+                f"re-anchoring protects against nothing here, and shots edited from the "
+                f"same source tend to play as takes of one beat. Leave scene_remix_from "
+                f"at the default unless a shot deliberately returns to an earlier "
+                f"framing.")
+
     warnings = []
     if timing_notes:
         result["timing_notes"] = timing_notes
@@ -982,6 +1009,11 @@ def _make_create_sequence(state: dict):
                 start, remix it from THAT shot instead: ``[0, 0, 1, 0, 1]``. A
                 source that does not exist or whose shot failed falls back to the
                 previous shot and says so in ``timing_notes``.
+
+                **Leave it at the default unless you have one of those reasons.**
+                Drift needs a long chain to show, so in a short video re-anchoring
+                protects against nothing — and two shots edited from the same
+                source tend to play as two takes of one beat.
             scene_seconds: Per-shot lengths. Only meaningful for shots that are
                 NOT remixed — a remix inherits its source clip's duration, so a
                 chained sequence renders every shot at ``seconds_each`` whatever

@@ -884,6 +884,14 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
   `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,
   1]`). Reported rather than rewritten — where to re-anchor is a directing decision.
+- **Re-anchoring has its own failure, so the consecutive default STANDS unless there is a reason.**
+  The drift warning above only covers one direction; below `_CHAIN_DRIFT_LINKS` the chain cannot
+  drift far enough to need protecting, and two shots edited from the SAME source play as two takes
+  of one beat — the picture-side twin of the repeated narration. The 3-shot reel that planned
+  `[0, 1, 1]` had nothing to protect against. So `timing_notes` now reports a non-default
+  `scene_remix_from` in a sequence of `_CHAIN_DRIFT_LINKS` shots or fewer, and step (e) of DIRECT IT
+  names the only two reasons to depart from the default: the video is long enough to drift, or a
+  shot deliberately RETURNS to an earlier framing. Reported, never rewritten, like its mirror.
 - **`seconds_each` defaults to 12, deliberately.** The agent was picking 4s clips and the result read
   as a slideshow; 12s is fewer seams, less drift and room for the action to move. Per-shot lengths
   are the rhythm lever, not the default.

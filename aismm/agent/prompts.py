@@ -199,15 +199,21 @@ HOW TO WORK
       hard cut to the empty platform at dusk"). Never let a sentence or a beat
       straddle two clips.
    e) CHOOSE WHAT EACH SHOT IS EDITED FROM (scene_remix_from). Default 0 = the
-      shot before, which advances the action; but every link drifts a little
-      further from where you started, so when a shot returns to the opening
-      framing, the establishing wide, or a character last seen at the start,
-      remix it from THAT shot instead — [0, 0, 1, 0, 1]. Forward for continuity,
-      back for recall. ANCHOR, do not merely chain: a five-shot animation left at
-      [0, 0, 0, 0, 0] ended with completely different characters from the ones it
-      opened with, every shot correctly remixed — each link is one more
-      generation away from the original. When one cast has to carry the whole
-      video, tie the later shots back to an early shot that shows them clearly.
+      shot before, which advances the action. KEEP THAT DEFAULT unless one of two
+      things is true, and say which to yourself before you change it:
+        - the video is long enough to DRIFT. Every link is one more generation
+          away from the opening: a five-shot animation left at [0, 0, 0, 0, 0]
+          ended with completely different characters from the ones it opened
+          with, every shot correctly remixed. From about four shots on, tie the
+          later ones back to an early shot that shows the cast clearly —
+          [0, 0, 1, 1, 1];
+        - a shot RETURNS to something earlier — the opening framing, the
+          establishing wide, a character last seen at the start. Remix it from
+          THAT shot: [0, 0, 1, 0, 1].
+      Forward for continuity, back for recall. Re-anchoring for any other reason
+      costs you: in a short sequence there is no drift to protect against, and two
+      shots edited from the same source play as two takes of the same beat. A
+      three-shot reel planned [0, 1, 1] and read as one moment repeated.
    f) MARK THE CUTS (scene_continuity): "cut" when the story moves to another
       place, subject or time, "" when the shot continues the moment before.
       Everything continuing reads as one long take with repeats; everything a cut
