@@ -129,6 +129,44 @@ def split_thread(text: str, limit: int, max_posts: int, pin_suffix: str = "") ->
     return [f"{part} {index}/{total}" for index, part in enumerate(parts, start=1)]
 
 
+def split_reply_sources(posts: list[dict]) -> tuple[list[str], list[dict]]:
+    """Recent posts whose replies X will return, and the ones it will not.
+
+    **X hides Community posts from its search index and from the mentions
+    timeline.** There is no "get replies" endpoint in v2, so every reply-reading
+    path — ours and everyone else's — is a recent search on ``conversation_id``,
+    and a community post's replies are simply not in that index. Probed live on a
+    post X itself reported as having one reply:
+
+    * ``GET /2/tweets/{id}``                    -> ``reply_count: 1``
+    * ``search/recent?query=conversation_id:{id} is:reply`` -> the root post only
+    * ``search/recent?query=to:{handle}`` / ``from:{replier}`` -> not there
+    * ``GET /2/users/{id}/mentions``            -> not there
+    * ``GET /2/communities/{id}/tweets``        -> 404, no such endpoint
+    * ``community_id:`` as a search operator    -> "invalid operator"
+
+    So the reply cannot be read at all, and an account that posts on a community
+    rotation (see :func:`next_community`) has an engage run that can never find a
+    comment. That is not "no comments" and must not be reported as such — the
+    same distinction as an unreadable Instagram inbox: a run that could not look
+    has not looked.
+
+    The tweet object *does* carry ``community_id`` (it is in :attr:`TWEET_FIELDS`,
+    so it costs nothing extra), which is how we can tell the two apart and say so.
+    """
+    readable: list[str] = []
+    hidden: list[dict] = []
+    for post in posts or []:
+        pid = str(post.get("id") or "")
+        if not pid:
+            continue
+        if str(post.get("community_id") or "").strip():
+            hidden.append(post)
+        else:
+            readable.append(pid)
+    return readable, hidden
+
+
 def community_ids(account) -> list[str]:
     """Every community this account posts to, in rotation order.
 
@@ -543,7 +581,11 @@ class Twitter(SocialPlatform):
     # "no posts", "not allowed" and "out of credits" need very different
     # responses from the agent.
     # ------------------------------------------------------------------ #
-    TWEET_FIELDS = "id,text,created_at,public_metrics,conversation_id,referenced_tweets"
+    # ``community_id`` rides along on every tweet read at no extra cost, and it is
+    # the ONLY way to know a post's replies are unreadable (see
+    # :func:`split_reply_sources`) rather than absent.
+    TWEET_FIELDS = ("id,text,created_at,public_metrics,conversation_id,referenced_tweets,"
+                    "community_id")
 
     @staticmethod
     def _api_error(response: httpx.Response) -> RuntimeError:
@@ -768,7 +810,8 @@ class Twitter(SocialPlatform):
         return payload.get("data", {}) or {}
 
     async def list_replies(self, access_token: str, account: Account, *,
-                           limit: int = 10, since_posts: int = 5) -> list[dict]:
+                           limit: int = 10, since_posts: int = 5,
+                           conversation_ids: list[str] | None = None) -> list[dict]:
         """Replies OTHERS wrote under this account's recent posts.
 
         Mentions cover "someone @-ed us"; this covers "someone replied to what we
@@ -777,13 +820,27 @@ class Twitter(SocialPlatform):
         search for tweets whose ``conversation_id`` is one of those posts and that
         are replies not written by the account itself.
 
+        **Community posts are skipped**, because their replies are not in the
+        search index at all — see :func:`split_reply_sources`. Searching them
+        cannot return anything, and on a pay-per-use API a guaranteed-empty
+        request is pure waste, so with nothing readable this makes no call at all.
+        Pass ``conversation_ids`` to search a set the caller has already worked out
+        (the tool layer does, so the timeline is read once per run, not twice).
+
         Kept deliberately small (recent search + posts both spend credits on the
         pay-per-use API) and best-effort: recent search needs project access some
         apps lack, so a failure returns ``[]`` rather than killing the run — the
         agent still has mentions to work from.
         """
-        posts = await self.list_posts(access_token, account, limit=max(1, min(since_posts, 10)))
-        conversation_ids = [str(p.get("id")) for p in posts if p.get("id")]
+        if conversation_ids is None:
+            posts = await self.list_posts(access_token, account,
+                                          limit=max(1, min(since_posts, 10)))
+            conversation_ids, hidden = split_reply_sources(posts)
+            if hidden and not conversation_ids:
+                logger.info("X reply search skipped for %s: all %d recent post(s) are "
+                            "community posts, whose replies X does not index",
+                            account.handle or account.external_id, len(hidden))
+        conversation_ids = [str(c).strip() for c in conversation_ids if str(c or "").strip()]
         if not conversation_ids:
             return []
         convo = " OR ".join(f"conversation_id:{cid}" for cid in conversation_ids)

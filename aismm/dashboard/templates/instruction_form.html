@@ -590,6 +590,18 @@
           or clear the selection entirely to allow every tool.
         </div>
       {% endif %}
+      {% if community_blind_spots %}
+        <div class="flash flash-warning">
+          <strong>Comments on X Community posts cannot be read
+          ({{ community_blind_spots | join(', ') }}).</strong>
+          X leaves replies made inside a Community out of its search index and out
+          of the mentions timeline, and has no endpoint that returns them — so a
+          run on an account that posts to communities finds no comments however
+          many there are. Runs now say "could not check" instead of "nothing to
+          answer". To have comments answered, set this instruction's X destination
+          to the home timeline, or reply inside the community by hand.
+        </div>
+      {% endif %}
       <div class="field">
         <div class="multiselect" data-multiselect data-total="{{ total }}">
           {# Lets the save route tell "picker submitted, nothing ticked" from

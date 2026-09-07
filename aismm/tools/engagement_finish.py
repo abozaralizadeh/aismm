@@ -128,6 +128,14 @@ async def perform_finish_engagement(state: dict, summary: str = "") -> dict:
                            sorted((state.get("engagement_seen") or {}).items()) if n)
         line += (f" NOTE: {waiting} unanswered item(s) were visible this run "
                  f"({detail}) and none were answered — say why below.")
+    # The other half of the same problem: a surface the API does not expose at
+    # all. X does not index replies inside a Community, so an account on a
+    # community rotation gets an empty reply list from a working call — and the
+    # run said "no new comments" while a real one sat unanswered. Recorded by the
+    # read tools in code, for the same reason the tally is.
+    missed = [m for m in (state.get("unreadable_surfaces") or []) if m]
+    if missed:
+        line += f" COULD NOT CHECK (the platform does not expose it): {', '.join(missed)}."
     if summary.strip():
         line += f" {summary.strip()}"
     run.status = status

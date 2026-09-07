@@ -46,6 +46,11 @@ _X_TARGET = "tweet"
 # a "dm" id never collides with a "tweet" id even if the numbers coincide.
 _X_DM = "dm"
 
+# How far back x_replies looks for conversations to search. Matches the platform
+# default so this costs exactly what it always did — and X's own floor for
+# ``max_results`` is 5, so asking for fewer would not be cheaper anyway.
+_REPLY_SOURCE_POSTS = 5
+
 
 def _guard(state: dict) -> bool:
     """Factory helper: only build these tools for an X run."""
@@ -187,16 +192,49 @@ def _make_replies(state: dict):
         skip them. Best-effort: X's reply search needs project access some apps
         lack, so an empty list can mean "none" or "not available on this app".
 
+        **``unreadable`` matters.** X does not index replies made inside a
+        Community, and there is no endpoint that returns them, so comments on this
+        account's community posts CANNOT be read here — however many there are.
+        When ``unreadable`` says so, do not report that there were no comments:
+        say plainly, in your ``finish_engagement`` summary, that the replies on
+        those posts could not be checked.
+
         Args:
             limit: How many replies to return (newest-ish first).
         """
         async def call(platform, account, token):
+            from ..platforms.twitter import split_reply_sources
+
             # The costliest read on X — a timeline lookup AND a recent search, so
-            # a repeat call is two requests and ~15 post objects for nothing.
+            # a repeat call is two requests and ~15 post objects for nothing. The
+            # timeline is read here (not inside list_replies) so this run pays for
+            # it once and can tell the agent WHICH posts were unsearchable.
+            recent = await _cached_read(
+                state, ("posts", _REPLY_SOURCE_POSTS),
+                lambda: platform.list_posts(token, account, limit=_REPLY_SOURCE_POSTS))
+            searchable, hidden = split_reply_sources(recent)
             posts = await _cached_read(
-                state, ("replies", limit),
-                lambda: platform.list_replies(token, account, limit=limit))
-            return {"count": len(posts), "replies": [_post_view(p, account) for p in posts]}
+                state, ("replies", limit, tuple(searchable)),
+                lambda: platform.list_replies(token, account, limit=limit,
+                                              conversation_ids=searchable))
+            view = {"count": len(posts),
+                    "replies": [_post_view(p, account) for p in posts]}
+            if hidden:
+                # Recorded in code as well as reported to the model: a run that
+                # could not look must not be able to end saying it found nothing.
+                engagement.note_unreadable(
+                    state, f"replies on {len(hidden)} X community post(s)")
+                view["unreadable"] = {
+                    "community_posts": [str(p.get("id")) for p in hidden],
+                    "reason": ("X excludes replies made inside a Community from its "
+                               "search index and from the mentions timeline, and has "
+                               "no endpoint that returns them. Comments on these "
+                               "posts cannot be read by any tool here."),
+                    "say_so": ("Do NOT report that there were no comments. Say in your "
+                               "summary that replies on these community post(s) could "
+                               "not be checked."),
+                }
+            return view
 
         return await _with_context(state, call)
 

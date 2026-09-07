@@ -1360,6 +1360,31 @@ def create_app() -> Flask:
                                  "platform": account.platform.value})
         return gaps
 
+    def _engagement_blind_spots(instr):
+        """Engagement work this instruction can never do, whatever it is told.
+
+        Not a missing tool — a missing API. X does not index replies made inside
+        a Community and has no endpoint that returns them, so an account posting
+        on a community rotation has an engage run that finds nothing on every
+        fire. Reported live as "the comments responses in X are not working". The
+        run says so too, but by then a schedule has been running for weeks.
+        """
+        from ..platforms.twitter import HOME_TIMELINE, community_ids
+
+        if instr is None or instr.task_type not in (InstructionTask.engage,
+                                                    InstructionTask.auto):
+            return []
+        pinned = str(getattr(instr, "twitter_community_id", "") or "").strip()
+        if pinned == HOME_TIMELINE:               # posts go to the timeline
+            return []
+        notes = []
+        for account in store_accounts_for(instr):
+            if account.platform is not PlatformName.twitter:
+                continue
+            if pinned or community_ids(account):
+                notes.append(account.handle or account.external_id)
+        return notes
+
     def store_accounts_for(instr):
         by_id = {a.id: a for a in get_store().list_accounts(workspace_id=_workspace_id())}
         return [by_id[i] for i in (instr.account_ids or []) if i in by_id]
@@ -1379,6 +1404,7 @@ def create_app() -> Flask:
                                next_run=_next_run_info(instr, store),
                                tool_groups=_tool_catalog(instr.tools),
                                tool_gaps=_engagement_tool_gaps(instr),
+                               community_blind_spots=_engagement_blind_spots(instr),
                                llm_options=_llm_options(),
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),

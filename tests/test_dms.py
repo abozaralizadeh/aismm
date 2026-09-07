@@ -745,7 +745,55 @@ def test_it_keeps_shrinking_until_graph_accepts(monkeypatch):
     assert attempts[-1] >= 1
 
 
+def test_one_refusal_at_the_smallest_query_is_not_believed(monkeypatch):
+    """code=1 is Graph's catch-all, not a measurement — so the floor is retried.
+
+    Probed on the Page whose DMs were reported as unreadable: it refused ONE
+    conversation × five messages during a run, and served the identical query
+    three times over minutes later. Every call there took 13-16 seconds, i.e.
+    Graph answering under strain. Believing that single 500 is what turned a slow
+    Page into a silently empty inbox.
+    """
+    from aismm.platforms import instagram as ig
+
+    monkeypatch.setattr(ig, "DM_FLOOR_RETRY_PAUSE_SECONDS", 0)
+    attempts = []
+
+    def handler(request):
+        attempts.append(int(request.url.params["limit"]))
+        if attempts.count(1) < 2:                      # refuse the floor once
+            return _too_much(request)
+        return httpx.Response(200, json={"data": [{"id": "c1", "messages": {"data": [
+            _msg("m1", "555", "hello", "2026-09-02T10:00:00+0000")]}}]})
+
+    _ig_transport(monkeypatch, handler)
+    items = _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert [i["id"] for i in items] == ["m1"]
+    assert attempts.count(1) == 2                      # asked the floor twice
+
+
+def test_the_conversation_page_shrinks_before_the_message_count(monkeypatch):
+    """The CONVERSATION count is the lever: `limit=3` was refused with `fields=id`
+    and no nested messages at all, while `limit=1` with twenty was served."""
+    from aismm.platforms import instagram as ig
+
+    monkeypatch.setattr(ig, "DM_FLOOR_RETRY_PAUSE_SECONDS", 0)
+    attempts = []
+
+    def handler(request):
+        attempts.append(int(request.url.params["limit"]))
+        return (_too_much(request) if attempts[-1] > 1
+                else httpx.Response(200, json={"data": []}))
+
+    _ig_transport(monkeypatch, handler)
+    _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert attempts[-1] == 1
+
+
 def test_it_gives_up_rather_than_looping_forever(monkeypatch):
+    from aismm.platforms import instagram as ig
+
+    monkeypatch.setattr(ig, "DM_FLOOR_RETRY_PAUSE_SECONDS", 0)
     calls = []
 
     def handler(request):

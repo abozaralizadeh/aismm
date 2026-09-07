@@ -46,17 +46,30 @@ MAX_MEDIA_PAGE_TOTAL = 500
 # thread, not a message. The per-thread cap only bounds how far back inside a
 # single busy conversation we look.
 MAX_DM_CONVERSATIONS = 200
-# Conversations asked for in ONE call. `limit` × `messages.limit` is the real cost
+# Conversations asked for in ONE call. `limit` × `messages.limit` bounds the cost
 # of the request, and 50 × 20 = 1000 message objects made Graph answer
 #   500 "Please reduce the amount of data you're asking for" [code=1]
 # on a busy inbox — a request that works on a quiet account and fails on the one
 # that actually has DMs. Paging is what covers the rest, so a small page costs
-# nothing but a round trip.
+# nothing but a round trip. On a second, slower Page the CONVERSATION count alone
+# was the wall: `limit=3` was refused with `fields=id` and no messages requested
+# at all, while `limit=1` with twenty messages was served. Shrink the page first.
 DM_CONVERSATION_PAGE = 15
 # Floors for the adaptive back-off below. One conversation with five messages is
 # the smallest useful question; if Graph refuses that, the size is not the problem.
 DM_MIN_PAGE = 1
 DM_MIN_MESSAGES = 5
+# …but it refuses the smallest question too, sometimes. Probed on a Page whose
+# DMs were unreadable: `limit=1` succeeded three times in a row (with 5 nested
+# messages, and again with 20), `limit=2` succeeded, and `limit=3` failed — with
+# `fields=id` alone and no nested messages at all. So the CONVERSATION page is the
+# lever, `messages.limit` barely matters, and on this Page every call took 13–16
+# seconds: Graph is answering under strain and code=1 is its catch-all, not a
+# measurement. A single 500 at the floor is therefore not proof the inbox is
+# unreadable — it was, on the run that reported it, and the same query worked
+# minutes later. Retry the floor before declaring defeat.
+DM_FLOOR_RETRIES = 2
+DM_FLOOR_RETRY_PAUSE_SECONDS = 3
 # Graph returns detail for at most the 20 most recent messages of a conversation.
 DM_MESSAGES_PER_CONVERSATION = 20
 # Instagram only allows a free-form reply within 24 hours of the person's last
@@ -931,17 +944,24 @@ class Instagram(SocialPlatform):
                                   wanted: int) -> list[dict]:
         """Page ``/conversations``, shrinking the ask when Graph says it is too big.
 
-        The cost of one call is ``limit`` × ``messages.limit``, and Graph answers
-        ``500 … reduce the amount of data`` [code=1] rather than returning a
-        smaller result — so a request tuned on a quiet inbox fails on the busy one
-        that actually has DMs to answer. Halving both and retrying the SAME cursor
-        is the documented remedy; paging still covers everything, it just takes
-        another round trip. Only :class:`TooMuchData` is retried — a permission or
-        token error would fail identically at any size.
+        Graph answers ``500 … reduce the amount of data`` [code=1] rather than
+        returning a smaller result, so a request tuned on a quiet inbox fails on
+        the busy one that actually has DMs to answer. Halving and retrying the SAME
+        cursor is the documented remedy; paging still covers everything, it just
+        takes another round trip. Only :class:`TooMuchData` is retried — a
+        permission or token error would fail identically at any size.
+
+        **At the floor it is retried rather than given up on.** code=1 is Graph's
+        catch-all "API Unknown", not a measurement: an account whose DMs were
+        reported as unreadable failed at one conversation × five messages during a
+        run and served the identical query three times over minutes later. Giving
+        up there turns a slow Page into a silently empty inbox — which is the very
+        thing ``list_dms`` raises to prevent.
         """
         collected: list[dict] = []
         page = min(wanted, DM_CONVERSATION_PAGE)
         per_thread = DM_MESSAGES_PER_CONVERSATION
+        floor_retries = 0
         after = ""
         while True:
             params = {
@@ -957,7 +977,14 @@ class Instagram(SocialPlatform):
                     access_token, f"{target}/conversations", params)
             except TooMuchData:
                 if page <= DM_MIN_PAGE and per_thread <= DM_MIN_MESSAGES:
-                    raise
+                    if floor_retries >= DM_FLOOR_RETRIES:
+                        raise
+                    floor_retries += 1
+                    logger.info("Graph refused the smallest conversations query for "
+                                "%s; retrying (%d/%d) — code=1 is its catch-all, not "
+                                "a size limit", target, floor_retries, DM_FLOOR_RETRIES)
+                    await asyncio.sleep(DM_FLOOR_RETRY_PAUSE_SECONDS)
+                    continue
                 page = max(DM_MIN_PAGE, page // 2)
                 per_thread = max(DM_MIN_MESSAGES, per_thread // 2)
                 logger.info("Graph refused the conversations query as too large; "

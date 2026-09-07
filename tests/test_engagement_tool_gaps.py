@@ -163,3 +163,54 @@ def test_no_warning_on_a_publishing_instruction(dash, store):
     page = dash.test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
     assert "cannot see" not in page
+
+
+# --- the OTHER blind spot: a surface the platform does not expose at all ------------------ #
+# Every tool ticked, every permission granted, and the engage run still finds
+# nothing: X leaves replies made inside a Community out of its search index and
+# out of the mentions timeline, and has no endpoint that returns them. The account
+# posts on a community rotation, so that is every post it makes.
+
+def _x_engage(store, *, communities="", pinned="", task=InstructionTask.engage):
+    account = Account(platform=PlatformName.twitter, handle="abo0zar", external_id="137")
+    if communities:
+        account.set_meta({"community_ids": communities})
+    account = store.upsert_account(account, access_token="t")
+    instruction = Instruction(name="X Comments", brief="b", schedule="03:00 mon",
+                              task_type=task, twitter_community_id=pinned)
+    instruction.set_account_ids([account.id])
+    return store.upsert_instruction(instruction)
+
+
+def test_the_edit_page_warns_that_community_comments_are_unreadable(dash, store):
+    instruction = _x_engage(store, communities="1493446837214187523")
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Community posts cannot be read" in page and "abo0zar" in page
+
+
+def test_an_instruction_pinned_to_the_timeline_is_not_warned(dash, store):
+    """Its posts are not in a community, so their replies are searchable."""
+    from aismm.platforms.twitter import HOME_TIMELINE
+
+    instruction = _x_engage(store, communities="1493446837214187523",
+                            pinned=HOME_TIMELINE)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Community posts cannot be read" not in page
+
+
+def test_an_account_with_no_communities_is_not_warned(dash, store):
+    instruction = _x_engage(store)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Community posts cannot be read" not in page
+
+
+def test_a_publishing_instruction_is_not_warned(dash, store):
+    """Posting to a community works perfectly — only reading the replies does not."""
+    instruction = _x_engage(store, communities="1493446837214187523",
+                            task=InstructionTask.publish)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Community posts cannot be read" not in page

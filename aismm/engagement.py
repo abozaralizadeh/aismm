@@ -57,6 +57,30 @@ def note_read(state: dict, tool_name: str, *, unanswered: int | None = None) -> 
         seen = state.setdefault("engagement_seen", {})
         seen[tool_name] = max(int(unanswered), int(seen.get(tool_name, 0)))
 
+
+def note_unreadable(state: dict, what: str) -> None:
+    """Record a surface this run could not see, however hard it looked.
+
+    ``note_read`` covers "the agent never opened the inbox". This covers the other
+    half: the tool ran, the platform answered, and part of what the run was asked
+    to engage with is **not exposed by the API at all**. X does not index replies
+    made inside a Community, so an account posting on a community rotation gets an
+    empty reply list from a working call — and the run reported "no new comments"
+    while a real one sat unanswered.
+
+    Kept in code for the same reason as the read guard: what a run could not check
+    cannot be left to prose the model writes about itself. ``finish_engagement``
+    puts it in the run log, so the operator sees "could not check" rather than
+    "nothing to do".
+    """
+    text = (what or "").strip()
+    if not text:
+        return
+    missed = state.setdefault("unreadable_surfaces", [])
+    if text not in missed:
+        missed.append(text)
+
+
 # A reply refused for volume reasons still means the platform is throttling this
 # account; back off like a rate-limited post does.
 RATE_LIMIT_COOLDOWN_SECONDS = 3600

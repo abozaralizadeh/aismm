@@ -438,6 +438,28 @@ nested under the top-level comment, so `list_comments` never surfaces them as ne
 on `author_id == account.external_id` (from the `expansions=author_id` the search already requests)
 can't slip that way; the same pass de-duplicates by tweet id. The ledger prevents a repeat of the
 *same* id — the author-id filter is what stops a *new* self-reply id from ever being offered.
+
+**X does not index replies made inside a COMMUNITY, so they cannot be read at all** — and an account
+on a community rotation posts nothing else. Reported as "the comments responses in X are not
+working"; the run said "no new replyable comments" with no error anywhere. Probed against a post X
+itself reported as having one reply: `GET /2/tweets/{id}` → `reply_count: 1`, but
+`search/recent?query=conversation_id:{id} is:reply` returns the root post only, `to:{handle}` and
+`from:{replier}` don't have it, `GET /2/users/{id}/mentions` doesn't have it,
+`GET /2/communities/{id}/tweets` is a 404 and `community_id:` is rejected as an invalid search
+operator. X has no "get replies" endpoint, so every reply-reading path is a recent search — which is
+why this is unfixable rather than merely unimplemented. The tweet object DOES carry `community_id`
+(now in `TWEET_FIELDS`, free — it rides reads we already make), so `twitter.split_reply_sources`
+separates the searchable posts from the hidden ones: `list_replies` searches only the former and,
+with nothing searchable, **makes no request at all** (a guaranteed-empty read still costs a request
+plus every object it returns). The blind spot is then reported at three levels, because "no comments"
+and "I could not see the comments" are different answers: `x_replies` returns an `unreadable` block
+naming the posts, `engagement.note_unreadable` records it **in code** and `finish_engagement` appends
+"COULD NOT CHECK …" to the run log (same reasoning as `unread_inboxes` — a guarantee that must hold
+on every path cannot live in model-written prose), and `dashboard._engagement_blind_spots` warns on
+the instruction's edit page, where the operator can switch the destination to the home timeline. The
+tool reads the timeline itself (rather than letting `list_replies` do it) so one run pays for it once
+and can name which posts were unsearchable.
+
 **DMs are the ENGAGE task, not a new task type** — answering incoming messages on your own account
 is engagement, so the DM read/reply tools ride the same engage/auto tool sets and the same
 `perform_reply` gate as comments (`dry_run` previews, `approval` queues, `live` sends). `supports_dms`
@@ -521,6 +543,16 @@ while the quiet account it was tuned on worked — so the first page is now `DM_
 same cursor** on `TooMuchData`, down to a floor. Only that error is retried: a permission or token
 failure fails identically at any size, and `code=1` is Graph's catch-all "API Unknown", so the
 MESSAGE is what identifies it — matching on the code alone would swallow real errors.
+
+**…and the FLOOR is retried, not believed** (`DM_FLOOR_RETRIES`). Because `code=1` is a catch-all
+rather than a measurement, a 500 at the smallest possible query is not proof the inbox is unreadable
+— and treating it as proof is what made a second account's DMs "not work". Probed on that Page:
+`limit=1` was served three times in a row (with 5 nested messages, and again with 20) and `limit=2`
+worked, while `limit=3` was refused **with `fields=id` and no nested messages at all**, and every
+call took 13–16 seconds. So the CONVERSATION count is the lever (shrink it first; `messages.limit`
+barely matters), Graph is answering under strain, and the same query that failed mid-run succeeded
+minutes later. Giving up at the floor turns a slow Page into a silently empty inbox, which is the
+exact failure `list_dms`-raises exists to prevent.
 
 **Subcode 2534041 is a switch in the Instagram APP, not a permission** — "The account owner has
 disabled access to instagram direct messages". No scope, token or reconnect fixes it; the owner has

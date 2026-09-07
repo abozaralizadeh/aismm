@@ -48,7 +48,7 @@ def wired(monkeypatch, store):
             self.calls.append("posts")
             return [{"id": "P1", "text": "ours"}]
 
-        async def list_replies(self, token, acct, *, limit=10):
+        async def list_replies(self, token, acct, *, limit=10, conversation_ids=None):
             self.calls.append("replies")
             return [{"id": "r1", "text": "nice one", "author_id": "111"}]
 
@@ -78,11 +78,18 @@ def wired(monkeypatch, store):
 # paid full price for the second look at a list nobody had added to.
 
 def test_reading_replies_twice_in_one_run_costs_one_call(wired):
+    """Two reads, one timeline lookup and one search — the same as a single read.
+
+    ``x_replies`` reads the timeline itself now (it has to, to tell a searchable
+    post from a community one whose replies X will not return), so both calls
+    show up here; the platform used to make the first one inside ``list_replies``.
+    The cost is unchanged, and neither is repeated.
+    """
     state, platform, _account = wired
     tool = twitter_tools._make_replies(state)
     _invoke(tool, '{"limit": 10}')
     _invoke(tool, '{"limit": 10}')
-    assert platform.calls == ["replies"]
+    assert platform.calls == ["posts", "replies"]
 
 
 @pytest.mark.parametrize("factory,args,expected", [
