@@ -569,6 +569,25 @@ in the Page's language and the operator reading the run log is not necessarily t
 Instagram is set to Italian. 2534084 is NOT `TooMuchData`, so the shrink loop leaves it alone —
 retrying it smaller costs another 15-second call and hits the same wall.
 
+**…and the same wall's OTHER face is a successful read that returns a filtered subset.** Reported
+as "genaicomicbook is only seeing the DMs I sent from my other account, but there are lots of DMs
+that remain without answer — they can't be seen in the api response even". Probed on that Page:
+`/conversations` returned exactly ONE thread, with the operator's own second account, which holds a
+role in the Meta app; `folder=inbox|other|pending` all returned that same single thread. Under
+**Standard Access** Instagram hides every conversation with someone who has no role in the app —
+no error, no `partial` marker, no hint. So the busy account times out (2534084) and the quiet one
+answers cheerfully with a fraction of its inbox, and **a successful `list_dms` is not evidence the
+inbox was read**: "empty" and "everyone in it is a stranger to this app" are the same response.
+That is the same class of bug as the two read guards above, one step further in — the run looked,
+was answered, and still could not see. Graph exposes no endpoint for an app's access LEVEL, so it
+cannot be detected, only declared: `instagram.dm_visibility_is_partial` reads
+`account.meta["dm_advanced_access"]` and **defaults to partial**, because the wrong default here has
+a run announce an empty inbox on the evidence of a filtered one. While it is unset, `instagram_dms`
+returns a `visibility` block forbidding "the inbox is empty", `engagement.note_unreadable` records
+it in code so `finish_engagement` says "COULD NOT CHECK …", and the instruction edit page names the
+accounts. The operator ticks *Advanced Access granted* on the Accounts page once App Review grants
+it — and can untick it, since an app can lose it and a wrong tick silences a real warning.
+
 **Subcode 2534041 is a switch in the Instagram APP, not a permission** — "The account owner has
 disabled access to instagram direct messages". No scope, token or reconnect fixes it; the owner has
 to turn *Settings → Messages and story replies → Connected tools → Allow access to messages* back

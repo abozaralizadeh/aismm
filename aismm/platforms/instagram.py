@@ -80,6 +80,40 @@ DM_MESSAGES_PER_CONVERSATION = 20
 # app. Reading is still worth it — the operator can see what is waiting.
 DM_REPLY_WINDOW_HOURS = 24
 
+# With STANDARD Access to instagram_manage_messages, Graph returns only the
+# conversations with people who hold a role in the Meta app (admin, developer,
+# tester). It does not say so, it does not fail, and it does not mark the result
+# as partial — it just answers with a short list. Found on a live account whose
+# inbox was full of unanswered DMs: `/conversations` returned exactly ONE thread,
+# the one with the operator's own second account, and `folder=inbox|other|pending`
+# all returned that same thread. The busier account on the same app hit the other
+# face of this wall (subcode 2534084, a timeout scanning past everyone else).
+#
+# That makes a SUCCESSFUL DM read weaker evidence than it looks: "the inbox is
+# empty" and "everyone in your inbox is a stranger to this app" are the same
+# response. The access level cannot be queried — Graph has no endpoint for it —
+# so the operator declares it here once App Review grants Advanced Access, and
+# until then every DM read is reported as partial. Defaulting the other way would
+# have a run announce an empty inbox on the evidence of a filtered one, which is
+# how this went unnoticed.
+DM_ADVANCED_ACCESS_KEY = "dm_advanced_access"
+DM_STANDARD_ACCESS_BLIND_SPOT = (
+    "Instagram DMs from anyone without a role in the Meta app — with Standard "
+    "Access to instagram_manage_messages the API hides those conversations "
+    "entirely, so this inbox may hold unanswered messages that were never returned"
+)
+
+
+def dm_visibility_is_partial(account) -> bool:
+    """Is this account's DM read known to be complete? Assume not, unless told.
+
+    See :data:`DM_STANDARD_ACCESS_BLIND_SPOT`. The declaration is per account
+    rather than per app because that is where every other operator switch in this
+    codebase lives (cooldown, ledger, communities) and it needs no schema change;
+    ticking it on each account of one app is the small price.
+    """
+    return not bool((getattr(account, "meta", None) or {}).get(DM_ADVANCED_ACCESS_KEY))
+
 
 def _hours_since(when) -> float | None:
     """Hours between an ISO-8601 timestamp and now, or ``None`` if unparseable.

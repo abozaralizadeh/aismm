@@ -753,6 +753,38 @@ def create_app() -> Flask:
             flash(f"Reddit posts go to your profile (u_{account.handle}).", "success")
         return redirect(url_for("accounts"))
 
+    @app.route("/accounts/<account_id>/dm-access", methods=["POST"])
+    def set_instagram_dm_access(account_id):
+        """Declare whether App Review granted Advanced Access to DMs.
+
+        Graph has no endpoint that reports an app's access LEVEL, and under
+        Standard Access it hides most conversations without saying so — so this
+        cannot be detected, only declared. It defaults to "not granted" because
+        that is the state every app starts in, and the wrong default here has a
+        run announce an empty inbox on the evidence of a filtered one.
+        """
+        from ..platforms.instagram import DM_ADVANCED_ACCESS_KEY
+
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.instagram:
+            abort(404)
+        granted = request.form.get("dm_advanced_access") == "on"
+        meta = dict(account.meta)
+        if granted:
+            meta[DM_ADVANCED_ACCESS_KEY] = True
+        else:
+            meta.pop(DM_ADVANCED_ACCESS_KEY, None)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        flash("Instagram DM reads are treated as complete for "
+              f"{account.handle or account.external_id}." if granted else
+              "Instagram DM reads are treated as partial for "
+              f"{account.handle or account.external_id} — runs will say so.",
+              "success")
+        return redirect(url_for("accounts"))
+
     @app.route("/accounts/<account_id>/check", methods=["POST"])
     def check_account(account_id):
         """What does this account's stored token ACTUALLY allow?
@@ -1363,26 +1395,39 @@ def create_app() -> Flask:
     def _engagement_blind_spots(instr):
         """Engagement work this instruction can never do, whatever it is told.
 
-        Not a missing tool — a missing API. X does not index replies made inside
-        a Community and has no endpoint that returns them, so an account posting
-        on a community rotation has an engage run that finds nothing on every
-        fire. Reported live as "the comments responses in X are not working". The
-        run says so too, but by then a schedule has been running for weeks.
+        Not a missing tool — a missing API, on two platforms for two reasons:
+
+        * **X** does not index replies made inside a Community and has no endpoint
+          that returns them, so an account posting on a community rotation has an
+          engage run that finds nothing on every fire. Reported live as "the
+          comments responses in X are not working".
+        * **Instagram** under Standard Access returns only the conversations with
+          people who hold a role in the Meta app, and hides the rest without
+          saying so. Reported live as "it is only seeing the DMs I sent from my
+          other account". That one is fixable — by App Review — so the account
+          carries a declaration to switch this notice off.
+
+        The run says both too, but by then a schedule has been running for weeks.
         """
+        from ..platforms.instagram import dm_visibility_is_partial
         from ..platforms.twitter import HOME_TIMELINE, community_ids
 
         if instr is None or instr.task_type not in (InstructionTask.engage,
                                                     InstructionTask.auto):
             return []
         pinned = str(getattr(instr, "twitter_community_id", "") or "").strip()
-        if pinned == HOME_TIMELINE:               # posts go to the timeline
-            return []
         notes = []
         for account in store_accounts_for(instr):
-            if account.platform is not PlatformName.twitter:
-                continue
-            if pinned or community_ids(account):
-                notes.append(account.handle or account.external_id)
+            handle = account.handle or account.external_id
+            if account.platform is PlatformName.twitter:
+                if pinned == HOME_TIMELINE:       # posts go to the timeline
+                    continue
+                if pinned or community_ids(account):
+                    notes.append({"kind": "x_community", "handle": handle})
+            elif account.platform is PlatformName.instagram:
+                if dm_visibility_is_partial(account):
+                    notes.append({"kind": "ig_dm_access", "handle": handle,
+                                  "account_id": account.id})
         return notes
 
     def store_accounts_for(instr):

@@ -165,6 +165,34 @@
         </details>
       {% endif %}
 
+      {% if a.platform.value == 'instagram' %}
+        {% set dm_full = a.meta.get('dm_advanced_access') %}
+        <details class="account-section">
+          <summary>
+            DM reads are
+            <strong>{% if dm_full %}complete{% else %}partial{% endif %}</strong>
+          </summary>
+          <form method="post" action="{{ url_for('set_instagram_dm_access', account_id=a.id) }}"
+                class="form">
+            <label class="check">
+              <input type="checkbox" name="dm_advanced_access" {% if dm_full %}checked{% endif %}>
+              Advanced Access granted for <code>instagram_manage_messages</code>
+            </label>
+            <span class="hint">
+              With <em>Standard</em> Access, Instagram returns only the conversations
+              with people who hold a role in your Meta app and hides every other one —
+              no error, no sign the list is partial, so a full inbox reads as one or
+              two threads. Graph offers no way to ask which access level an app has,
+              so tick this only once App Review has granted <strong>Advanced
+              Access</strong> (Meta app dashboard → App Review → Permissions and
+              Features). While it is unticked, engage runs answer what they can see
+              and report that other DMs may be hidden.
+            </span>
+            <div class="row"><button class="btn small">Save</button></div>
+          </form>
+        </details>
+      {% endif %}
+
       {% if a.platform.value == 'reddit' %}
         {% set sr = a.meta.get('subreddit') %}
         <details class="account-section" {% if sr %}open{% endif %}>

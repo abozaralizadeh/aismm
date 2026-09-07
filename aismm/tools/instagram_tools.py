@@ -32,6 +32,7 @@ from agents import function_tool
 
 from .. import engagement, engagement_ledger, tokens
 from ..models import PlatformName
+from ..platforms import instagram
 from .registry import register_tool
 
 logger = logging.getLogger("aismm.tools.instagram")
@@ -254,6 +255,14 @@ def _make_dms(state: dict):
         starts in Requests, until it is accepted in the app), and only the 20 most
         recent messages of any one conversation carry detail.
 
+        **A ``visibility`` block in the result means what you got is a SUBSET.**
+        Unless the app has Advanced Access to ``instagram_manage_messages``,
+        Instagram only returns conversations with people who hold a role in the
+        Meta app and silently hides every other one — a full inbox comes back as
+        one or two threads. When that block is present, never say the inbox was
+        empty or that every DM has been handled: say you answered what was
+        visible and that others may be hidden.
+
         Args:
             limit: How many CONVERSATIONS to scan (1–200), newest activity first.
                 Not a message count: every scanned conversation contributes its
@@ -271,7 +280,26 @@ def _make_dms(state: dict):
             logger.info("Instagram DMs read for %s: %d inbound message(s), %d unanswered",
                         account.handle or account.external_id, len(dms),
                         sum(1 for d in dms if not d.get("already_answered")))
-            return {"count": len(dms), "dms": dms}
+            view = {"count": len(dms), "dms": dms}
+            # A short list is not evidence of a quiet inbox: under Standard Access
+            # Graph hides every conversation with someone who has no role in the
+            # app. Recorded in CODE, like the X community blind spot, because the
+            # run summary is prose the model writes about itself.
+            if instagram.dm_visibility_is_partial(account):
+                engagement.note_unreadable(
+                    state, instagram.DM_STANDARD_ACCESS_BLIND_SPOT)
+                view["visibility"] = {
+                    "partial": True,
+                    "reason": ("The Meta app has Standard Access to "
+                               "instagram_manage_messages, so Instagram returns ONLY "
+                               "conversations with people who hold a role in the app "
+                               "and hides the rest. What you see may be a small "
+                               "fraction of the real inbox."),
+                    "say_so": ("Answer what is here, then say in your summary that "
+                               "other DMs may be hidden. Do NOT report the inbox as "
+                               "empty or as fully handled."),
+                }
+            return view
 
         return await _with_context(state, call)
 

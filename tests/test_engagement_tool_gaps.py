@@ -214,3 +214,57 @@ def test_a_publishing_instruction_is_not_warned(dash, store):
     page = dash.test_client().get(
         f"/instructions/{instruction.id}/edit").get_data(as_text=True)
     assert "Community posts cannot be read" not in page
+
+
+# --- and the Instagram one: a SUCCESSFUL read that returned a filtered subset ------------- #
+# Reported live: "genaicomicbook is only seeing the DMs I sent from my other
+# account". Probed on that Page — /conversations returned exactly ONE thread, with
+# the operator's own second account, which holds a role in the Meta app; every
+# folder returned the same one. Standard Access hides the rest and says nothing.
+
+def _ig_engage(store, *, advanced=False, task=InstructionTask.engage):
+    account = Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                      external_id="178414")
+    meta = {"page_id": "999"}
+    if advanced:
+        meta["dm_advanced_access"] = True
+    account.set_meta(meta)
+    account = store.upsert_account(account, access_token="t")
+    instruction = Instruction(name="IG Comments", brief="b", schedule="03:00 mon",
+                              task_type=task)
+    instruction.set_account_ids([account.id])
+    return store.upsert_instruction(instruction), account
+
+
+def test_the_edit_page_warns_that_most_dms_are_hidden(dash, store):
+    instruction, _ = _ig_engage(store)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Instagram DMs are hidden from the API" in page
+    assert "genaicomicbook" in page and "Advanced Access" in page
+
+
+def test_declaring_advanced_access_clears_the_warning(dash, store):
+    instruction, _ = _ig_engage(store, advanced=True)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Instagram DMs are hidden from the API" not in page
+
+
+def test_a_publishing_instruction_is_not_warned_about_dms(dash, store):
+    """A publish run does not read DMs, so the blind spot does not apply."""
+    instruction, _ = _ig_engage(store, task=InstructionTask.publish)
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert "Instagram DMs are hidden from the API" not in page
+
+
+def test_the_declaration_is_saved_and_can_be_taken_back(dash, store):
+    """It is a claim about App Review, so the operator must be able to undo it —
+    an app can lose Advanced Access, and a wrong tick silences a real warning."""
+    _, account = _ig_engage(store)
+    client = dash.test_client()
+    client.post(f"/accounts/{account.id}/dm-access", data={"dm_advanced_access": "on"})
+    assert store.get_account(account.id).meta.get("dm_advanced_access") is True
+    client.post(f"/accounts/{account.id}/dm-access", data={})
+    assert "dm_advanced_access" not in store.get_account(account.id).meta

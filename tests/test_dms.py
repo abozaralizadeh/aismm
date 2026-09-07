@@ -422,6 +422,76 @@ def test_ig_reply_to_dm_tool_passes_the_recipient_as_reply_to(store, monkeypatch
     assert seen == {"target_type": "dm", "target_id": "m1", "reply_to": "555"}
 
 
+# --- a SUCCESSFUL read is not proof the inbox was read ---------------------------------- #
+# Reported live: "genaicomicbook is only seeing the DMs I sent from my other
+# account, but there are lots of DMs that remain without answer — they can't be
+# seen in the api response even". Probed on that Page: /conversations returned one
+# thread, with the operator's own second account, which holds a role in the Meta
+# app; folder=inbox|other|pending all returned that same single thread. Under
+# Standard Access Instagram hides every other conversation and reports nothing —
+# so "the inbox is empty" and "everyone in it is a stranger to this app" are the
+# same response, and the run cannot tell them apart on its own.
+
+def _ig_dm_state(store, monkeypatch, *, advanced=False):
+    from aismm.platforms import instagram as ig_module
+
+    async def fake_list(self, token, account, *, limit=25):
+        return [{"id": "m1", "conversation_id": "555", "sender": "abo0ozar",
+                 "text": "hey", "can_reply": True}]
+
+    monkeypatch.setattr(ig_module.Instagram, "list_dms", fake_list)
+    account = Account(platform=PlatformName.instagram, handle="genaicomicbook",
+                      external_id=IG_USER)
+    if advanced:
+        account.set_meta({"dm_advanced_access": True})
+    account = store.upsert_account(account, access_token="t")
+    return _state(store, account)
+
+
+def test_a_dm_read_is_reported_as_partial_until_advanced_access(store, monkeypatch):
+    state = _ig_dm_state(store, monkeypatch)
+    result = _invoke(_tool(state, "instagram_dms"))
+    assert result["count"] == 1                       # the read itself worked
+    assert result["visibility"]["partial"] is True
+    assert "role in the app" in result["visibility"]["reason"]
+    assert "NOT report the inbox as empty" in result["visibility"]["say_so"]
+
+
+def test_the_hidden_conversations_are_recorded_in_code(store, monkeypatch):
+    """Not left to the summary the model writes about itself — same reasoning as
+    the read guard and the publish ledger."""
+    state = _ig_dm_state(store, monkeypatch)
+    _invoke(_tool(state, "instagram_dms"))
+    assert any("without a role in the Meta app" in m
+               for m in state.get("unreadable_surfaces") or [])
+
+
+def test_the_run_log_says_the_inbox_may_be_incomplete(store, monkeypatch):
+    from aismm.models import Run, RunStatus
+    from aismm.tools.engagement_finish import perform_finish_engagement
+
+    state = _ig_dm_state(store, monkeypatch)
+    _invoke(_tool(state, "instagram_dms"))
+    instruction = store.upsert_instruction(
+        Instruction(name="IG Comments", brief="b", task_type=InstructionTask.engage))
+    run = Run(instruction_id=instruction.id, account_id=state["account"].id,
+              status=RunStatus.running)
+    store.add_run(run)
+    state.update(instruction=instruction, run=run, tool_names=set())
+    _run(perform_finish_engagement(state, "Answered the one I could see."))
+    log = store.get_run(run.id).log
+    assert "COULD NOT CHECK" in log and "without a role in the Meta app" in log
+
+
+def test_declaring_advanced_access_stops_the_caveat(store, monkeypatch):
+    """Once App Review grants it the read IS complete, and saying otherwise would
+    become the opposite lie."""
+    state = _ig_dm_state(store, monkeypatch, advanced=True)
+    result = _invoke(_tool(state, "instagram_dms"))
+    assert "visibility" not in result
+    assert not state.get("unreadable_surfaces")
+
+
 # --- Instagram messaging hangs off the PAGE, not the IG user --------------------------- #
 # Reported: "the engagement in instagram never sees the DMs and never answers
 # them". Two causes, and the second is why the first was invisible for so long:

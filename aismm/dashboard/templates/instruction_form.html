@@ -590,16 +590,33 @@
           or clear the selection entirely to allow every tool.
         </div>
       {% endif %}
-      {% if community_blind_spots %}
+      {% set x_blind = community_blind_spots | selectattr('kind', 'equalto', 'x_community') | list %}
+      {% set ig_blind = community_blind_spots | selectattr('kind', 'equalto', 'ig_dm_access') | list %}
+      {% if x_blind %}
         <div class="flash flash-warning">
           <strong>Comments on X Community posts cannot be read
-          ({{ community_blind_spots | join(', ') }}).</strong>
+          ({{ x_blind | map(attribute='handle') | join(', ') }}).</strong>
           X leaves replies made inside a Community out of its search index and out
           of the mentions timeline, and has no endpoint that returns them — so a
           run on an account that posts to communities finds no comments however
           many there are. Runs now say "could not check" instead of "nothing to
           answer". To have comments answered, set this instruction's X destination
           to the home timeline, or reply inside the community by hand.
+        </div>
+      {% endif %}
+      {% if ig_blind %}
+        <div class="flash flash-warning">
+          <strong>Most Instagram DMs are hidden from the API
+          ({{ ig_blind | map(attribute='handle') | join(', ') }}).</strong>
+          With <em>Standard Access</em> to <code>instagram_manage_messages</code>,
+          Instagram returns only the conversations with people who hold a role in
+          your Meta app — everyone else's messages are hidden, with no error and no
+          sign that the list is partial. A full inbox comes back as one or two
+          threads. Request <strong>Advanced Access</strong> for that permission in
+          the Meta app dashboard (App Review → Permissions and Features); until then
+          runs answer what they can see and say the rest may be hidden. Once it is
+          granted, tick <em>Advanced Access granted</em> on the
+          <a href="{{ url_for('accounts') }}">Accounts</a> page to clear this.
         </div>
       {% endif %}
       <div class="field">
