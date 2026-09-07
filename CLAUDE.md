@@ -554,6 +554,21 @@ barely matters), Graph is answering under strain, and the same query that failed
 minutes later. Giving up at the floor turns a slow Page into a silently empty inbox, which is the
 exact failure `list_dms`-raises exists to prevent.
 
+**…and going all the way to the floor is what makes Graph NAME the real problem.** On that same
+Page the shrink loop reached 1 × 5 and the generic `code=1` gave way to `400 Timeout [code=-2 ·
+error_subcode=**2534084**]`: *"your search timed out because you have too many conversations with
+users who have no role in the app — request Advanced Access to `instagram_manage_messages`, or
+reduce the number of threads"*. That is the **ACCESS LEVEL**, not the scope: with **Standard
+Access** Instagram only returns threads with people who have a role in the app, and on a real
+business account it times out scanning past everyone else. So `code=1` "reduce the amount of data"
+was a *symptom* all along, asking for less can never win, and a quiet account keeps working while a
+busy one on the SAME app cannot — which is exactly the asymmetry that made this look like a query
+bug. `_dm_failure_advice` picks the remediation per failure (2534041 · 2534084 · exhausted
+`TooMuchData` · generic) and restates Meta's `error_user_msg` **in English**, because Graph answers
+in the Page's language and the operator reading the run log is not necessarily the person whose
+Instagram is set to Italian. 2534084 is NOT `TooMuchData`, so the shrink loop leaves it alone —
+retrying it smaller costs another 15-second call and hits the same wall.
+
 **Subcode 2534041 is a switch in the Instagram APP, not a permission** — "The account owner has
 disabled access to instagram direct messages". No scope, token or reconnect fixes it; the owner has
 to turn *Settings → Messages and story replies → Connected tools → Allow access to messages* back

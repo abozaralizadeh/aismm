@@ -233,6 +233,51 @@ _MESSAGE_ACCESS_DISABLED = (
     "this. (The account owner has to do it; it cannot be set through the API.)"
 )
 
+#: Subcode 2534084 is the ACCESS LEVEL of ``instagram_manage_messages``, not the
+#: scope. With **Standard Access** Graph will only serve conversations with people
+#: who have a role in the app, and on a real business account it has to scan past
+#: everyone else to find them — which times out. Meta says so itself in
+#: ``error_user_msg``, but in the PAGE's language (Italian, on the account this was
+#: found on), so the remediation is restated here in English. Nothing about the
+#: query is wrong: shrinking it to one conversation with five messages hits the
+#: same wall, because the cost is in the scan, not the payload. A quiet account
+#: with few threads keeps working, which is why one Page reads its DMs fine while
+#: another on the same app cannot.
+_MESSAGE_SCAN_TIMEOUT = (
+    "This is the ACCESS LEVEL of instagram_manage_messages, not a missing scope and "
+    "not a query that asked for too much — asking for less hits the same wall. With "
+    "Standard Access, Instagram only returns conversations with people who have a "
+    "role in the app, and scanning past everyone else times out on an account with "
+    "many threads. Fix it one of two ways: request ADVANCED ACCESS for "
+    "instagram_manage_messages in the Meta app dashboard (App Review → Permissions "
+    "and Features), or reduce the number of threads on the account. No reconnect, "
+    "scope change or retry will help until then."
+)
+
+#: The same wall wearing Graph's catch-all. ``500 … reduce the amount of data``
+#: [code=1] is what an account past the Advanced Access limit answers most of the
+#: time; the explicit timeout above only surfaces once the ask is small enough for
+#: Graph to get far enough to name it. So "ask for less" is exhausted advice by the
+#: time this is raised — the shrink loop already went to the floor and retried.
+_MESSAGE_SCAN_TOO_BIG = (
+    "The query was already shrunk to the smallest one worth making and Graph still "
+    "refused it, so size is not the problem. code=1 is Graph's catch-all; on a "
+    "business account this is usually the Advanced Access limit on "
+    "instagram_manage_messages (Instagram can only return threads with people who "
+    "have a role in the app, and times out scanning past the rest). Request Advanced "
+    "Access in the Meta app dashboard, or reduce the number of threads on the "
+    "account."
+)
+
+
+#: The advice when Graph names nothing we recognise. Generic on purpose.
+_MESSAGE_GENERIC_ADVICE = (
+    "Check, in order: the account has been RECONNECTED since "
+    "instagram_manage_messages was added; the login covered this account's Page; "
+    "and the app has instagram_manage_messages approved. Instagram messaging runs "
+    "through the linked Page, not the Instagram user id."
+)
+
 
 class TooMuchData(RuntimeError):
     """Graph refused the QUERY as too expensive, not the request as invalid.
@@ -240,6 +285,24 @@ class TooMuchData(RuntimeError):
     Distinct from every other failure because the fix is mechanical — ask for
     less and try again — where a permission or token error would just fail again.
     """
+
+
+def _dm_failure_advice(exc: Exception) -> str:
+    """What to actually DO about a failed conversations read.
+
+    Three of these are specific and the generic one is misleading for every one of
+    them — "reconnect and check your scopes" has sent the operator the wrong way
+    for hours on both subcodes below. Matched on the subcode where Graph gives one,
+    since ``error_user_msg`` comes back in the Page's own language.
+    """
+    text = str(exc)
+    if "2534041" in text:
+        return _MESSAGE_ACCESS_DISABLED
+    if "2534084" in text:
+        return _MESSAGE_SCAN_TIMEOUT
+    if isinstance(exc, TooMuchData):
+        return _MESSAGE_SCAN_TOO_BIG
+    return _MESSAGE_GENERIC_ADVICE
 
 
 def _raise_graph(exc: httpx.HTTPStatusError) -> None:
@@ -957,6 +1020,12 @@ class Instagram(SocialPlatform):
         run and served the identical query three times over minutes later. Giving
         up there turns a slow Page into a silently empty inbox — which is the very
         thing ``list_dms`` raises to prevent.
+
+        Shrinking does not always win, and that is the point of going to the floor:
+        an account past the **Advanced Access** limit on ``instagram_manage_messages``
+        refuses the smallest query too, and once the ask is small enough Graph
+        finally names it (subcode 2534084 — see :data:`_MESSAGE_SCAN_TIMEOUT`).
+        Reaching a specific error beats giving up on a generic one.
         """
         collected: list[dict] = []
         page = min(wanted, DM_CONVERSATION_PAGE)
@@ -1047,22 +1116,14 @@ class Instagram(SocialPlatform):
         try:
             conversations = await self._read_conversations(access_token, target, wanted)
         except Exception as exc:  # noqa: BLE001 - re-raised, never swallowed
-            # Graph's own words plus what to check. Raised, not returned as [] —
-            # "cannot read DMs" must never look like "no DMs".
-            #
-            # Subcode 2534041 is NOT ours to fix and the generic advice below is
-            # actively misleading for it: the account holder has switched off
-            # "Allow access to messages" in the Instagram app, so no scope, token
-            # or reconnect will help until they turn it back on.
+            # Graph's own words plus what to DO about them. Raised, not returned as
+            # [] — "cannot read DMs" must never look like "no DMs". The advice is
+            # picked per failure because the generic version is actively misleading
+            # for the two known subcodes; see :func:`_dm_failure_advice`.
             raise RuntimeError(
                 f"Could not read Instagram conversations for "
                 f"{account.handle or account.external_id} (via {target}): {exc}\n"
-                + (_MESSAGE_ACCESS_DISABLED if "2534041" in str(exc) else
-                   "Check, in order: the account has been RECONNECTED since "
-                   "instagram_manage_messages was added; the login covered this "
-                   "account's Page; and the app has instagram_manage_messages "
-                   "approved. Instagram messaging runs through the linked Page, not "
-                   "the Instagram user id.")
+                + _dm_failure_advice(exc)
             ) from exc
         # Our own outbound messages come back as `from` = the IG business account
         # on some threads and the Page on others, so both count as "me".

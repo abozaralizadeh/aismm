@@ -866,3 +866,71 @@ def test_other_permission_errors_still_get_the_reconnect_advice(monkeypatch):
         "message": "(#200) Permissions error", "code": 200}}))
     with pytest.raises(RuntimeError, match="RECONNECTED since"):
         _run(_ig().list_dms("t", _ig_account()))
+
+
+# --- the ACCESS LEVEL, which no amount of asking for less can get around ----------------- #
+# Found by shrinking to the floor on a live Page: the generic
+#   500 "Please reduce the amount of data you're asking for" [code=1]
+# gave way to Graph naming it, in the Page's own language:
+#   400 Timeout [code=-2 · error_subcode=2534084]
+#   "La tua ricerca è scaduta perché hai troppe conversazioni con utenti che non
+#    hanno un ruolo nell'app. Richiedi l'accesso avanzato all'autorizzazione
+#    instagram_manage_messages…"
+# Standard Access only returns threads with people who have a role in the app, and
+# scanning past everyone else times out. The scope was granted; the access was not.
+
+def _scan_timeout(_request):
+    return httpx.Response(400, json={"error": {
+        "message": "Timeout", "code": -2, "error_subcode": 2534084,
+        "type": "OAuthException", "error_user_title": "Richiesta scaduta",
+        "error_user_msg": "La tua ricerca è scaduta perché hai troppe conversazioni "
+                          "con utenti che non hanno un ruolo nell'app."}})
+
+
+def test_the_scan_timeout_names_advanced_access_not_a_reconnect(monkeypatch):
+    _ig_transport(monkeypatch, _scan_timeout)
+    with pytest.raises(RuntimeError) as caught:
+        _run(_ig().list_dms("t", _ig_account()))
+    message = str(caught.value)
+    assert "ADVANCED ACCESS" in message
+    assert "instagram_manage_messages" in message
+    assert "RECONNECTED since" not in message         # the wrong advice is absent
+
+
+def test_the_scan_timeout_is_not_retried_as_a_size_problem(monkeypatch):
+    """It is not :class:`TooMuchData`, so the shrink loop must not touch it —
+    asking for less hits the same wall and costs another 15-second call."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return _scan_timeout(request)
+
+    _ig_transport(monkeypatch, handler)
+    with pytest.raises(RuntimeError):
+        _run(_ig().list_dms("t", _ig_account(), limit=50))
+    assert len(calls) == 1
+
+
+def test_the_scan_timeout_is_explained_in_english(monkeypatch):
+    """Graph answers in the PAGE's language. The operator reading the run log is
+    not necessarily the person whose Instagram is set to Italian."""
+    _ig_transport(monkeypatch, _scan_timeout)
+    with pytest.raises(RuntimeError) as caught:
+        _run(_ig().list_dms("t", _ig_account()))
+    assert "role in the app" in str(caught.value)
+
+
+def test_exhausting_the_shrink_stops_telling_the_operator_to_ask_for_less(monkeypatch):
+    """By the time this is raised the query is already at the floor and retried —
+    "reduce the amount of data" is advice that has been followed and failed."""
+    from aismm.platforms import instagram as ig
+
+    monkeypatch.setattr(ig, "DM_FLOOR_RETRY_PAUSE_SECONDS", 0)
+    _ig_transport(monkeypatch, _too_much)
+    with pytest.raises(RuntimeError) as caught:
+        _run(_ig().list_dms("t", _ig_account(), limit=50))
+    message = str(caught.value)
+    assert "size is not the problem" in message
+    assert "Advanced Access" in message
+    assert "RECONNECTED since" not in message
