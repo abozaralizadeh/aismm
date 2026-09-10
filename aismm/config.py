@@ -327,6 +327,10 @@ class Settings:
     # uploads LOCKED to private whatever is requested, and the lock cannot be
     # appealed — the video must be re-uploaded through an audited client.
     youtube_privacy: str = "private"
+    # Deployment default for YouTube's made-for-kids declaration. False is the
+    # right default for a general channel; a kids channel sets it per instruction
+    # (or here, with YOUTUBE_MADE_FOR_KIDS=1, when every upload is for children).
+    youtube_made_for_kids: bool = False
     asset_retention_days: int = 14
     # How many days back the performance feedback loop keeps polling a published
     # post for fresh metrics (likes/views/…). A months-old post's counts barely
@@ -444,6 +448,7 @@ def load_settings() -> Settings:
             apim_api_version=os.getenv("APIM_API_VERSION", "2025-04-01-preview"),
             supports_temperature=_opt_bool("LLM_SUPPORTS_TEMPERATURE"),
         ),
+        youtube_made_for_kids=_bool(os.getenv("YOUTUBE_MADE_FOR_KIDS"), False),
         youtube_privacy=(os.getenv("YOUTUBE_PRIVACY", "private").strip().lower()
                          if os.getenv("YOUTUBE_PRIVACY", "private").strip().lower()
                          in YOUTUBE_PRIVACY_CHOICES else "private"),

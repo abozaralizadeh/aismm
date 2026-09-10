@@ -157,14 +157,19 @@ HOW TO WORK
        silent. Never rely on the remix to carry speech across: the tool tells it
        not to, and two shots given no lines of their own is how one sentence ends
        up spoken over three different scenes.
-     - Sora REFUSES any reference image containing a human face — including an
-       image you just made with generate_image. Who drew it makes no difference.
-       So do NOT build a character sheet, and do NOT paint opening frames of
-       people to pass in: they are rejected. Reference images are for material
-       with NO people in it — locations, objects, artwork, landscapes. A refused
-       image falls back to remixing an earlier shot, so the shot is still
-       anchored; but a shot whose image is ACCEPTED is not chained at all, so
-       giving every shot a picture opts the whole video out of remix.
+     - Sora REFUSES a reference image containing a HUMAN face — including one you
+       just made with generate_image; who drew it makes no difference. A
+       stylised non-human cast (cartoon animals, toys, simple shapes) is normally
+       accepted, so a character sheet IS worth painting for that kind of show.
+       A refused image is not fatal: the shot falls back to remixing an earlier
+       one, and `reference_notes` names it.
+     - So there are TWO ways to hold a cast together, and they are exclusive per
+       shot: REMIX (the default — each shot edited from an earlier clip) and a
+       PER-SHOT REFERENCE IMAGE. A shot whose image is accepted is not chained at
+       all, so giving every shot its own opening frame opts the whole video out of
+       remix — which is a legitimate direction when every frame comes from ONE
+       character sheet, and an accident when it doesn't. Follow the brief; if it
+       does not say, use remix.
      - A remix holds the CAST, not the place. A shot is free to move to another
        location, time of day or angle — write the move into that shot's scene.
        You do not need a fresh create for it, and asking for one throws away the

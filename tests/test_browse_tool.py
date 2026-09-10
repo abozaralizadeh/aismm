@@ -302,17 +302,26 @@ class _FakePage:
 def _browser_with(page, monkeypatch):
     from aismm.tools import browse_tool
 
-    class _Browser:
+    class _Context:
+        cleared: list[str] = []
+
+        async def clear_cookies(self, name=""):
+            _Context.cleared.append(name)
+
         async def new_page(self):
             return page
 
-    async def fake_get_browser(_state):
-        return _Browser()
+    _Context.cleared = []
+    context = _Context()
 
-    monkeypatch.setattr(browse_tool, "get_browser", fake_get_browser)
+    async def fake_get_context(_state):
+        return context
+
+    monkeypatch.setattr(browse_tool, "get_context", fake_get_context)
     # These tests are about the DOM, not the SSRF guard, which would refuse the
     # made-up hostnames below before the page was ever opened.
     monkeypatch.setattr(browse_tool, "is_public_url", lambda url: (True, ""))
+    return context
 
 
 def test_a_modal_image_is_invisible_without_a_click(monkeypatch):
@@ -372,6 +381,178 @@ def test_no_click_key_when_none_was_asked_for(monkeypatch):
     _browser_with(_FakePage(), monkeypatch)
     result = asyncio.run(perform_browse_page({}, "https://genbox/x"))
     assert "clicked" not in result and "click_failed" not in result
+
+
+# --- the bot wall: refused by Cloudflare, and it looked like a page ------------------- #
+# Reported live as "the agent cannot access my medium link — Medium remains
+# blocked by Cloudflare". Every Medium URL came back 403 with Cloudflare's
+# "Sorry, you have been blocked" page, because headless Chromium's own
+# User-Agent says `HeadlessChrome` and that string alone is refused. Measured on
+# one article: default UA → 403 and 687 chars of challenge; the same UA with
+# "Headless" dropped → 200 and 15,484 chars of the real article.
+
+class _WalledPage(_FakePage):
+    """Loads fine, 403s, and hands back a challenge page instead of the article."""
+
+    def __init__(self, *, status=403, title="Attention Required! | Cloudflare",
+                 body="Sorry, you have been blocked\nYou are unable to access medium.com"):
+        super().__init__()
+        self._status = status
+        self._title = title
+        self._body = body
+
+    async def goto(self, *a, **kw):
+        return type("Resp", (), {"status": self._status})()
+
+    async def title(self):
+        return self._title
+
+    async def evaluate(self, script):
+        if "article, main" in script:
+            return self._body
+        return await super().evaluate(script)
+
+
+def test_the_clearance_cookie_is_dropped_before_every_navigation(monkeypatch):
+    """Cloudflare's clearance token is bound to the client it was issued to, so
+    presenting one from a headless browser is worse than having none: measured
+    over six Medium URLs in one context, the first two loaded and every request
+    after them was refused in 0.2s. Dropping this cookie made it 6/6."""
+    from aismm.tools.browse_tool import _CLEARANCE_COOKIE, perform_browse_page
+
+    context = _browser_with(_FakePage(), monkeypatch)
+    asyncio.run(perform_browse_page({}, "https://medium.com/@a/p-1"))
+    asyncio.run(perform_browse_page({}, "https://medium.com/@a/p-2"))
+
+    assert context.cleared == [_CLEARANCE_COOKIE, _CLEARANCE_COOKIE]
+
+
+def test_a_context_that_cannot_clear_cookies_still_browses(monkeypatch):
+    """Never fail a browse over a cookie."""
+    from aismm.tools import browse_tool
+
+    page = _FakePage()
+    context = _browser_with(page, monkeypatch)
+
+    async def boom(name=""):
+        raise RuntimeError("unsupported")
+
+    monkeypatch.setattr(context, "clear_cookies", boom)
+    result = asyncio.run(browse_tool.perform_browse_page({}, "https://x/y"))
+    assert result["images"], "the page should still have been read"
+
+
+def test_a_challenge_page_is_an_error_not_content(monkeypatch):
+    """Without this the agent quotes "you have been blocked" as the article."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    _browser_with(_WalledPage(), monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://medium.com/@a/some-post-1234"))
+
+    assert result["error"] == "blocked"
+    assert result["status"] == 403
+    assert "do NOT quote" in result["message"]
+    assert "text" not in result, "the block page must not be handed back as the page"
+
+
+def test_the_message_says_retrying_the_same_url_will_not_help(monkeypatch):
+    """The browser is already disguised — a retry loop is pure waste."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    _browser_with(_WalledPage(), monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://medium.com/@a/p-1"))
+    assert "same wall" in result["message"]
+    assert "another source" in result["message"]
+
+
+@pytest.mark.parametrize("status,title,text,expected", [
+    (403, "Attention Required! | Cloudflare", "Sorry, you have been blocked", True),
+    (503, "Just a moment...", "Enable JavaScript and cookies to continue", True),
+    (200, "Verify", "Verify you are human by completing the action below.", True),
+    (403, "", "", True),                       # short + refused is not content
+    (429, "", "Too many requests", True),
+    (200, "Photonic Chips!", "x" * 15_000, False),
+    (None, "An article", "A normal short page about nothing in particular.", False),
+])
+def test_wall_detection(status, title, text, expected):
+    from aismm.tools.browse_tool import _bot_wall
+
+    assert bool(_bot_wall(status, title, text)) is expected
+
+
+def test_a_long_article_about_cloudflare_is_not_mistaken_for_a_block():
+    """The length test is what keeps the phrase list from eating real writing."""
+    from aismm.tools.browse_tool import _bot_wall
+
+    article = ("Why you have been blocked: a long read on bot walls. " * 200)
+    assert _bot_wall(200, "Why you have been blocked", article) == ""
+
+
+def test_the_user_agent_no_longer_announces_headless(monkeypatch):
+    """The one-word fix, pinned: the context must not be created with the raw UA."""
+    import asyncio as _asyncio
+
+    from aismm.tools import browse_tool
+
+    headless_ua = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
+                   "Gecko) HeadlessChrome/149.0.7827.55 Safari/537.36")
+    made = {}
+
+    class _Ctx:
+        async def new_page(self):
+            return type("P", (), {"evaluate": staticmethod(
+                lambda _s: _asyncio.sleep(0, result=headless_ua))})()
+
+        async def close(self):
+            return None
+
+    class _Browser:
+        async def new_context(self, **kw):
+            made.update(kw)
+            return _Ctx()
+
+    async def fake_get_browser(_state):
+        return _Browser()
+
+    monkeypatch.setattr(browse_tool, "get_browser", fake_get_browser)
+    state = {}
+    asyncio.run(browse_tool.get_context(state))
+
+    assert "HeadlessChrome" not in made["user_agent"]
+    # ...and the real version is kept: a UA claiming a Chrome the sec-ch-ua client
+    # hints contradict is a mismatch of its own.
+    assert "Chrome/149.0.7827.55" in made["user_agent"]
+    assert state["_context"] is not None
+
+
+def test_a_browser_that_cannot_report_its_agent_still_browses(monkeypatch):
+    """Losing the disguise must not lose the tool."""
+    from aismm.tools import browse_tool
+
+    class _Browser:
+        def __init__(self):
+            self.probed = False
+
+        async def new_context(self, **kw):
+            if not self.probed:                 # the UA probe's throwaway context
+                self.probed = True
+                raise RuntimeError("probe failed")
+            assert kw == {}, "no UA to pass, so the context must be a plain one"
+            return "plain ctx"
+
+    browser = _Browser()
+    monkeypatch.setattr(browse_tool, "get_browser",
+                        lambda _s: asyncio.sleep(0, result=browser))
+    assert asyncio.run(browse_tool.get_context({})) == "plain ctx"
+
+
+def test_the_context_is_dropped_when_the_browser_closes():
+    """A context outliving its browser is a handle to nothing."""
+    from aismm.tools import browse_tool
+
+    state = {"_context": object(), "_browser": None, "_playwright": None}
+    asyncio.run(browse_tool.close_browser(state))
+    assert "_context" not in state
 
 
 def test_the_tool_docstring_points_at_buttons_when_something_is_missing():

@@ -231,11 +231,13 @@ def _make_generate_image(state: dict):
                 across still posts — reuse the same asset_path, and record it in
                 memory so the next run reuses it rather than inventing a new one.
 
-                Do NOT paint frames here to feed a video: Sora rejects any
-                reference image with a human face, whoever made it, so an image
-                generated for that purpose is refused and the money is wasted.
-                Video consistency comes from the sequence's own `style` block and
-                continuity="remix".
+                Painting a video's opening frames here works only for a
+                stylised NON-HUMAN cast — cartoon animals, toys, shapes. Sora
+                rejects a reference image with a human face whoever made it, so
+                for people the money is wasted and video consistency comes from
+                the sequence's own `style` block plus continuity="remix". Note a
+                shot given its own picture is not remix-chained, so either every
+                shot gets one (all derived from the SAME sheet) or none do.
 
         Returns ``asset_path`` and ``public_url`` to pass to ``publish``.
         """

@@ -233,6 +233,14 @@ class Instruction(SQLModel, table=True):
     # instruction because one channel commonly runs a public series and a
     # private/unlisted staging instruction from the same account.
     youtube_privacy: str = ""
+    # YouTube's "Is this video made for kids?" declaration, which every upload
+    # must answer. Tri-state STRING, not a bool: "" inherits the deployment
+    # default, "yes"/"no" are the operator's answer. A plain bool could not tell
+    # "not set" from "declared NOT for kids", and those are different — a channel
+    # aimed at children that never ticked the box is mis-declared, which is a
+    # COPPA/YouTube-policy matter rather than a preference. (Azure Table storage
+    # also rejects None, so the tri-state has to be a string either way.)
+    youtube_made_for_kids: str = ""
     # Where THIS instruction's X posts go, overriding the account's rotation.
     # "" inherits the account (rotate through every community it has); "none"
     # forces the home timeline; anything else is one community id, used for every

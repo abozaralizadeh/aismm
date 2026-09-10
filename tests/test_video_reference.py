@@ -595,16 +595,30 @@ def test_the_single_path_shorthand_still_works(seq, monkeypatch, tmp_path):
 def test_the_prompt_says_a_generated_image_is_refused_just_the_same():
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "including an\n       image you just made with generate_image" in p
-    assert "Who drew it makes no difference" in p
+    assert "including one you\n       just made with generate_image" in p
+    assert "who drew it makes no difference" in p
 
 
-def test_the_prompt_no_longer_asks_for_a_character_sheet():
-    """This is what sent runs off building sheets and painting frames."""
+def test_the_refusal_is_about_HUMAN_faces_not_references_in_general():
+    """The prohibition was too broad. Sora rejects a human face; a stylised
+    non-human cast goes through, and for a cartoon-animal show a character sheet
+    driving every opening frame is a real strategy — so the prompt must not
+    forbid the very workflow an operator's brief may ask for."""
     from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
 
-    assert "do NOT build a character sheet" in p
-    assert "OPENING FRAME of shot 1" not in p
+    assert "REFUSES a reference image containing a HUMAN face" in p
+    assert "stylised non-human cast" in p
+    assert "do NOT build a character sheet" not in p
+
+
+def test_the_prompt_names_the_two_strategies_as_exclusive_per_shot():
+    """A shot with an accepted picture is not chained, so mixing them silently
+    turns remix off for the video."""
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert "TWO ways to hold a cast together" in p
+    assert "is not chained at\n       all" in p
+    assert "Follow the brief; if it" in p and "does not say, use remix." in p
 
 
 def test_the_prompt_names_the_two_levers_that_do_work():
@@ -614,27 +628,25 @@ def test_the_prompt_names_the_two_levers_that_do_work():
     assert "Every shot after the first is a REMIX" in p
 
 
-def test_the_prompt_keeps_references_for_material_without_people():
-    """The rule is about faces, not about references — a location still helps."""
-    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
-
-    assert "locations, objects, artwork, landscapes" in p
-
-
 def test_the_sequence_tool_says_the_same_at_call_time():
     """The agent reads the tool docstring when it calls it, not just the prompt."""
     import inspect
 
     source = inspect.getsource(sequence_tool)
-    assert "Only for material with NO people in it" in source
-    assert "do not paint\n                opening frames of people" in source
+    assert "rejects a reference image containing a **human face**" in source
+    assert "cartoon animals, toys and simple shapes go through" in source
+    assert "Only for material with NO people in it" not in source
 
 
-def test_the_image_tool_no_longer_advertises_painting_video_frames():
+def test_the_image_tool_scopes_painting_video_frames_to_a_non_human_cast():
+    """Not forbidden outright — that ruled out the cartoon-animal show it is
+    actually right for — but tied to when it works, and to the fact that mixing
+    referenced and chained shots turns remix off."""
     import inspect
 
     from aismm.tools import image_tool
 
     source = inspect.getsource(image_tool)
-    assert "Do NOT paint frames here to feed a video" in source
-    assert "CHARACTER SHEET" not in source
+    assert "works only for a\n                stylised NON-HUMAN cast" in source
+    assert "either every\n                shot gets one" in source
+    assert "Do NOT paint frames here to feed a video" not in source

@@ -269,12 +269,21 @@ def _one_block(page, marker):
 
 
 def _platform_field(page, platform):
-    """The FORM field scoped to a platform, not the tool-picker group — both
-    carry `data-platform`, because both are hidden for the same reason."""
+    """Every FORM control scoped to a platform, joined — not the tool-picker
+    group, though both carry `data-platform` and both hide for the same reason.
+
+    A platform may own SEVERAL controls (YouTube has visibility and made-for-kids)
+    and they must agree: one visible while its neighbour is hidden is the
+    last-writer-wins bug `sync()` exists to prevent. Asserting they agree is the
+    point, so they are checked together rather than one being picked out.
+    """
     blocks = [b for b in _blocks_with(page, f'data-platform="{platform}"')
               if "multiselect-group" not in b]
-    assert len(blocks) == 1, f"{platform} field appears {len(blocks)} times"
-    return blocks[0]
+    assert blocks, f"no {platform} field on the form"
+    hidden = ["hidden" in b for b in blocks]
+    assert len(set(hidden)) == 1, (
+        f"{platform} controls disagree about being hidden: {blocks}")
+    return "\n".join(blocks)
 
 
 # --- 2. state and sorting on the instruction list ------------------------------------- #

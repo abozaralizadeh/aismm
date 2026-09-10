@@ -14,6 +14,9 @@ Two lessons carried over from AIBlog:
   Without them the factory returns ``None`` and the agent simply works without
   the tool, as with Sora when unconfigured.
 
+...and one of our own: **headless Chromium announces itself in its User-Agent,
+and that word alone gets the request refused.** See ``_browser_user_agent``.
+
 Fetched media is written into the assets dir like generated media, so a browsed
 image or video can be passed straight to ``publish``.
 
@@ -172,8 +175,77 @@ async def get_browser(state: dict):
     return state["_browser"]
 
 
+async def _browser_user_agent(browser) -> str:
+    """The browser's own User-Agent with ``HeadlessChrome`` renamed to ``Chrome``.
+
+    That one word is the whole reason Medium was unreachable. Every browse of a
+    Medium URL came back as Cloudflare's ``403 "Sorry, you have been blocked"``
+    page, and the agent — correctly — reported the link as blocked. Measured on
+    one article, same code either side:
+
+    ==========================================  ======  =======================
+    context                                     status  page text
+    ==========================================  ======  =======================
+    default (``…HeadlessChrome/149…``)             403  687 chars of challenge
+    same, UA with ``Headless`` dropped             200  15,484 chars of article
+    ==========================================  ======  =======================
+
+    Hiding ``navigator.webdriver`` and launching with
+    ``--disable-blink-features=AutomationControlled`` on top changed **nothing**
+    (200 either way), so neither is carried here — this is a string match on the
+    header, not a fingerprinting arms race.
+
+    The version is read off the running browser instead of pinning a UA string,
+    because Chromium *also* sends its real version in the ``sec-ch-ua`` client
+    hints: a UA claiming a different Chrome to the one making the request is a
+    mismatch a bot check can act on, and a pinned string rots at every upgrade.
+    """
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        ua = await page.evaluate("() => navigator.userAgent")
+    finally:
+        await context.close()
+    return (ua or "").replace("HeadlessChrome", "Chrome")
+
+
+async def get_context(state: dict):
+    """One browser context per run, presenting as an ordinary desktop Chrome."""
+    if state.get("_context") is None:
+        browser = await get_browser(state)
+        options = {}
+        try:
+            user_agent = await _browser_user_agent(browser)
+            if user_agent:
+                options["user_agent"] = user_agent
+        except Exception as exc:  # noqa: BLE001 - a plain context still browses
+            logger.warning("Could not read the browser User-Agent (%s); "
+                           "sites that refuse headless browsers may block this run", exc)
+        state["_context"] = await browser.new_context(**options)
+        logger.info("Browser context ready (ua=%s)", options.get("user_agent", "default"))
+    return state["_context"]
+
+
+# Cloudflare's clearance token. It is bound to the client that was issued it, so
+# handing it back from a headless browser is worse than never having had one:
+# measured over six Medium URLs in one context, the first two loaded and every
+# request after them was refused instantly (0.2s, 403, "you have been blocked")
+# — a run that browses one Medium page then a second was blocked on the second.
+# Dropping this one cookie before each navigation made it 6/6. Clearing
+# `__cf_bm` instead changed nothing, so it is specifically the clearance token.
+_CLEARANCE_COOKIE = "cf_clearance"
+
+
+async def _drop_clearance_cookie(context) -> None:
+    try:
+        await context.clear_cookies(name=_CLEARANCE_COOKIE)
+    except Exception as exc:  # noqa: BLE001 - never fail a browse over a cookie
+        logger.debug("Could not clear %s: %s", _CLEARANCE_COOKIE, exc)
+
+
 async def close_browser(state: dict) -> None:
     """Close the run's browser. Call from a ``finally`` in the same event loop."""
+    state.pop("_context", None)          # closed with the browser below
     browser, playwright = state.pop("_browser", None), state.pop("_playwright", None)
     try:
         if browser is not None:
@@ -246,6 +318,38 @@ async () => {
 """
 
 
+# A bot wall is a *successful* page load — the tool returned a title, some text
+# and a 200-shaped result — so without this check the agent is handed
+# "Sorry, you have been blocked" as if it were the article, and there is nothing
+# in the result to say otherwise. Same rule as `list_dms` raising rather than
+# returning []: a refusal must not be able to look like content.
+_WALL_PHRASES = (
+    "you have been blocked",
+    "attention required",
+    "just a moment",
+    "checking your browser before accessing",
+    "verify you are human",
+    "enable javascript and cookies to continue",
+    "access denied",
+)
+# Challenge pages are tiny; a real article is not. The length test is what keeps
+# an article *about* Cloudflare from being mistaken for one of its blocks.
+_WALL_MAX_CHARS = 2_000
+
+
+def _bot_wall(status: int | None, title: str, text: str) -> str:
+    """Name the wall this page is, or ``""`` if it looks like real content."""
+    if len(text or "") > _WALL_MAX_CHARS:
+        return ""
+    blob = f"{title or ''}\n{text or ''}".lower()
+    for phrase in _WALL_PHRASES:
+        if phrase in blob:
+            return phrase
+    if status in (401, 403, 429):
+        return f"HTTP {status}"
+    return ""
+
+
 def _is_decorative(image: dict) -> bool:
     """Drop favicons, tracking pixels and spacers — never what the agent wants."""
     src = (image.get("src") or "").lower()
@@ -280,10 +384,13 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
     if not ok:
         return {"error": "url_not_allowed", "message": why}
     try:
-        browser = await get_browser(state)
-        page = await browser.new_page()
+        context = await get_context(state)
+        await _drop_clearance_cookie(context)
+        page = await context.new_page()
         try:
-            await page.goto(url, timeout=_NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            response = await page.goto(url, timeout=_NAV_TIMEOUT_MS,
+                                       wait_until="domcontentloaded")
+            status = getattr(response, "status", None)
             # Let client-side rendering finish. networkidle is best-effort: a page
             # with polling/analytics never reaches it, so a timeout is not fatal.
             try:
@@ -348,6 +455,21 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
         return {"error": "browse_failed", "message": f"{type(exc).__name__}: {exc}"}
 
     text = (text or "").strip()
+    wall = _bot_wall(status, title, text)
+    if wall:
+        logger.warning("browse_page was refused by %s (%s, HTTP %s)", url, wall, status)
+        return {
+            "error": "blocked",
+            "message": (
+                f"{url} refused an automated browser ({wall}). What came back is the "
+                f"block page, not the content — do NOT quote or summarise it. The "
+                f"browser already presents itself as an ordinary desktop Chrome, so "
+                f"asking again for the same URL will get the same wall. Use another "
+                f"source for this material, or a different URL for the same story "
+                f"(a syndicated copy, the author's own site, the publication's RSS)."),
+            "status": status,
+            "title": title,
+        }
     truncated = len(text) > _TEXT_LIMIT
 
     kept, seen = [], set()

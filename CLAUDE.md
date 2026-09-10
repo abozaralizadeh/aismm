@@ -824,6 +824,16 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
   transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a
   size instead of letting the API fail with an unexplained error.
+- **"Made for kids" is a DECLARATION every upload must answer, and it was hardcoded `False`**
+  (`Instruction.youtube_made_for_kids` → `youtube.resolve_made_for_kids`, checkbox on the
+  instruction form, `settings.youtube_made_for_kids` / `YOUTUBE_MADE_FOR_KIDS` as the deployment
+  default). Wrong for the toddler-animation channel it was reported from: content directed at
+  children must be declared as such under COPPA and YouTube policy, and the flag also disables
+  comments and personalised ads on the video. Tri-state STRING like
+  `twitter_share_with_followers` — a bool cannot tell "not set" from "declared NOT for kids". A
+  **checkbox posts nothing when unticked**, so the form carries a `youtube_fields_present` marker
+  (the same trap `tools_present` solves): without it, saving a schedule change from a form whose
+  YouTube block was hidden would silently un-declare a kids channel.
 - **YouTube visibility is per instruction** (`Instruction.youtube_privacy` → `youtube.
   resolve_privacy`; `""` inherits `settings.youtube_privacy`, env `YOUTUBE_PRIVACY`). It used to be
   a bare `os.getenv` inside the platform — deployment-wide, and invisible to the tests that pin the
@@ -858,15 +868,18 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   out as another take of the same beat. `"cut"` gets its own prompt contract — *same film, new
   shot* — and is never remixed, since remix means "the previous shot, advanced". The tail frame is
   still extracted across a cut so a later shot can chain again.
-- **A generated image is refused by Sora exactly like any other — painting frames for video is
-  wasted money.** `input_reference` is rejected whenever it contains a human face, and *who drew it
-  is irrelevant*: a gpt-image-2 frame made specifically to seed a shot comes straight back. An
-  earlier version of this file told the agent to build a character sheet and paint the opening frame
-  of every cut; that advice is REMOVED from the prompt, `create_video_sequence`'s docstring and
-  `generate_image`'s docstring, because it spent a generation per cut on images that never reached
-  the model. With people on camera exactly two levers remain, and they are used together: `style`
-  repeated verbatim in every shot (identity), and **remix** (continuity). Reference images stay
-  useful for material with NO people in it — locations, objects, artwork, landscapes.
+- **The refusal is about a HUMAN face, not about reference images.** `input_reference` is rejected
+  whenever it contains one and *who drew it is irrelevant* — a gpt-image-2 frame made to seed a shot
+  comes straight back. But an over-correction is also wrong: the guidance once read "only for
+  material with NO people in it … do not build a character sheet", which forbade the workflow that
+  is CORRECT for a stylised non-human cast (cartoon animals, toys, shapes), and an operator writing
+  a toddler-animation brief then had the tool docstrings fighting their instruction. So there are
+  **two ways to hold a cast together and they are exclusive PER SHOT**: remix (each shot edited from
+  an earlier clip) or a per-shot reference frame, all derived from one character sheet. A shot whose
+  picture is ACCEPTED is not chained, so giving every shot its own opening frame opts the video out
+  of remix — deliberate when every frame comes from the same sheet, an accident otherwise. The
+  prompt says to follow the brief and default to remix when it is silent. With people on camera the
+  reference route is simply unavailable and `style` + remix are all there is.
 - **`continuity="auto"` switches the REST of the sequence to remix after one refusal**
   (`frames_refused` in [tools/sequence_tool.py](aismm/tools/sequence_tool.py)). The refusal is proof
   this material has faces in it, so re-offering a frame on every remaining shot buys nothing and
@@ -1030,6 +1043,31 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   separate install (`playwright install chromium`), per-user; `setup_service.sh` runs `install-deps`
   as root but the download as the service user, or the service can't find it. The agent picks the
   URL, so `is_public_url` refuses private/loopback/link-local addresses (cloud instance metadata).
+- **Cloudflare refuses this browser for TWO independent reasons, and both are ours to fix**
+  (reported as "the agent cannot access my medium link — Medium remains blocked by Cloudflare").
+  (1) **Headless Chromium announces itself in its User-Agent** — the literal string
+  `HeadlessChrome` — and that word alone is refused: measured on one Medium article, the default UA
+  got `403` and 687 chars of challenge page, the *same* browser with `Headless` removed from the UA
+  got `200` and 15,484 chars of the article. So `get_context` probes the running browser for its own
+  UA (`navigator.userAgent`) and renames it; **never pin a UA string** — Chromium also sends its real
+  version in `sec-ch-ua` client hints, so a pinned value is a detectable mismatch and rots at every
+  upgrade. Hiding `navigator.webdriver` and launching with
+  `--disable-blink-features=AutomationControlled` changed **nothing** in the same matrix and are
+  deliberately NOT carried. (2) **`cf_clearance` is bound to the client it was issued to, so
+  presenting it back from a headless browser is worse than never having had one**: over six Medium
+  URLs in ONE context the first two loaded and every request after them was refused instantly
+  (0.2s, 403) — i.e. a run that browses one Medium page and then a second was blocked on the second,
+  which is exactly the "it worked when I tried it" asymmetry that hid the bug. Clearing `__cf_bm`
+  instead changed nothing; clearing `cf_clearance` before each navigation made it 6/6. Hence one
+  context per run (`state["_context"]`, dropped in `close_browser`) and `_drop_clearance_cookie`
+  at every `goto`, whose failure is logged, never fatal.
+- **A challenge page is a SUCCESSFUL page load, so it must be named** (`_bot_wall`). Same rule as
+  `list_dms` raising instead of returning `[]`: a refusal that reads as content is worse than an
+  error, because the agent will summarise "Sorry, you have been blocked" as if it were the article.
+  Detection is phrase-based and **only under `_WALL_MAX_CHARS`** — a real 15k-word piece *about*
+  Cloudflare blocking must not trip it — plus a bare 401/403/429. The message tells the agent the
+  browser already presents as ordinary desktop Chrome, so re-asking for the same URL is pointless,
+  and to find another source or another URL for the same story.
 - **Azure store = ONE table, PartitionKey per entity type** ([store/azure_store.py](aismm/store/azure_store.py)),
   the SandBox layout (`GenBox`/`ComicBook` azurestorage.py). Table Storage can't sort or paginate
   server-side (sort in Python), rejects `None`/dict/list values (`_upsert` filters + ISO-formats

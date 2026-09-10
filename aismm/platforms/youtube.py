@@ -26,6 +26,26 @@ from .registry import register
 
 logger = logging.getLogger("aismm.platforms.youtube")
 
+def resolve_made_for_kids(instruction=None) -> bool:
+    """YouTube's "made for kids" declaration for this upload.
+
+    Every upload must answer it, and the answer is content-dependent, not
+    deployment-wide: an animation channel for toddlers and a developer-diary
+    channel can publish from the same app. The instruction's tri-state wins;
+    ``""`` inherits ``settings.youtube_made_for_kids``.
+
+    Getting this wrong is not cosmetic — a video directed at children that is
+    declared otherwise is a YouTube-policy and COPPA problem, and the flag also
+    turns off comments and personalised ads on the video.
+    """
+    chosen = str(getattr(instruction, "youtube_made_for_kids", "") or "").strip().lower()
+    if chosen in {"yes", "1", "true", "on"}:
+        return True
+    if chosen in {"no", "0", "false", "off"}:
+        return False
+    return bool(settings.youtube_made_for_kids)
+
+
 def resolve_privacy(instruction=None) -> str:
     """Visibility for this upload: the instruction's choice, else the deployment's.
 
@@ -111,7 +131,7 @@ class YouTube(SocialPlatform):
         metadata = {
             "snippet": {"title": title[:100] or "Untitled", "description": description.strip()},
             "status": {"privacyStatus": privacy,
-                       "selfDeclaredMadeForKids": False,
+                       "selfDeclaredMadeForKids": resolve_made_for_kids(instruction),
                        # containsSyntheticMedia drives YouTube's altered/synthetic
                        # content disclosure ("How this content was made").
                        **disclosure.native_flags("youtube", instruction)},

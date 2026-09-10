@@ -1480,6 +1480,12 @@ def create_app() -> Flask:
         instr.engagement_policy = f.get("engagement_policy", "").strip()
         privacy = f.get("youtube_privacy", "").strip().lower()
         instr.youtube_privacy = privacy if privacy in YOUTUBE_PRIVACY_CHOICES else ""
+        # A checkbox posts nothing when unticked, so "not on this form at all"
+        # and "unticked" look identical — the same trap `tools_present` solves.
+        # Without the marker, editing the schedule of a kids instruction from a
+        # form where the YouTube section was hidden would silently un-declare it.
+        if f.get("youtube_fields_present"):
+            instr.youtube_made_for_kids = "yes" if f.get("youtube_made_for_kids") else "no"
         # X destination. "" inherits the account's rotation, "none" is the home
         # timeline, anything else is one community id. Validated against the ids
         # the selected accounts actually have, so a stale pick (the community was

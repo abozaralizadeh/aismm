@@ -28,11 +28,12 @@ addressed here:
    endpoint the visual identity was gone. Here the **whole sequence is pinned to
    the resource that served clip 1**, so remix stays available throughout.
 
-**Sora refuses ANY ``input_reference`` showing a human face — including one that
-gpt-image-2 just drew.** Who made the picture is irrelevant; if there is a face
-in it, it is rejected. So for anything with people on camera, reference images
-are NOT the consistency lever, and painting an opening frame to pass in is work
-that gets thrown away. What is left, in order:
+**Sora refuses an ``input_reference`` showing a HUMAN face — including one that
+gpt-image-2 just drew.** Who made the picture is irrelevant; if there is a human
+face in it, it is rejected. A stylised non-human cast (cartoon animals, toys,
+shapes) is not — so a character sheet driving every shot's opening frame is a
+workable strategy for that kind of show, and simply unavailable for people. With
+people on camera, what is left, in order:
 
 1. the ``style`` block, repeated verbatim in every shot — it survives everything;
 2. **remix**, which is the real lever: the model edits the previous clip rather
@@ -1029,13 +1030,14 @@ def _make_create_sequence(state: dict):
             reference_asset_paths: One image per shot, same order as ``scenes``;
                 use "" for shots with no image.
 
-                **Only for material with NO people in it.** Sora rejects any
-                reference image containing a human face — including one you just
-                drew with ``generate_image``, because who made it is irrelevant.
-                Do not build a character sheet to pass in here and do not paint
-                opening frames of people; it is refused. Useful for locations,
-                objects, artwork, logos and landscapes. When people are on camera,
-                identity comes from ``style`` and continuity comes from remix.
+                Sora rejects a reference image containing a **human face** —
+                including one you just drew with ``generate_image``, because who
+                made it is irrelevant. It does NOT reject a stylised non-human
+                cast: cartoon animals, toys and simple shapes go through, so
+                painting one character sheet and deriving each shot's opening
+                frame from it is a real strategy for that kind of show. With
+                PEOPLE on camera it is not available, and identity comes from
+                ``style`` with continuity from remix.
 
                 A refused image does not leave the shot adrift: it falls back to
                 remixing an earlier shot, then to a picture already accepted in

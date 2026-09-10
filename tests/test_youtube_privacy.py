@@ -204,3 +204,114 @@ def test_a_forged_value_is_rejected_at_the_form(dash, store):
         "publish_mode": "dry_run", "task_type": "publish", "media_pref": "auto",
         "youtube_privacy": "everyone"}, follow_redirects=True)
     assert store.list_instructions()[0].youtube_privacy == ""
+
+
+# --- "Made for kids": a declaration, not a preference ------------------------------------ #
+# Every YouTube upload must answer it, and `selfDeclaredMadeForKids` was hardcoded
+# False — wrong for the toddler-animation channel this was reported from, and a
+# COPPA / YouTube-policy matter rather than a setting. It also turns off comments
+# and personalised ads on the video, so it cannot be defaulted per deployment
+# either: one app can serve a kids channel and a developer diary.
+
+def test_an_instruction_can_declare_made_for_kids():
+    from aismm.platforms.youtube import resolve_made_for_kids
+
+    assert resolve_made_for_kids(_instruction(youtube_made_for_kids="yes")) is True
+    assert resolve_made_for_kids(_instruction(youtube_made_for_kids="no")) is False
+
+
+def test_unset_inherits_the_deployment_default(monkeypatch):
+    from aismm.platforms import youtube
+
+    patched = dataclasses.replace(config_module.settings, youtube_made_for_kids=True)
+    monkeypatch.setattr(youtube, "settings", patched)
+    assert youtube.resolve_made_for_kids(_instruction()) is True
+    assert youtube.resolve_made_for_kids(None) is True
+
+
+def test_the_declaration_reaches_the_api(monkeypatch):
+    sent, _ = _upload(monkeypatch, _instruction(youtube_made_for_kids="yes"))
+    assert sent["metadata"]["status"]["selfDeclaredMadeForKids"] is True
+
+
+def test_it_is_false_by_default_not_absent(monkeypatch):
+    """YouTube requires an answer; omitting the field is not one."""
+    sent, _ = _upload(monkeypatch, _instruction())
+    assert sent["metadata"]["status"]["selfDeclaredMadeForKids"] is False
+
+
+def test_it_survives_the_azure_whitelist():
+    from aismm.store.azure_store import AzureStore
+
+    instruction = _instruction(youtube_made_for_kids="yes")
+    entity = AzureStore._instruction_to_entity(instruction)
+    entity["RowKey"] = instruction.id
+    assert AzureStore._instruction_from_entity(entity).youtube_made_for_kids == "yes"
+
+
+# --- the checkbox ------------------------------------------------------------------------- #
+
+def _youtube_account(store):
+    return store.upsert_account(Account(platform=PlatformName.youtube, handle="chan",
+                                        external_id="UC1"), access_token="t")
+
+
+def test_the_checkbox_appears_when_youtube_is_selected(dash, store):
+    account = _youtube_account(store)
+    instruction = store.upsert_instruction(
+        Instruction(name="Babies", account_ids_json=f'["{account.id}"]'))
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert 'name="youtube_made_for_kids"' in page
+    assert "Made for kids" in page
+
+
+def test_the_checkbox_is_hidden_on_an_instruction_that_does_not_post_there(dash, store):
+    """A YouTube channel IS connected, but this instruction targets Instagram —
+    so the control renders (it must still submit) and is hidden."""
+    _youtube_account(store)
+    other = store.upsert_account(Account(platform=PlatformName.instagram, handle="ig",
+                                         external_id="1"), access_token="t")
+    instruction = store.upsert_instruction(
+        Instruction(name="Comic", account_ids_json=f'["{other.id}"]'))
+    page = dash.test_client().get(
+        f"/instructions/{instruction.id}/edit").get_data(as_text=True)
+    assert 'name="youtube_made_for_kids"' in page
+    label = next(b for b in page.split("<label") if 'name="youtube_made_for_kids"' in b)
+    assert "hidden" in label.split(">")[0]
+
+
+def test_ticking_it_saves_yes(dash, store):
+    _youtube_account(store)
+    dash.test_client().post("/instructions", data={
+        "name": "Babies", "brief": "b", "schedule": "03:00 mon",
+        "publish_mode": "dry_run", "task_type": "publish", "media_pref": "auto",
+        "youtube_fields_present": "1", "youtube_made_for_kids": "on"},
+        follow_redirects=True)
+    assert store.list_instructions()[0].youtube_made_for_kids == "yes"
+
+
+def test_leaving_it_unticked_saves_no(dash, store):
+    """Unticked is an ANSWER — YouTube requires one — so it is recorded, not left
+    blank to inherit."""
+    _youtube_account(store)
+    dash.test_client().post("/instructions", data={
+        "name": "Dev diary", "brief": "b", "schedule": "03:00 mon",
+        "publish_mode": "dry_run", "task_type": "publish", "media_pref": "auto",
+        "youtube_fields_present": "1"}, follow_redirects=True)
+    assert store.list_instructions()[0].youtube_made_for_kids == "no"
+
+
+def test_a_post_without_the_youtube_block_leaves_it_alone(dash, store):
+    """A checkbox posts nothing when unticked, so "not on this form" and
+    "unticked" look identical — the trap `tools_present` already solves. Editing
+    the schedule from a form where the YouTube section was hidden must not
+    silently un-declare a kids channel."""
+    _youtube_account(store)
+    instruction = store.upsert_instruction(
+        Instruction(name="Babies", brief="b", youtube_made_for_kids="yes"))
+    dash.test_client().post("/instructions", data={
+        "id": instruction.id, "name": "Babies", "brief": "b", "schedule": "03:00 mon",
+        "publish_mode": "dry_run", "task_type": "publish", "media_pref": "auto"},
+        follow_redirects=True)
+    assert store.get_instruction(instruction.id).youtube_made_for_kids == "yes"

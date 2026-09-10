@@ -81,9 +81,10 @@
 {% set task_posts = task_value not in ('engage', 'outreach') %}
 {% set task_engages = task_value in ('engage', 'outreach', 'auto') %}
 {% set yt_privacy = instruction.youtube_privacy if instruction else '' %}
+{% set yt_kids = instruction.youtube_made_for_kids if instruction else '' %}
 {% set tw_pinned = instruction.twitter_community_id if instruction else '' %}
 {% set tw_shared = instruction.twitter_share_with_followers if instruction else '' %}
-{% set show_youtube = task_posts and ('youtube' in selected_platforms or yt_privacy) %}
+{% set show_youtube = task_posts and ('youtube' in selected_platforms or yt_privacy or yt_kids) %}
 {% set show_twitter = task_posts and ('twitter' in selected_platforms or tw_pinned or tw_shared) %}
 
 <form method="post" action="{{ url_for('save_instruction') }}" class="form form-wide"
@@ -270,6 +271,28 @@
                target="_blank" rel="noopener">Request an audit ↗</a>
           </span>
         </label>
+
+        {# Marks that the YouTube block was on the form, so an unticked checkbox
+           can be told from a form that never showed it. #}
+        <input type="hidden" name="youtube_fields_present" value="1">
+        <label class="check" data-publish-only data-platform="youtube"
+               {% if yt_kids %}data-platform-keep{% endif %}
+               {% if not show_youtube %}hidden{% endif %}>
+          <input type="checkbox" name="youtube_made_for_kids"
+                 {% if yt_kids == 'yes' or (not yt_kids and settings.youtube_made_for_kids) %}checked{% endif %}>
+          Made for kids
+        </label>
+        <span class="hint" data-publish-only data-platform="youtube"
+              {% if not show_youtube %}hidden{% endif %}>
+          YouTube requires every upload to answer this. Tick it if the video is
+          <strong>directed at children</strong> — nursery rhymes, toddler animation,
+          children's characters and stories. It is a legal declaration under COPPA and
+          YouTube's own policy, not a preference, and getting it wrong risks the channel.
+          <br>It also changes the video: comments are turned off, personalised ads are
+          disabled, and it cannot be saved to a playlist or shown in some surfaces.
+          <a href="https://support.google.com/youtube/answer/9528076" target="_blank"
+             rel="noopener">What counts as made for kids ↗</a>
+        </span>
       {% endif %}
 
       {# Where POSTS go, so it follows the task as well as the platform: an
