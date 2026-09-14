@@ -1000,6 +1000,43 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   body on failure (`format_http_error`); httpx's message alone omits the reason. Sora 2 has **no
   seed**; `input_reference` rejects human faces. The Videos API is announced for shutdown ~Sep 24
   2026 — the tool is behind the registry so a successor can replace it.
+- **Failover balances load; it cannot invent a healthy resource — and the old message hid that**
+  (reported as "video generation is failing for 3 days … one of my subscriptions has been disabled,
+  but it should have used the other ones as it is doing load balancing!"). It HAD used the other
+  one. Two pool members, two **permanent** misconfigurations that look identical in a run log:
+  `pocs-openai-veronica` had a `sora-2` deployment but the api-key in the pool had been **rotated**
+  (401 "invalid subscription key"), and `pocs-openai-pietro` had a live key and **no Sora deployment
+  at all** (404 "The API deployment for this resource does not exist") — it had been a phantom pool
+  member since the day it was added, invisible while veronica worked. Rotating between those two
+  could never produce a clip, and `create_clip_with_failover` reported only the LAST exception, so a
+  three-day outage read as one 404 on one resource. So: `_permanent_reason(status, body, resource)`
+  separates "this can NEVER serve Sora" (401/403 key, 404 deployment) from "this may pass" (429,
+  5xx, timeouts) and `_pool_failure_message` names **every** member and what it answered, plus
+  whether retrying is hopeless. A permanent verdict is memoized in an `unusable` dict the CALLER
+  owns — one per sequence (`sequence_tool`) or per clip-with-and-without-its-reference
+  (`video_tool`) — so shots 2..n don't re-buy the same discovery; it is deliberately **not** process-
+  wide, since a rotated key is fixed between runs. A skipped endpoint is still NAMED in the final
+  error, or skipping would hide the diagnosis.
+- **A create can never be a free health probe: Azure validates PARAMETERS before deployment
+  routing.** Measured — `seconds=3` returns 400 on a resource with no Sora deployment, so an
+  intentionally-invalid create tells you nothing about whether the model is there. The listing is
+  the free probe, and only on the OLD surface: `GET {endpoint}/openai/deployments?api-version=
+  **2022-12-01**` works, while `/openai/v1/deployments?api-version=preview` and
+  `?api-version=2024-06-01` both 404. Hence `check_resource`/`check_pool` and
+  `python scripts/smoke_sora.py --check`, which reproduces the whole diagnosis above in seconds,
+  creates no job and bills nothing. Run it before believing a pool is load-balancing.
+- **One LangSmith trace per run, named after the INSTRUCTION** (`manager_agent._trace_name` /
+  `_trace_metadata` around the whole of `run_for_account`'s agent section). The SDK's default
+  workflow name is "Agent workflow", so every trace in the project had the same name and finding the
+  failing video run meant opening them one by one — and the recovery nudge and `maybe_compact`'s LLM
+  call arrived as SEPARATE traces, detached from the run that caused them. `group_id` is the `Run`
+  id so a retry sits with its original, and the metadata carries instruction/account/run/workspace
+  ids to get from a trace back to the row. Keep the `finally` (browser close, Sora ContextVar reset)
+  and the compaction INSIDE the `with trace(...)`. Verified against LangSmith with a probe trace:
+  the workflow name becomes the trace name, `metadata` lands under `extra.metadata` and `group_id`
+  arrives as `thread_id`. Note `langsmith run get --format json` prints a TRIMMED run (no `extra`
+  at all) — read the metadata with the `langsmith` Python client, not the CLI, or you will conclude
+  it never arrived.
 - **APIM is an *Azure*-shaped client** ([llm.py](aismm/llm.py)): both providers build
   `AsyncAzureOpenAI`; for APIM the gateway route is the `azure_endpoint` (trAIde's
   `_build_openai_client`). A plain `AsyncOpenAI(base_url=…)` drops Azure's `/openai` segment and

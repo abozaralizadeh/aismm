@@ -122,8 +122,10 @@ def sora(monkeypatch, tmp_path):
     """Record every Sora call; return fake clips without touching ffmpeg or the API."""
     calls = {"creates": [], "remixes": [], "failover": 0}
 
-    async def failover(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None):
+    async def failover(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None,
+                       unusable=None):
         calls["failover"] += 1
+        calls["unusable"] = unusable
         calls["creates"].append({"prompt": prompt, "seconds": seconds, "size": size,
                                  "reference": ref_image_bytes, "resource": RESOURCE_A})
         return b"clip", f"job-{len(calls['creates'])}", RESOURCE_A
@@ -289,11 +291,60 @@ def test_a_failing_shot_keeps_the_clips_already_made(monkeypatch, sora):
 
 
 def test_a_failing_first_shot_is_an_error_not_an_empty_video(monkeypatch, sora):
-    async def fail(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None):
+    async def fail(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None,
+                   unusable=None):
         raise RuntimeError("all resources exhausted")
 
     monkeypatch.setattr(sequence_tool, "create_clip_with_failover", fail)
     result = _sequence()
+    assert result["error"] == "video_generation_failed"
+
+
+def test_a_pool_diagnosis_survives_into_the_message_whole(monkeypatch, sora):
+    """When the POOL is what failed, the diagnosis is the only actionable thing here.
+
+    `failed_shots` keeps a 300-char row per shot, and the per-resource verdict —
+    which endpoint answered what, and what to fix — lives well past that cut-off.
+    """
+    diagnosis = ("Sora video generation failed on all 2 resource(s) in the pool:\n"
+                 "  - a.openai.azure.com: its api-key is rejected " + "…" * 200 + "\n"
+                 "  - b.openai.azure.com: it has no 'sora-2' deployment — deploy that model")
+
+    async def fail(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None,
+                   unusable=None):
+        raise RuntimeError(diagnosis)
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", fail)
+    result = _sequence(scenes=["a", "b"], continuity="none")
+
+    assert result["error"] == "video_generation_failed"
+    assert "a.openai.azure.com" in result["message"]
+    assert "no 'sora-2' deployment" in result["message"]   # past the 300-char row
+
+
+def test_one_unusable_memo_is_carried_across_the_shots(monkeypatch, sora):
+    """A pool proved dead by shot 1 must not be re-shopped by shots 2..n.
+
+    A failed shot pins no resource, so every later shot goes back to the pool —
+    and each re-discovers the same rotated key and the same missing deployment,
+    paying a create per resource per shot to learn it. Scoped to the SEQUENCE,
+    not the process: a rotated key can be fixed between runs, and a pool
+    memoized forever would keep refusing a repaired resource.
+    """
+    seen = []
+
+    async def failover(prompt, seconds, size, *, ref_image_bytes=None, max_attempts=None,
+                       unusable=None):
+        seen.append(dict(unusable))
+        unusable["https://dead"] = "its api-key is rejected"
+        raise RuntimeError("Sora video generation failed on all 1 resource(s) in the pool")
+
+    monkeypatch.setattr(sequence_tool, "create_clip_with_failover", failover)
+    result = _sequence(scenes=["a", "b", "c"], continuity="none")
+
+    assert len(seen) > 1, "a failed shot pins nothing, so the next one shops again"
+    assert seen[0] == {}                                       # shot 1 knows nothing
+    assert all(memo == {"https://dead": "its api-key is rejected"} for memo in seen[1:])
     assert result["error"] == "video_generation_failed"
 
 

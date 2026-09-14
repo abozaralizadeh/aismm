@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from agents import Agent, Runner
+from agents import Agent, Runner, trace
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
 from ..config import SoraSettings, settings
@@ -79,6 +79,32 @@ def _performance_block(store: Store, account: Account) -> str:
         logger.warning("Could not build the performance summary for %s: %s",
                        account.handle or account.external_id, exc)
         return ""
+
+
+def _trace_name(instruction: Instruction) -> str:
+    """What this run is called in LangSmith: the instruction's own name.
+
+    The SDK names every trace ``Agent workflow`` by default, so the trace list was
+    one column of identical rows — useless for the thing a trace list is for,
+    which is finding the run you are looking for. The account, platform, task and
+    run id ride along as METADATA (filterable, and shown on the trace), so the
+    name stays the one word an operator thinks in.
+    """
+    return (instruction.name or "").strip() or "AISMM run"
+
+
+def _trace_metadata(instruction: Instruction, account: Account, run: Run,
+                    task: InstructionTask) -> dict:
+    """Everything needed to get from a trace back to the row that produced it."""
+    return {
+        "instruction": instruction.name,
+        "instruction_id": instruction.id,
+        "task": getattr(task, "value", str(task)),
+        "account": account.handle or account.external_id,
+        "platform": account.platform.value,
+        "run_id": run.id,
+        "workspace_id": instruction.workspace_id,
+    }
 
 
 _NO_LLM_MESSAGE = (
@@ -263,93 +289,102 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
         logger.info("Too large/unreadable to attach natively, using extracted text: %s",
                     ", ".join(fell_back))
 
-    try:
+    # ONE LangSmith trace per run, named after the INSTRUCTION. Every trace used
+    # to arrive as the SDK's default "Agent workflow", so a list of them said
+    # nothing about which instruction, account or run each one was — and the
+    # recovery nudge and the memory compaction below came in as SEPARATE traces
+    # again, detached from the run they belong to. One `trace()` around the whole
+    # thing fixes both: name in the list, ids in the metadata, group_id = the Run
+    # so a retry and its original sit together.
+    with trace(_trace_name(instruction), group_id=run.id,
+               metadata=_trace_metadata(instruction, account, run, task)):
         try:
-            result = await Runner.run(agent, agent_input, max_turns=MAX_TURNS,
-                                      run_config=STATELESS_RUN_CONFIG)
-        except Exception as exc:  # noqa: BLE001 - only retry the specific failure we can fix
-            if isinstance(agent_input, list) and looks_like_unsupported_file_input(str(exc)):
-                logger.warning("Deployment rejected native file input (%s) — retrying as "
-                               "text-only", exc)
-                result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS,
+            try:
+                result = await Runner.run(agent, agent_input, max_turns=MAX_TURNS,
                                           run_config=STATELESS_RUN_CONFIG)
-            else:
-                raise
+            except Exception as exc:  # noqa: BLE001 - only retry the specific failure we can fix
+                if isinstance(agent_input, list) and looks_like_unsupported_file_input(str(exc)):
+                    logger.warning("Deployment rejected native file input (%s) — retrying as "
+                                   "text-only", exc)
+                    result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS,
+                                              run_config=STATELESS_RUN_CONFIG)
+                else:
+                    raise
 
-        # --- deterministic recovery: ensure the run reached a terminal publish ---
-        if not state.get("result"):
-            assets = state.get("assets", [])
-            asset_hint = (
-                f"You already have media at: {assets[-1]['path']} "
-                f"(kind={assets[-1]['kind']}) — use it if it fits the brief."
-                if assets else ""
-            )
-            memory_hint = (
-                "" if state.get("memory_written")
-                else "Also call update_memory with where you got to. "
-            )
-            if auto:
-                nudge = (
-                    "You did not finish this run. " + memory_hint +
-                    "End it now with exactly one terminal call, matching the ONE job you "
-                    "did this run:\n"
-                    "- publish, IF you produced a real post that satisfies the brief. "
-                    + asset_hint +
-                    "\n- finish_engagement, IF you were replying to comments/mentions — "
-                    "including when there was nothing new to answer.\n"
-                    "- report_failure, only if something stopped you from doing either job "
-                    "at all. Do NOT publish a post that describes a problem or invents "
-                    "content you could not fetch."
+            # --- deterministic recovery: ensure the run reached a terminal publish ---
+            if not state.get("result"):
+                assets = state.get("assets", [])
+                asset_hint = (
+                    f"You already have media at: {assets[-1]['path']} "
+                    f"(kind={assets[-1]['kind']}) — use it if it fits the brief."
+                    if assets else ""
                 )
-            elif engage:
-                nudge = (
-                    "You did not finish this run. " + memory_hint +
-                    "End it now with exactly one terminal call:\n"
-                    "- finish_engagement, once you have replied to (or staged replies for) "
-                    "the new comments/mentions worth answering — including when there was "
-                    "nothing new to answer, which is a normal, correct outcome.\n"
-                    "- report_failure, only if something stopped you from doing the job at "
-                    "all (the account would not load, every read was refused)."
+                memory_hint = (
+                    "" if state.get("memory_written")
+                    else "Also call update_memory with where you got to. "
                 )
-            elif outreach:
-                nudge = (
-                    "You did not finish this run. " + memory_hint +
-                    "End it now with exactly one terminal call:\n"
-                    "- finish_engagement, once you have engaged (or staged replies for) the "
-                    "other accounts' posts worth engaging — including when you found nothing "
-                    "worth engaging, which is a normal, correct outcome.\n"
-                    "- report_failure, only if something stopped you from doing the job at "
-                    "all (search would not run, every read was refused)."
-                )
-            else:
-                nudge = (
-                    "You did not finish this run. " + memory_hint +
-                    "End it now with exactly one terminal call:\n"
-                    "- publish, IF you have a real post that satisfies the brief. "
-                    + asset_hint +
-                    "\n- report_failure, if you could not carry out the instruction. "
-                    "Do NOT publish a post that describes the problem, apologises, or "
-                    "substitutes invented content for what you failed to fetch — a "
-                    "failed run is the correct outcome there."
-                )
-            logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
-            # Continue the SAME conversation so prior tool outputs/assets are retained.
-            follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
-            await Runner.run(agent, follow_up, max_turns=8,
-                             run_config=STATELESS_RUN_CONFIG)
-    finally:
-        # Tear the browser down inside THIS event loop (the AIBlog lesson): a
-        # Chromium subprocess finalized later by GC raises "Event loop is closed".
-        await close_browser(state)
-        # Drop the per-run Sora pool so it never bleeds into the next run's context.
-        sora_config._ACTIVE.reset(sora_token)
+                if auto:
+                    nudge = (
+                        "You did not finish this run. " + memory_hint +
+                        "End it now with exactly one terminal call, matching the ONE job you "
+                        "did this run:\n"
+                        "- publish, IF you produced a real post that satisfies the brief. "
+                        + asset_hint +
+                        "\n- finish_engagement, IF you were replying to comments/mentions — "
+                        "including when there was nothing new to answer.\n"
+                        "- report_failure, only if something stopped you from doing either job "
+                        "at all. Do NOT publish a post that describes a problem or invents "
+                        "content you could not fetch."
+                    )
+                elif engage:
+                    nudge = (
+                        "You did not finish this run. " + memory_hint +
+                        "End it now with exactly one terminal call:\n"
+                        "- finish_engagement, once you have replied to (or staged replies for) "
+                        "the new comments/mentions worth answering — including when there was "
+                        "nothing new to answer, which is a normal, correct outcome.\n"
+                        "- report_failure, only if something stopped you from doing the job at "
+                        "all (the account would not load, every read was refused)."
+                    )
+                elif outreach:
+                    nudge = (
+                        "You did not finish this run. " + memory_hint +
+                        "End it now with exactly one terminal call:\n"
+                        "- finish_engagement, once you have engaged (or staged replies for) the "
+                        "other accounts' posts worth engaging — including when you found nothing "
+                        "worth engaging, which is a normal, correct outcome.\n"
+                        "- report_failure, only if something stopped you from doing the job at "
+                        "all (search would not run, every read was refused)."
+                    )
+                else:
+                    nudge = (
+                        "You did not finish this run. " + memory_hint +
+                        "End it now with exactly one terminal call:\n"
+                        "- publish, IF you have a real post that satisfies the brief. "
+                        + asset_hint +
+                        "\n- report_failure, if you could not carry out the instruction. "
+                        "Do NOT publish a post that describes the problem, apologises, or "
+                        "substitutes invented content for what you failed to fetch — a "
+                        "failed run is the correct outcome there."
+                    )
+                logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
+                # Continue the SAME conversation so prior tool outputs/assets are retained.
+                follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
+                await Runner.run(agent, follow_up, max_turns=8,
+                                 run_config=STATELESS_RUN_CONFIG)
+        finally:
+            # Tear the browser down inside THIS event loop (the AIBlog lesson): a
+            # Chromium subprocess finalized later by GC raises "Event loop is closed".
+            await close_browser(state)
+            # Drop the per-run Sora pool so it never bleeds into the next run's context.
+            sora_config._ACTIVE.reset(sora_token)
 
-    if not state.get("memory_written"):
-        logger.warning("Agent did NOT update memory for instruction %s — the next run "
-                       "will not know where this one got to", instruction.id)
-    # Summarize an overgrown memory now, so the next kickoff stays small. Never
-    # fatal — a failed compaction leaves the memory untouched.
-    await maybe_compact(instruction.id, store, model=model)
+        if not state.get("memory_written"):
+            logger.warning("Agent did NOT update memory for instruction %s — the next run "
+                           "will not know where this one got to", instruction.id)
+        # Summarize an overgrown memory now, so the next kickoff stays small. Never
+        # fatal — a failed compaction leaves the memory untouched.
+        await maybe_compact(instruction.id, store, model=model)
 
     if state.get("result"):
         return state["result"]

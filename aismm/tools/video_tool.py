@@ -47,10 +47,14 @@ async def perform_generate_video(state: dict, prompt: str, *, seconds: int = 8,
 
     reference, reference_note = _load_reference(reference_asset_path, size)
     used_reference = reference is not None
+    # Shared by the two attempts below so the retry without the picture does not
+    # re-ask a resource that has already proved it cannot serve Sora at all.
+    unusable_resources: dict[str, str] = {}
     try:
         # Load-balanced across the Sora pool; fails over to another resource.
         mp4, job_id, resource = await create_clip_with_failover(
-            prompt, secs, size, ref_image_bytes=reference)
+            prompt, secs, size, ref_image_bytes=reference,
+            unusable=unusable_resources)
     except Exception as exc:  # noqa: BLE001
         detail = format_http_error(exc) if hasattr(exc, "response") else str(exc)
         # Sora refuses an input_reference containing human faces. Losing the clip
@@ -63,7 +67,8 @@ async def perform_generate_video(state: dict, prompt: str, *, seconds: int = 8,
                               "the clip was generated from the prompt alone.")
             used_reference = False
             try:
-                mp4, job_id, resource = await create_clip_with_failover(prompt, secs, size)
+                mp4, job_id, resource = await create_clip_with_failover(
+                    prompt, secs, size, unusable=unusable_resources)
             except Exception as retry_exc:  # noqa: BLE001
                 state["video_failures"] = state.get("video_failures", 0) + 1
                 logger.warning("generate_video failed: %s", retry_exc)

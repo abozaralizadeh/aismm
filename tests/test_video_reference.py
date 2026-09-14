@@ -144,6 +144,27 @@ def test_a_refused_reference_still_produces_a_clip(monkeypatch, tmp_path):
     assert "refused" in result["reference_note"]
 
 
+def test_the_retry_without_the_picture_reuses_what_the_first_try_learned(monkeypatch, tmp_path):
+    """The two attempts are one clip: a resource the first proved dead stays dead."""
+    path = _reference_on_disk(monkeypatch, tmp_path)
+    memos = []
+
+    async def fake_create(prompt, seconds, size, *, ref_image_bytes=None, unusable=None, **kw):
+        memos.append(unusable)
+        if ref_image_bytes:
+            unusable["https://dead"] = "its api-key is rejected"
+            raise RuntimeError("input_reference contains a human face")
+        return b"clip", "job-2", {"endpoint": "https://e"}
+
+    monkeypatch.setattr(video_tool, "create_clip_with_failover", fake_create)
+    monkeypatch.setattr(video_tool, "save_bytes", lambda data, ext: "/assets/x.mp4")
+    monkeypatch.setattr(video_tool, "public_url", lambda p: "https://host/x.mp4")
+
+    _generate({}, prompt="x", reference_asset_path=path)
+    assert len(memos) == 2 and memos[1] is memos[0]
+    assert memos[1] == {"https://dead": "its api-key is rejected"}
+
+
 def test_a_missing_reference_does_not_stop_the_clip(sora, monkeypatch):
     from aismm import assets
 

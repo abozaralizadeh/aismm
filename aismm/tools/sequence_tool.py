@@ -510,6 +510,12 @@ async def perform_create_sequence(
     # refusal tells us this sequence has people in it, so the remaining shots go
     # straight to remix instead of paying for the same refusal shot after shot.
     frames_refused = False
+    # Same idea one layer down, for the POOL: a resource whose key is rejected or
+    # whose Sora deployment is missing answers identically for every shot, so the
+    # first shot to prove it dead spares the rest. Shared across the shots of this
+    # sequence only — a rotated key can be fixed between runs.
+    unusable_resources: dict[str, str] = {}
+    first_error = ""           # the first shot's failure, in full, for the report
     previous_seconds = 0.0     # what the last clip ACTUALLY came out at
 
     # A remix takes only a prompt and inherits its source's duration, so a remixed
@@ -593,7 +599,8 @@ async def perform_create_sequence(
             try:
                 if resource is None:
                     clip, job_id, resource = await create_clip_with_failover(
-                        prompt, seconds, size, ref_image_bytes=active)
+                        prompt, seconds, size, ref_image_bytes=active,
+                        unusable=unusable_resources)
                     how = "create+image" if from_image else ("create+frame" if use_frame
                                                              else "create")
                 else:
@@ -657,7 +664,8 @@ async def perform_create_sequence(
                         try:
                             if resource is None:
                                 clip, job_id, resource = await create_clip_with_failover(
-                                    retry_prompt, seconds, size)
+                                    retry_prompt, seconds, size,
+                                    unusable=unusable_resources)
                             else:
                                 clip, job_id = await create_clip(
                                     resource, retry_prompt, seconds, size, None)
@@ -692,6 +700,7 @@ async def perform_create_sequence(
                     logger.error("Shot %d/%d failed, continuing with the rest: %s",
                                  index, len(scenes), detail[:300])
                     failed_shots.append({"shot": index, "error": detail[:300]})
+                    first_error = first_error or detail[:1200]
                     if len(failed_shots) >= _MAX_SHOT_FAILURES:
                         logger.error("Giving up after %d failed shots", len(failed_shots))
                         break
@@ -735,9 +744,13 @@ async def perform_create_sequence(
                 reference = None
 
     if not clips:
-        first = failed_shots[0]["error"] if failed_shots else "no clips were produced"
+        # The WHOLE first error, not the 300-char row kept for `failed_shots`: when
+        # the pool itself is the problem the diagnosis — which resource answered
+        # what, and what to fix — lives past that cut-off, and it is the only thing
+        # in here anyone can act on.
+        first = first_error or "no clips were produced"
         return {"error": "video_generation_failed",
-                "message": f"Every shot failed. First error: {first}"}
+                "message": f"Every shot failed.\n{first}"}
 
     try:
         merged = await asyncio.to_thread(video.concat_clips, clips, size)

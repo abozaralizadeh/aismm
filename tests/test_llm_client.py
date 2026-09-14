@@ -126,7 +126,12 @@ def test_unknown_provider_is_rejected(monkeypatch):
 def test_tracing_is_disabled_without_a_platform_key(monkeypatch):
     """Otherwise the SDK uploads traces to api.openai.com with the Azure key -> 401 spam."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # BOTH names, or this passes only on a machine whose shell has neither:
+    # `configure_tracing` accepts the current LANGSMITH_* as well as the legacy
+    # LANGCHAIN_*, so unsetting one of them tests nothing on a developer who
+    # exports the other (which is what using the langsmith CLI leaves behind).
     monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
     calls = []
     monkeypatch.setattr("agents.set_tracing_disabled", lambda flag: calls.append(flag))
 
@@ -137,6 +142,7 @@ def test_tracing_is_disabled_without_a_platform_key(monkeypatch):
 def test_tracing_left_alone_with_a_real_openai_key(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real")
     monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
     calls = []
     monkeypatch.setattr("agents.set_tracing_disabled", lambda flag: calls.append(flag))
 

@@ -97,6 +97,33 @@ def format_http_error(exc: httpx.HTTPStatusError) -> str:
     return f"HTTP {resp.status_code} {resp.reason_phrase} ({where}): {body[:800]}"
 
 
+# A failure no retry can fix: the pool member is MISCONFIGURED, not busy. Measured
+# on this deployment's own pool after three days of failed video runs — one
+# resource answered 401 (its api-key had been rotated out from under the config)
+# and the other 404 "The API deployment for this resource does not exist" (valid
+# key, no Sora deployment on it at all). Rotating between those two could never
+# have produced a clip, and the run log only ever showed the last of the two.
+def _permanent_reason(status: int | None, body: str, resource: dict) -> str:
+    """Why this resource can NEVER serve Sora, or ``""`` if the failure may pass."""
+    if status in (401, 403):
+        return ("its api-key is rejected — the key has been rotated, or it belongs "
+                "to a different resource")
+    if status == 404:
+        if "deployment" in (body or "").lower():
+            model = resource.get("model") or "sora"
+            return (f"it has no {model!r} deployment — deploy that model there, or "
+                    f"point this entry at the deployment name it does have")
+        return "it does not serve the Sora videos API at this endpoint"
+    return ""
+
+
+def _response_body(resp) -> str:
+    try:
+        return resp.text or ""
+    except Exception:  # noqa: BLE001 - body is best-effort diagnostics
+        return ""
+
+
 def _videos_url(resource: dict, suffix: str = "") -> str:
     return (
         f"{resource['endpoint'].rstrip('/')}/openai/v1/videos{suffix}"
@@ -192,28 +219,67 @@ async def remix_clip(resource, base_job_id, prompt) -> tuple[bytes, str]:
     return await download_video_bytes(resource, job_id), job_id
 
 
+def _pool_failure_message(failures: dict[str, str], unusable: dict[str, str]) -> str:
+    """Name what EVERY resource answered, not just the last one to answer.
+
+    Reporting only the last failure is how a pool holding a rotated key on one
+    resource and no Sora deployment on the other read, for three days, as a
+    single "404 … deployment does not exist" — one problem instead of two, and
+    the wrong one to go and fix.
+    """
+    lines, shown = [], []
+    for resource in config.pool():
+        endpoint = resource["endpoint"]
+        said = failures.get(endpoint) or unusable.get(endpoint)
+        if said:
+            shown.append(endpoint)
+            lines.append(f"  - {_host(resource)}: {said[:400]}")
+    if not lines:
+        return "Sora video generation failed and no resource in the pool answered."
+    verdict = (
+        "Every resource in the pool is misconfigured — this will fail identically "
+        "on the next run, so fix the pool rather than retrying."
+        if all(endpoint in unusable for endpoint in shown) else
+        "At least one of these may be temporary; the rest are configuration."
+    )
+    return (f"Sora video generation failed on all {len(lines)} resource(s) in the "
+            f"pool:\n" + "\n".join(lines) + f"\n{verdict} Check the video connection "
+            "this instruction uses (or AZURE_OPENAI_ENDPOINT_SORA / _KEY_SORA / "
+            "_MODEL_SORA) with: python scripts/smoke_sora.py --check")
+
+
 async def create_clip_with_failover(
     prompt: str, seconds: int, size: str, *,
     ref_image_bytes: bytes | None = None, max_attempts: int | None = None,
+    unusable: dict[str, str] | None = None,
 ) -> tuple[bytes, str, dict]:
     """Generate one clip, rotating to a DIFFERENT resource on each failure.
 
     This is the load-balancing entry point (GenBox's ``_safe_create``): each
     attempt takes the next resource round-robin while excluding the endpoints
     that already failed *this* clip, so one dead resource — out of credits (401),
-    throttled (429), deployment missing (404) — can't consume every attempt. The
-    exclusion is dropped rather than emptying the pool, so a single-resource
-    setup still retries in place.
+    throttled (429), deployment missing (404) — can't consume every attempt.
+
+    ``unusable`` maps endpoint -> why it can never serve Sora (see
+    ``_permanent_reason``). Pass ONE dict across the shots of a sequence: a
+    resource whose key is rejected or whose Sora deployment is missing is proved
+    dead by the first shot, and every later shot skips it instead of paying for
+    the same doomed call again. Those endpoints are still NAMED in the final
+    error, so skipping one never hides it.
 
     Returns ``(mp4_bytes, job_id, resource)``. The serving resource comes back
     because a Sora job id only exists there: any follow-up call for this
     clip (poll, download, remix) must target that same resource.
     """
     attempts = max_attempts or config.max_attempts()
+    known = unusable if unusable is not None else {}
+    failures: dict[str, str] = {}
     tried: set[str] = set()
-    last_detail: str | None = None
     for attempt in range(attempts):
-        resource = config.next_resource(exclude_endpoints=tried)
+        spent = tried | set(known)
+        if not [r for r in config.pool() if r["endpoint"] not in spent]:
+            break   # every resource has already answered; asking again is free of hope
+        resource = config.next_resource(exclude_endpoints=spent)
         tried.add(resource["endpoint"])
         try:
             mp4, job_id = await create_clip(resource, prompt, seconds, size, ref_image_bytes)
@@ -222,15 +288,75 @@ async def create_clip_with_failover(
                             _host(resource), attempt)
             return mp4, job_id, resource
         except httpx.HTTPStatusError as exc:
-            last_detail = format_http_error(exc)
+            detail = format_http_error(exc)
+            reason = _permanent_reason(exc.response.status_code if exc.response is not None
+                                       else None,
+                                       _response_body(exc.response), resource)
         except Exception as exc:  # noqa: BLE001 - network/timeout/etc. → try elsewhere
-            last_detail = f"{type(exc).__name__}: {exc}"
+            detail, reason = f"{type(exc).__name__}: {exc}", ""
+        failures[resource["endpoint"]] = f"{reason} ({detail})" if reason else detail
+        if reason:
+            known[resource["endpoint"]] = f"{reason} ({detail})"
         logger.warning("Sora clip failed (attempt %d/%d on %s): %s",
-                       attempt + 1, attempts, _host(resource), last_detail)
-    raise RuntimeError(
-        f"Sora video generation failed after {attempts} attempt(s) across "
-        f"{len(tried)} resource(s): {last_detail}"
-    )
+                       attempt + 1, attempts, _host(resource),
+                       failures[resource["endpoint"]][:400])
+    raise RuntimeError(_pool_failure_message(failures, known))
+
+
+# Listing the resource's DEPLOYMENTS is the only free way to tell a resource that
+# can serve Sora from one that merely accepts the key. A create call cannot do it:
+# it validates PARAMETERS first — measured, an invalid `seconds` answers 400 even
+# on a resource with no Sora deployment at all — so the 404 that proves the
+# deployment missing only arrives once the request is complete enough to bill.
+# The listing lives on the OLD data-plane surface and the api-version is pinned
+# for that reason: `/openai/deployments?api-version=2022-12-01` returns the list,
+# while `/openai/v1/deployments?api-version=preview` and
+# `/openai/deployments?api-version=2024-06-01` both answer 404.
+_DEPLOYMENTS_API_VERSION = "2022-12-01"
+
+
+async def check_resource(resource: dict) -> dict:
+    """Can this resource actually serve Sora? Creates no job and bills nothing.
+
+    Returns ``{endpoint, host, model, ok, detail}``. The three states this has to
+    separate are the three that were live here at once: the key is refused, the
+    key works but the model is not deployed, and the resource is healthy — they
+    need completely different fixes and all three look the same from a run log.
+    """
+    out = {"endpoint": resource["endpoint"], "host": _host(resource),
+           "model": resource.get("model", ""), "ok": False, "detail": ""}
+    url = (f"{resource['endpoint'].rstrip('/')}/openai/deployments"
+           f"?api-version={_DEPLOYMENTS_API_VERSION}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url, headers=_headers(resource))
+    except Exception as exc:  # noqa: BLE001 - a check must not raise
+        out["detail"] = f"unreachable — {type(exc).__name__}: {exc}"
+        return out
+    reason = _permanent_reason(resp.status_code, _response_body(resp), resource)
+    if resp.status_code in (401, 403):
+        out["detail"] = reason
+        return out
+    if resp.status_code != 200:
+        out["detail"] = f"HTTP {resp.status_code}: {_response_body(resp)[:200]}"
+        return out
+    try:
+        names = sorted(d.get("id") or "" for d in (resp.json().get("data") or []))
+    except Exception as exc:  # noqa: BLE001
+        out["detail"] = f"could not read the deployment list: {exc}"
+        return out
+    if out["model"] not in names:
+        out["detail"] = (f"no {out['model']!r} deployment — this resource has: "
+                         f"{', '.join(n for n in names if n) or 'nothing deployed'}")
+        return out
+    out["ok"] = True
+    out["detail"] = f"{out['model']} is deployed"
+    return out
+
+
+async def check_pool() -> list[dict]:
+    """Run :func:`check_resource` over the active pool, concurrently."""
+    return list(await asyncio.gather(*(check_resource(r) for r in config.pool())))
 
 
 async def generate_video_bytes(prompt: str, seconds: int, size: str,

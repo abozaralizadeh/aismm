@@ -136,6 +136,164 @@ def test_failover_gives_up_with_the_azure_error_body(pool3, monkeypatch):
     assert "3 resource(s)" in str(exc.value)
 
 
+def test_every_resource_is_named_in_the_failure_not_just_the_last(pool3, monkeypatch):
+    """Three days of failed video runs were reported as ONE 404.
+
+    The old message kept the last exception, so a pool whose members fail for
+    DIFFERENT reasons (a rotated key on one, no Sora deployment on the other)
+    read as a single problem on a single resource — and the resource named was
+    whichever answered last.
+    """
+    request = httpx.Request("POST", "https://r0.openai.azure.com/openai/v1/videos")
+    bodies = {
+        "https://r0.openai.azure.com": (401, "invalid subscription key"),
+        "https://r1.openai.azure.com": (404, "The API deployment for this resource does not exist"),
+        "https://r2.openai.azure.com": (429, "too many requests"),
+    }
+
+    async def per_resource(resource, prompt, seconds, size, ref=None):
+        status, text = bodies[resource["endpoint"]]
+        raise httpx.HTTPStatusError(
+            str(status), request=request,
+            response=httpx.Response(status, request=request, text=text))
+
+    monkeypatch.setattr(sora_client, "create_clip", per_resource)
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(sora_client.create_clip_with_failover("p", 8, "720x1280"))
+
+    message = str(exc.value)
+    for host in ("r0.openai.azure.com", "r1.openai.azure.com", "r2.openai.azure.com"):
+        assert host in message
+    assert "api-key is rejected" in message          # the 401, explained
+    assert "no 'sora-2' deployment" in message       # the 404, explained
+    assert "too many requests" in message            # the 429, verbatim
+    # One resource may recover, so this must NOT claim the whole pool is broken.
+    assert "may be temporary" in message
+
+
+def test_a_pool_that_is_entirely_misconfigured_says_so(pool3, monkeypatch):
+    """Retrying is hopeless here, and the operator has to be told that."""
+    request = httpx.Request("POST", "https://r0.openai.azure.com/openai/v1/videos")
+    response = httpx.Response(401, request=request, text="invalid subscription key")
+
+    async def always_401(resource, prompt, seconds, size, ref=None):
+        raise httpx.HTTPStatusError("401", request=request, response=response)
+
+    monkeypatch.setattr(sora_client, "create_clip", always_401)
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(sora_client.create_clip_with_failover("p", 8, "720x1280"))
+
+    assert "Every resource in the pool is misconfigured" in str(exc.value)
+    assert "smoke_sora.py --check" in str(exc.value)
+
+
+def test_a_resource_already_known_unusable_is_not_asked_again(pool3, monkeypatch):
+    """One shot proves a resource dead; the rest of the sequence must not re-pay for it."""
+    request = httpx.Request("POST", "https://r0.openai.azure.com/openai/v1/videos")
+    response = httpx.Response(401, request=request, text="invalid subscription key")
+    seen = []
+
+    async def dead_r0(resource, prompt, seconds, size, ref=None):
+        seen.append(resource["endpoint"])
+        if resource["endpoint"] == "https://r0.openai.azure.com":
+            raise httpx.HTTPStatusError("401", request=request, response=response)
+        return b"MP4", "job-1"
+
+    monkeypatch.setattr(sora_client, "create_clip", dead_r0)
+    known: dict[str, str] = {}
+    for _ in range(3):
+        asyncio.run(sora_client.create_clip_with_failover("p", 8, "720x1280", unusable=known))
+
+    assert list(known) == ["https://r0.openai.azure.com"]
+    assert seen.count("https://r0.openai.azure.com") == 1
+
+
+def test_a_skipped_resource_is_still_named_when_everything_fails(pool3, monkeypatch):
+    """Skipping must never hide a resource: it is the whole diagnosis."""
+    request = httpx.Request("POST", "https://r0.openai.azure.com/openai/v1/videos")
+    response = httpx.Response(404, request=request,
+                              text="The API deployment for this resource does not exist")
+
+    async def always_404(resource, prompt, seconds, size, ref=None):
+        raise httpx.HTTPStatusError("404", request=request, response=response)
+
+    monkeypatch.setattr(sora_client, "create_clip", always_404)
+    known = {"https://r0.openai.azure.com": "its api-key is rejected (measured earlier)"}
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(sora_client.create_clip_with_failover("p", 8, "720x1280", unusable=known))
+
+    assert "r0.openai.azure.com" in str(exc.value)      # never asked, still reported
+    assert "api-key is rejected" in str(exc.value)
+
+
+@pytest.mark.parametrize("status, body, expected", [
+    (401, "invalid subscription key", "api-key is rejected"),
+    (403, "forbidden", "api-key is rejected"),
+    (404, "The API deployment for this resource does not exist", "no 'sora-2' deployment"),
+    (404, "not found", "does not serve the Sora videos API"),
+    (429, "rate limited", ""),          # busy, not broken — retrying elsewhere may work
+    (500, "server error", ""),
+    (None, "", ""),                     # a timeout: nothing was answered at all
+])
+def test_permanent_failures_are_told_apart_from_passing_ones(status, body, expected):
+    reason = sora_client._permanent_reason(status, body, {"model": "sora-2"})
+    assert (expected in reason) if expected else (reason == "")
+
+
+# --- the free health check ----------------------------------------------------- #
+
+def _checking(monkeypatch, status, payload):
+    """Answer the deployments listing with ``payload`` (text or JSON)."""
+    def handler(request):
+        assert "api-version=2022-12-01" in str(request.url), "the newer surfaces 404 here"
+        if isinstance(payload, str):
+            return httpx.Response(status, request=request, text=payload)
+        return httpx.Response(status, request=request, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: original(**{**kw, "transport": transport}))
+
+
+def test_a_resource_with_the_model_deployed_is_healthy(monkeypatch):
+    _checking(monkeypatch, 200, {"data": [{"id": "gpt-4.1"}, {"id": "sora-2"}]})
+    result = asyncio.run(sora_client.check_resource(
+        {"endpoint": "https://r0.openai.azure.com", "key": "k", "model": "sora-2"}))
+    assert result["ok"] is True
+
+
+def test_a_resource_without_the_model_names_what_it_does_have(monkeypatch):
+    """The pool carried a member that had never had Sora on it; only a create ever said so."""
+    _checking(monkeypatch, 200, {"data": [{"id": "gpt-4.1"}, {"id": "model-router"}]})
+    result = asyncio.run(sora_client.check_resource(
+        {"endpoint": "https://r1.openai.azure.com", "key": "k", "model": "sora-2"}))
+    assert result["ok"] is False
+    assert "no 'sora-2' deployment" in result["detail"]
+    assert "gpt-4.1" in result["detail"] and "model-router" in result["detail"]
+
+
+def test_a_rotated_key_is_reported_as_the_key(monkeypatch):
+    _checking(monkeypatch, 401, "invalid subscription key")
+    result = asyncio.run(sora_client.check_resource(
+        {"endpoint": "https://r0.openai.azure.com", "key": "stale", "model": "sora-2"}))
+    assert result["ok"] is False and "api-key is rejected" in result["detail"]
+
+
+def test_a_check_never_raises(monkeypatch):
+    """It is a diagnostic; an unreachable host is an answer, not a crash."""
+    def boom(request):
+        raise httpx.ConnectError("no route to host", request=request)
+
+    _transport = httpx.MockTransport(boom)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: original(**{**kw, "transport": _transport}))
+    result = asyncio.run(sora_client.check_resource(
+        {"endpoint": "https://gone.openai.azure.com", "key": "k", "model": "sora-2"}))
+    assert result["ok"] is False and "unreachable" in result["detail"]
+
+
 def test_format_http_error_includes_status_url_and_body():
     request = httpx.Request("POST", "https://r0.openai.azure.com/openai/v1/videos")
     response = httpx.Response(429, request=request, text="rate limited")
