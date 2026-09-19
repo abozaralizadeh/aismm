@@ -120,11 +120,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from agents import function_tool
 
 from .. import video
-from ..assets import public_url, save_bytes
+from ..assets import public_url, read_bytes, save_bytes
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -418,6 +419,74 @@ def build_clip_prompt(scene: str, style: str, *, index: int, total: int,
     return "\n".join(parts)
 
 
+_REASON_RE = re.compile(r"'code':\s*'([^']+)'.*?'message':\s*'([^']*)", re.S)
+
+
+def _refusal_reason(detail: str) -> str:
+    """Sora's own words for why it would not take the picture.
+
+    The raw text is a Python-repr'd job error inside an exception string; the
+    code (`moderation_blocked`) is the part that distinguishes "this panel trips
+    the content filter" from "this picture has a face in it", which is the whole
+    question the agent has to answer next.
+    """
+    found = _REASON_RE.search(detail or "")
+    if found:
+        code, message = found.group(1), found.group(2).strip()
+        return f"{code}: {message}"[:300] if message else code
+    return (detail or "").strip()[:300]
+
+
+def _reference_refused(state: dict, shot: int, asset_path: str, reason: str,
+                       clips: list[bytes], details: list[dict], total: int) -> dict:
+    """Hand a refused reference back to the AGENT, keeping what is already made.
+
+    The code used to choose for it — remix an earlier clip, borrow an accepted
+    picture, else the prompt alone — and on a live reel that silently produced a
+    worse video than asking would have: four shots in a row each remixed the one
+    before (the tool's own drift warning fired), and because a remix inherits its
+    source's duration the reel came out 48.6s instead of the 60.3s planned. The
+    agent had other panels it could have passed and was never given the chance.
+
+    Only the AGENT knows which other picture shows this beat, so only the agent
+    can answer. The clips already rendered are saved and named, so re-calling
+    costs one shot rather than the whole sequence.
+    """
+    rendered = []
+    for position, clip in enumerate(clips, start=1):
+        try:
+            path = save_bytes(clip, "mp4")
+        except Exception as exc:  # noqa: BLE001 - losing one clip is not fatal
+            logger.warning("Could not keep shot %d for re-use: %s", position, exc)
+            continue
+        row = next((d for d in details if d["shot"] == position), {})
+        rendered.append({"shot": position, "asset_path": path,
+                         "seconds": row.get("seconds")})
+    paths = [r["asset_path"] for r in rendered]
+    logger.info("Shot %d's reference was refused (%s); returning %d rendered clip(s) "
+                "to the agent", shot, reason[:120], len(paths))
+    return {
+        "error": "reference_refused",
+        "shot": shot,
+        "asset_path": asset_path,
+        "reason": reason,
+        "rendered": rendered,
+        "rendered_asset_paths": paths + [""] * (total - len(paths)),
+        "message": (
+            f"Sora refused the reference image for shot {shot} ({asset_path}): {reason}. "
+            f"Nothing else was rendered, and the {len(paths)} clip(s) already made are "
+            f"kept. Decide what shot {shot} should use, then call this tool AGAIN with "
+            f"the SAME scenes and `rendered_asset_paths` set to the list above so those "
+            f"clips are re-used instead of paid for twice. Your options for "
+            f"`reference_asset_paths[{shot - 1}]`: a DIFFERENT picture of this beat "
+            f"(best — if the reason is a moderation block it is that panel, not the "
+            f"account), or \"\" to render the shot without one, which anchors it by "
+            f"remix instead and inherits the source clip's length. A re-used clip "
+            f"cannot be a remix source, so a later shot chaining from one falls back."
+        ),
+    }
+
+
 def _looks_like_reference_rejection(detail: str) -> bool:
     return looks_like_reference_rejection(detail)
 
@@ -429,6 +498,8 @@ async def perform_create_sequence(
     reference_asset_paths: list[str] | None = None,
     scene_continuity: list[str] | None = None,
     scene_remix_from: list[int] | None = None,
+    on_reference_refused: str = "ask",
+    rendered_asset_paths: list[str] | None = None,
 ) -> dict:
     """Generate each scene, then merge into one MP4.
 
@@ -504,6 +575,13 @@ async def perform_create_sequence(
 
     reference: bytes | None = None      # the previous shot's final frame
     refused_seeds: list[int] = []
+    # What Sora ACTUALLY said about each refused picture, by shot. The note used
+    # to assert "it rejects images containing human faces" whatever came back —
+    # and a live reel was refused with `moderation_blocked`, which is Azure's
+    # content filter and covers far more than faces. The real reason was logged
+    # and then dropped, so the agent was told a cause the code had invented and
+    # could not act on the one it had.
+    refusal_reasons: dict[int, str] = {}
     failed_shots: list[dict] = []
     timing_notes: list[str] = []
     # Sora refuses ANY input_reference showing a human face, whoever drew it. One
@@ -529,10 +607,40 @@ async def perform_create_sequence(
             f"duration, so every chained shot renders at {lengths[0]}s. Pick ONE clip "
             f"length and write each scene to fill it.")
 
+    reuse = list(rendered_asset_paths or [])
+
     for index, (scene, seconds) in enumerate(zip(scenes, lengths), start=1):
         shot_mode = per_shot_mode[index - 1] or mode
         is_cut = shot_mode in {"cut", "none"} and index > 1
         seed = seeds[index - 1]
+
+        # A clip this sequence already rendered on an earlier call (see the
+        # `reference_refused` return below). Re-using it is the whole reason the
+        # agent can be asked what to do about a refused picture without the
+        # question costing a minute of Sora time per shot already finished.
+        already = reuse[index - 1] if index - 1 < len(reuse) else ""
+        if already:
+            try:
+                clip = await asyncio.to_thread(read_bytes, already)
+            except Exception as exc:  # noqa: BLE001 - render it again rather than fail
+                logger.warning("Could not re-use the clip for shot %d (%s); "
+                               "rendering it again", index, exc)
+            else:
+                clips.append(clip)
+                try:
+                    actual = round(await asyncio.to_thread(video.duration_seconds, clip), 1)
+                except Exception:  # noqa: BLE001
+                    actual = float(seconds)
+                previous_seconds = actual
+                details.append({"shot": index, "seconds": actual, "how": "reused",
+                                "job_id": ""})
+                logger.info("Shot %d/%d re-used from %s (%ss)", index, len(scenes),
+                            already.rsplit("/", 1)[-1], actual)
+                # Deliberately no job id: a Sora job exists only on the resource
+                # that made it and only for a while, so a re-used clip cannot be
+                # a remix SOURCE. A later shot chaining from it falls back the
+                # usual way, and `timing_notes` says so.
+                continue
 
         # Which earlier clip this shot is edited FROM. Named shot, else the one
         # just before. A source that does not exist yet (or failed) falls back to
@@ -619,9 +727,21 @@ async def perform_create_sequence(
                 # trailer: shots 2 and 6 were the only unanchored ones, and they
                 # were the only ones whose cast changed.
                 if from_image and _looks_like_reference_rejection(detail):
+                    reason = _refusal_reason(detail)
+                    if (on_reference_refused or "ask").lower() == "ask":
+                        # The code cannot know which OTHER picture would do —
+                        # the agent saw the panels and wrote the scene. Hand the
+                        # decision back with everything already rendered, so
+                        # asking costs nothing but this one shot.
+                        logger.info("Reference image refused for shot %d (%s); asking "
+                                    "the agent", index, detail[:160])
+                        return _reference_refused(
+                            state, index, supplied[index - 1], reason, clips, details,
+                            len(scenes))
                     logger.info("Reference image refused for shot %d (%s); falling back "
                                 "to this sequence's own continuity", index, detail[:160])
                     refused_seeds.append(index)
+                    refusal_reasons[index] = reason
                     frames_refused = True
                     # 1. Edit an earlier clip of this sequence. The strongest
                     #    anchor there is: it carries the cast, wardrobe, world and
@@ -776,12 +896,19 @@ async def perform_create_sequence(
         result["reference_images_given"] = asked_for
         notes = list(seed_notes)
         if refused_seeds:
+            # Quote Sora, do not diagnose for it: "moderation_blocked" and a face
+            # rejection need different fixes (a different panel vs. a description
+            # in `style`), and only the real message tells them apart.
+            per_shot = "; ".join(
+                f"shot {i}: {refusal_reasons.get(i) or 'no reason given'}"
+                for i in refused_seeds)
             notes.append(
                 f"Sora refused the reference image on shot(s) "
-                f"{', '.join(str(i) for i in refused_seeds)} — it rejects images "
-                f"containing human faces. Those shots fell back to this sequence's own "
-                f"continuity instead (`how` says what each one used); describe the "
-                f"character IN `style` too, since that is what survives every refusal.")
+                f"{', '.join(str(i) for i in refused_seeds)} — {per_shot}. Those shots "
+                f"fell back to this sequence's own continuity instead (`how` says what "
+                f"each one used). If the reason is a face, describe the character IN "
+                f"`style`, which survives every refusal; if it is moderation, the PANEL "
+                f"is the problem — pass a different one.")
         stranded = [row["shot"] for row in details
                     if row.get("how", "") == "create(image refused)"]
         if stranded:
@@ -963,6 +1090,8 @@ def _make_create_sequence(state: dict):
         reference_asset_paths: list[str] | None = None,
         scene_continuity: list[str] | None = None,
         scene_remix_from: list[int] | None = None,
+        rendered_asset_paths: list[str] | None = None,
+        on_reference_refused: str = "ask",
     ) -> dict:
         """Generate several Sora clips and merge them into one video.
 
@@ -1059,6 +1188,23 @@ def _make_create_sequence(state: dict):
                 WITH an accepted picture is not chained at all, so giving every
                 shot its own image opts the whole video out of remix.
             reference_asset_path: Shorthand for a single image on shot 1.
+            on_reference_refused: What to do when Sora rejects one of your
+                pictures. **"ask"** (the default) stops there and returns
+                ``error="reference_refused"`` with the reason Sora gave, the shot,
+                and every clip already rendered — you then choose a DIFFERENT
+                picture for that shot, or ``""`` to render it without one, and
+                call again. "fallback" lets the tool pick for you (remix an
+                earlier shot, else a picture already accepted, else the prompt
+                alone); that always finishes, but it silently changed a reel's
+                length — a remix inherits its source's duration — and drifted the
+                cast across four chained shots. Prefer "ask" when you have other
+                panels to offer; "fallback" when you have none.
+            rendered_asset_paths: Clips this sequence ALREADY made, one per shot,
+                ``""`` where there is none. Pass back the list a
+                ``reference_refused`` result hands you, so a second attempt pays
+                only for the shots still missing. A re-used clip has no Sora job
+                id, so it cannot be a remix SOURCE — a later shot chaining from
+                one falls back, and ``timing_notes`` says so.
 
         Returns the merged ``asset_path``, its **measured** duration, and per-shot
         detail: ``how`` says whether a shot used its image ("create+image"), the
@@ -1079,8 +1225,14 @@ def _make_create_sequence(state: dict):
             orientation=orientation, continuity=continuity, scene_seconds=scene_seconds,
             reference_asset_path=reference_asset_path,
             reference_asset_paths=reference_asset_paths,
-            scene_continuity=scene_continuity, scene_remix_from=scene_remix_from)
-        if result.get("error"):
+            scene_continuity=scene_continuity, scene_remix_from=scene_remix_from,
+            rendered_asset_paths=rendered_asset_paths,
+            on_reference_refused=on_reference_refused)
+        # `reference_refused` is a QUESTION, not a failure: nothing is wrong with
+        # the video pipeline and the agent is expected to call straight back with
+        # a different picture. Counting it toward the circuit breaker would let
+        # two refused panels lock video generation for the rest of the run.
+        if result.get("error") and result["error"] != "reference_refused":
             state["video_failures"] = state.get("video_failures", 0) + 1
         return result
 

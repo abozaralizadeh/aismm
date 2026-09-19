@@ -359,6 +359,15 @@ def _run_sequence(scenes, **kwargs):
     return asyncio.run(sequence_tool.perform_create_sequence({}, scenes, **kwargs))
 
 
+def _fallback_sequence(scenes, **kwargs):
+    """The pre-"ask" behaviour: the code picks the fallback itself.
+
+    Still supported and still tested — an operator may prefer a video that always
+    completes over one that stops to ask — but it is no longer the default."""
+    kwargs.setdefault("on_reference_refused", "fallback")
+    return _run_sequence(scenes, **kwargs)
+
+
 def test_each_shot_gets_its_own_image(seq, monkeypatch, tmp_path):
     """The fix for one seed doing the work of a whole sequence."""
     paths = _panels(monkeypatch, tmp_path, 3)
@@ -532,7 +541,7 @@ def test_a_refused_image_falls_back_to_remixing_the_sequence(refuse_one, monkeyp
     """Rung 1, and the fix for the reported bug: an earlier clip of this same
     sequence carries the cast the refused panel was chosen to supply."""
     paths = _panels(monkeypatch, tmp_path, 2)
-    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    result = _fallback_sequence(["a", "b"], reference_asset_paths=paths)
     assert refuse_one["remixes"] == ["job-1"]
     assert result["shots"][1]["how"] == "remix(shot 1, image refused)"
 
@@ -540,13 +549,27 @@ def test_a_refused_image_falls_back_to_remixing_the_sequence(refuse_one, monkeyp
 def test_the_shot_that_lost_its_image_is_not_counted_as_using_one(refuse_one,
                                                                   monkeypatch, tmp_path):
     paths = _panels(monkeypatch, tmp_path, 2)
-    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    result = _fallback_sequence(["a", "b"], reference_asset_paths=paths)
     assert result["reference_images_used"] == 1
     assert result["reference_images_given"] == 2
-    assert any("rejects images containing human faces" in note
+    # QUOTE Sora, do not diagnose for it. The note used to assert "it rejects
+    # images containing human faces" whatever came back — and a live reel was
+    # refused with `moderation_blocked`, which is the content filter and needs a
+    # different panel, not a better `style` block.
+    assert any("input_reference contains a human face" in note
                for note in result["reference_notes"])
-    assert any("describe the character IN `style`" in note
-               for note in result["reference_notes"])
+    assert not any("it rejects images containing human faces" in note
+                   for note in result["reference_notes"])
+
+
+def test_the_refusal_note_quotes_sora_rather_than_guessing(monkeypatch, tmp_path):
+    """A moderation block is not a face rejection, and the fix is not the same."""
+    from aismm.tools import sequence_tool as st
+
+    detail = ("Sora job video_6aaf06e3 failed: {'code': 'moderation_blocked', "
+              "'message': 'The request is blocked by our moderation system'}")
+    assert st._refusal_reason(detail).startswith("moderation_blocked: ")
+    assert "moderation system" in st._refusal_reason(detail)
 
 
 def test_a_refused_image_on_shot_one_reuses_no_picture_it_does_not_have(refuse_one,
@@ -563,7 +586,7 @@ def test_a_refused_image_on_shot_one_reuses_no_picture_it_does_not_have(refuse_o
         return b"clip", "job-1", {"endpoint": "https://e"}
 
     monkeypatch.setattr(sequence_tool, "create_clip_with_failover", refuse_first)
-    result = _run_sequence(["a", "b"], reference_asset_paths=[path, ""])
+    result = _fallback_sequence(["a", "b"], reference_asset_paths=[path, ""])
     assert result["shots"][0]["how"] == "create(image refused)"
     assert any("no earlier clip" in note for note in result["reference_notes"])
 
@@ -574,7 +597,7 @@ def test_a_second_refusal_borrows_a_picture_sora_already_accepted(refuse_one,
     but a picture Sora has already taken is the last anchor available."""
     paths = _panels(monkeypatch, tmp_path, 2)
     refuse_one["state"]["remix_fails"] = True
-    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    result = _fallback_sequence(["a", "b"], reference_asset_paths=paths)
     assert refuse_one["remixes"] == ["job-1"]              # tried, and failed
     assert result["shots"][1]["how"] == "create+image(shot 1's, image refused)"
     assert refuse_one["creates"][-1] is not None           # a real picture went out
@@ -671,3 +694,100 @@ def test_the_image_tool_scopes_painting_video_frames_to_a_non_human_cast():
     assert "works only for a\n                stylised NON-HUMAN cast" in source
     assert "either every\n                shot gets one" in source
     assert "Do NOT paint frames here to feed a video" not in source
+
+
+# --- a refused picture is the AGENT's decision, not the code's ------------------------- #
+# Live reel (trace 01a0bbaa): 8 references given, 4 refused. The code chose the
+# fallback for all four and the result was measurably worse than asking would
+# have been — shots 4,5,6,7 each remixed the one before, so the tool's own
+# drift warning fired, and because a remix inherits its source's duration the
+# reel came out 48.6s against the 60.3s planned. The agent had other saved panels
+# and was never offered the choice. Only it knows which picture shows that beat.
+
+def test_a_refused_reference_stops_and_asks(refuse_one, monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 2)
+    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    assert result["error"] == "reference_refused"
+    assert result["shot"] == 2
+    assert result["asset_path"] == paths[1]
+    assert "human face" in result["reason"]
+
+
+def test_the_clips_already_paid_for_come_back(refuse_one, monkeypatch, tmp_path):
+    """Asking must not cost the shots already rendered, or nobody would ask."""
+    paths = _panels(monkeypatch, tmp_path, 2)
+    result = _run_sequence(["a", "b"], reference_asset_paths=paths)
+    assert [r["shot"] for r in result["rendered"]] == [1]
+    assert result["rendered"][0]["asset_path"]
+    # padded to the full shot count so it lines up with `scenes` on the re-call
+    assert len(result["rendered_asset_paths"]) == 2
+    assert result["rendered_asset_paths"][1] == ""
+
+
+def test_the_message_names_both_ways_out(refuse_one, monkeypatch, tmp_path):
+    paths = _panels(monkeypatch, tmp_path, 2)
+    message = _run_sequence(["a", "b"], reference_asset_paths=paths)["message"]
+    assert "rendered_asset_paths" in message
+    assert "DIFFERENT picture" in message
+    assert 'reference_asset_paths[1]' in message
+
+
+def test_a_rendered_clip_is_reused_not_regenerated(seq, monkeypatch, tmp_path):
+    """The re-call after the agent swaps a picture must pay for the new shot only."""
+    clip = tmp_path / "shot1.mp4"
+    clip.write_bytes(b"clip")
+    monkeypatch.setattr(sequence_tool, "read_bytes", lambda p: b"clip")
+
+    result = _run_sequence(["a", "b"], rendered_asset_paths=[str(clip), ""])
+    assert result["shots"][0]["how"] == "reused"
+    assert len(seq["creates"]) == 1, "shot 1 was rendered again"
+
+
+def test_a_reused_clip_is_not_offered_as_a_remix_source(seq, monkeypatch, tmp_path):
+    """A Sora job id exists only on the resource that made it — a clip read back
+    from disk has none, so a later shot cannot edit it."""
+    clip = tmp_path / "shot1.mp4"
+    clip.write_bytes(b"clip")
+    monkeypatch.setattr(sequence_tool, "read_bytes", lambda p: b"clip")
+
+    result = _run_sequence(["a", "b"], rendered_asset_paths=[str(clip), ""],
+                           continuity="remix")
+    assert result["shots"][0]["job_id"] == ""
+    assert seq["remixes"] == []          # shot 2 could not chain from a re-used clip
+
+
+def test_an_unreadable_clip_is_rendered_again_rather_than_failing(seq, monkeypatch):
+    def boom(_path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(sequence_tool, "read_bytes", boom)
+    result = _run_sequence(["a", "b"], rendered_asset_paths=["/gone.mp4", ""])
+    assert result.get("error") is None
+    assert result["clips_merged"] == 2
+
+
+def test_the_old_automatic_fallback_is_still_available(refuse_one, monkeypatch, tmp_path):
+    """An operator may prefer a video that always completes over one that asks."""
+    paths = _panels(monkeypatch, tmp_path, 2)
+    result = _fallback_sequence(["a", "b"], reference_asset_paths=paths)
+    assert result.get("error") is None
+    assert result["clips_merged"] == 2
+
+
+def test_the_prompt_tells_the_agent_how_to_answer_the_question():
+    """A tool that asks is useless if the agent reads the question as a failure."""
+    from aismm.agent.prompts import MANAGER_INSTRUCTIONS as p
+
+    assert 'error="reference_refused"' in p
+    assert "That is a question, not a" in p
+    assert "moderation_blocked` → that PANEL is the problem" in p
+    assert "rendered_asset_paths" in p
+    assert "do not\n       re-send the same picture" in p
+
+
+def test_a_refused_reference_does_not_trip_the_video_circuit_breaker():
+    """Two refused panels must not lock video generation for the whole run."""
+    import inspect
+
+    source = inspect.getsource(sequence_tool)
+    assert 'result["error"] != "reference_refused"' in source

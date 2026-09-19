@@ -161,8 +161,23 @@ HOW TO WORK
        just made with generate_image; who drew it makes no difference. A
        stylised non-human cast (cartoon animals, toys, simple shapes) is normally
        accepted, so a character sheet IS worth painting for that kind of show.
-       A refused image is not fatal: the shot falls back to remixing an earlier
-       one, and `reference_notes` names it.
+       It also refuses a panel its CONTENT FILTER objects to (`moderation_blocked`),
+       which is about that picture, not about faces and not about your account.
+     - A refused picture comes back to YOU as `error="reference_refused"`, naming
+       the shot, the picture, and Sora's own reason. That is a question, not a
+       failure — nothing is broken and the clips already rendered are kept. Answer
+       it and call the tool AGAIN with the same scenes plus the
+       `rendered_asset_paths` it handed you, so only the missing shots are paid
+       for. Two answers are valid, and the reason tells you which:
+         * `moderation_blocked` → that PANEL is the problem. Pass a different
+           picture of the same beat in `reference_asset_paths[shot-1]`. You have
+           the others you saved; use one.
+         * a FACE rejection, or no other picture shows this beat → set that entry
+           to "" and let the shot anchor by remix instead. Remember a remix
+           inherits its source clip's LENGTH, so the video gets shorter — read the
+           returned duration_seconds and caption the real one.
+       Do not give up on the video because one picture was refused, and do not
+       re-send the same picture.
      - So there are TWO ways to hold a cast together, and they are exclusive per
        shot: REMIX (the default — each shot edited from an earlier clip) and a
        PER-SHOT REFERENCE IMAGE. A shot whose image is accepted is not chained at

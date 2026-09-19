@@ -923,6 +923,28 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   silently opts the whole video out of remix and `scene_remix_from` never applies. A seven-shot
   trailer planned `[0, 1, 2, 2, 4, 5, 6]` and remixed nothing. That case is now a `timing_notes`
   entry naming the unchained shots.
+- **A refused reference is the AGENT's decision now, not the code's** (`on_reference_refused`,
+  default `"ask"`). Reported as "why are some videos generated without the reference picture" and
+  backed by trace `01a0bbaa`: 8 references given, 4 refused, and choosing the fallback for all four
+  produced a measurably WORSE video than asking would have — shots 4–7 each remixed the one before
+  (the tool's own drift warning fired) and, because a remix inherits its source's duration, the reel
+  came out **48.6s against the 60.3s planned**. The agent had other saved panels and was never
+  offered the choice; only it knows which picture shows that beat. So the first refusal now returns
+  `error="reference_refused"` with the shot, the picture, Sora's own reason — and **every clip
+  already rendered, saved and named** — so answering costs one shot, not the sequence
+  (`rendered_asset_paths` feeds them back). Three things that make it safe: a re-used clip has **no
+  job id**, so it cannot be a remix SOURCE (a Sora job lives only on the resource that made it) and
+  a later shot chaining from one falls back; `reference_refused` is **excluded from the
+  `video_failures` circuit breaker**, or two refused panels would lock video generation for the rest
+  of the run; and the prompt tells the agent how to answer, or it reads the question as a failure.
+  `"fallback"` keeps the old automatic behaviour for a pool of panels with no alternatives.
+- **Quote Sora's refusal, never diagnose it.** The note asserted "it rejects images containing human
+  faces" whatever came back, while the live refusals were `moderation_blocked` — the Azure content
+  filter, which is about that PANEL and covers far more than faces. The real code and message were
+  logged and then dropped, so the agent was told a cause the code invented and could not act on the
+  one it had. `_refusal_reason` pulls the code+message out of the job error and
+  `reference_notes`/`reason` carry it verbatim, because the two need opposite fixes: a face means
+  describe the character in `style`, a moderation block means pass a different picture.
 - **A refused reference falls back to the sequence's own continuity, never to nothing.** The
   earlier rule — retry that shot WITHOUT the image, since a remix "would quietly answer a different
   request" — is REVERSED: the picture is out of play either way (Sora will not look at it), so the
