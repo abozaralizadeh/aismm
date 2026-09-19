@@ -1,6 +1,8 @@
 # --- Core: OpenAI Agents SDK + Azure OpenAI ---
-openai-agents>=0.0.14
-openai>=1.40.0
+# These two move TOGETHER: openai-agents 0.22 requires `openai<4,>=3.0.0`, so a
+# floor that still admits openai 1.x/2.x resolves to a pair that cannot run.
+openai-agents>=0.22.0
+openai>=3.0.0,<4
 
 # --- HTTP / media / config ---
 httpx>=0.27.0
@@ -32,7 +34,14 @@ Flask[async]>=3.0.0
 # Routes the Agents SDK tracer into LangSmith (SandBox/ComicBook pattern). Inert
 # unless LANGCHAIN_API_KEY is set, so it is a hard dep like in SandBox — the tool
 # being merely "optional" is why traces silently never appeared.
-langsmith>=0.4.0
+# 0.13+ ingests through `POST /runs/multipart`. Older SDKs post to
+# `POST /runs/batch`, which LangSmith has DEPRECATED (disruption from 31 Jan
+# 2027) — that is what the "calls to a deprecated API endpoint" banner in the
+# LangSmith UI was reporting. The floor is what fixes it: a fresh install on a
+# lower pin would quietly go back to the old endpoint. The client still falls
+# back to /runs/batch when a server does not advertise
+# `batch_ingest_config.use_multipart_endpoint`, so self-hosted stays supported.
+langsmith>=0.13.0
 
 # --- Storage / persistence ---
 # Azure Table (state) + Blob (media), the SandBox setup. Inert unless
