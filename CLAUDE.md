@@ -1017,6 +1017,28 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   (`video_tool`) — so shots 2..n don't re-buy the same discovery; it is deliberately **not** process-
   wide, since a rotated key is fixed between runs. A skipped endpoint is still NAMED in the final
   error, or skipping would hide the diagnosis.
+- **The pool REMEMBERS which resources are dead, or it is not load balancing.** The point of the
+  pool is to route around a resource that is down — an expired subscription, a rotated key, a model
+  never deployed — but the discovery used to die with the caller (a per-sequence `unusable` dict).
+  So every run started blind, the round-robin handed out the same dead member first, and every run
+  paid the same 401 before reaching the one that works (run 5afab777: veronica 401 → gioak, on a
+  pool where veronica had been dead for days). `sora_config` now keeps a process-wide health map
+  and `next_resource` PREFERS the members that can actually serve. Measured on that pool shape:
+  8-shot sequences went from 2 wasted calls **every** run to 2 on the first and **0** after.
+  Four things hold it together:
+  **(1) A verdict EXPIRES** (`health_ttl_seconds`, `SORA_HEALTH_TTL_SECONDS`, 900s). Both permanent
+  failures are fixed in Azure, where this process cannot see it, so a forever-blacklist would need a
+  restart to undo. **(2) Keyed on endpoint AND a fingerprint of the key** — the fix for a rejected
+  key is a *different key on that same endpoint*, and keying on the endpoint alone would leave the
+  fixed resource skipped. **(3) The preference lives in `next_resource`, never in the failover's
+  `known` dict.** `known` is a HARD skip that feeds the "every resource has already answered" guard;
+  folding remembered verdicts in there made a pool whose members were all stale-bad fail without
+  attempting a single call, unable ever to climb back out. A remembered verdict is a GUESS about a
+  resource nobody has called this run, so it steps aside only while a better member exists.
+  **(4) Transient failures (429/5xx) are never remembered** — they say nothing about whether the
+  resource can serve Sora. `_report_skips` logs the skip-set when it CHANGES, not once per clip,
+  because a pool quietly routing around its dead members looks identical in a log to a pool that
+  only ever had one member.
 - **A create can never be a free health probe: Azure validates PARAMETERS before deployment
   routing.** Measured — `seconds=3` returns 400 on a resource with no Sora deployment, so an
   intentionally-invalid create tells you nothing about whether the model is there. The listing is

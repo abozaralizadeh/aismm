@@ -61,3 +61,16 @@ from aismm.store.local_store import LocalStore  # noqa: E402
 def store(tmp_path):
     """A LocalStore backed by a throwaway SQLite file."""
     return LocalStore(db_url=f"sqlite:///{tmp_path/'test.sqlite'}")
+
+@pytest.fixture(autouse=True)
+def _forget_sora_pool_health():
+    """The Sora pool's health memory is process-wide by design — it has to
+    outlive a run to be worth anything — so it must be cleared between tests or
+    one test's dead resource is another's mystery skip."""
+    from aismm.tools import sora_client, sora_config
+
+    sora_config.reset_health()
+    sora_client._reported_skips.clear()      # the "say it when it changes" latch
+    yield
+    sora_config.reset_health()
+    sora_client._reported_skips.clear()

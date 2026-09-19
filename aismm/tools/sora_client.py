@@ -248,6 +248,33 @@ def _pool_failure_message(failures: dict[str, str], unusable: dict[str, str]) ->
             "_MODEL_SORA) with: python scripts/smoke_sora.py --check")
 
 
+# The last skip-set reported, so the log says it when it CHANGES rather than once
+# per clip: an eight-shot sequence would otherwise repeat the same paragraph
+# eight times, which is the sort of noise that hides the line that matters.
+_reported_skips: set[str] = set()
+
+
+def _report_skips(remembered: dict[str, str]) -> None:
+    """Say which resources the pool is routing around, when that changes.
+
+    Worth saying at all because a pool quietly skipping its dead members looks
+    identical in a log to a pool that only ever had one member — which is what
+    made a three-resource pool read as "load balancing isn't working".
+    """
+    global _reported_skips
+    current = set(remembered)
+    if current == _reported_skips:
+        return
+    _reported_skips = current
+    if not current:
+        logger.info("Sora pool: every resource is healthy again")
+        return
+    logger.info("Sora pool: %d resource(s) healthy; routing around %s",
+                max(len(config.pool()) - len(current), 0),
+                "; ".join(f"{e.split('://')[-1]} ({why[:90]})"
+                          for e, why in remembered.items()))
+
+
 async def create_clip_with_failover(
     prompt: str, seconds: int, size: str, *,
     ref_image_bytes: bytes | None = None, max_attempts: int | None = None,
@@ -267,14 +294,29 @@ async def create_clip_with_failover(
     the same doomed call again. Those endpoints are still NAMED in the final
     error, so skipping one never hides it.
 
+    That dict is now SEEDED from — and written back to — the pool-wide health
+    memory in ``sora_config``, so the discovery also outlives the run that paid
+    for it. A resource that has been dead for days stops being the first thing
+    every new run tries; one whose key is fixed comes back by itself when the
+    health TTL expires.
+
     Returns ``(mp4_bytes, job_id, resource)``. The serving resource comes back
     because a Sora job id only exists there: any follow-up call for this
     clip (poll, download, remix) must target that same resource.
     """
     attempts = max_attempts or config.max_attempts()
     known = unusable if unusable is not None else {}
+    # NOTE what is deliberately NOT done here: the cross-run health memory is not
+    # merged into `known`. `known` is a HARD skip — proved dead by this very
+    # sequence — and it feeds the "every resource has already answered" guard
+    # below. A remembered verdict is a GUESS about a resource nobody has called
+    # this run, so folding it in here made a pool whose members were all stale-bad
+    # fail without attempting a single call, and it could never climb back out.
+    # The preference belongs in `config.next_resource`, which skips a remembered
+    # bad member only while a better one exists and otherwise tries it anyway.
     failures: dict[str, str] = {}
     tried: set[str] = set()
+    _report_skips(config.known_unusable())
     for attempt in range(attempts):
         spent = tried | set(known)
         if not [r for r in config.pool() if r["endpoint"] not in spent]:
@@ -283,6 +325,7 @@ async def create_clip_with_failover(
         tried.add(resource["endpoint"])
         try:
             mp4, job_id = await create_clip(resource, prompt, seconds, size, ref_image_bytes)
+            config.mark_healthy(resource)
             if attempt:
                 logger.info("Sora clip succeeded on %s after %d failed attempt(s)",
                             _host(resource), attempt)
@@ -297,6 +340,8 @@ async def create_clip_with_failover(
         failures[resource["endpoint"]] = f"{reason} ({detail})" if reason else detail
         if reason:
             known[resource["endpoint"]] = f"{reason} ({detail})"
+            # Remember it for the NEXT run too, not just the rest of this one.
+            config.mark_unusable(resource, f"{reason} ({detail})")
         logger.warning("Sora clip failed (attempt %d/%d on %s): %s",
                        attempt + 1, attempts, _host(resource),
                        failures[resource["endpoint"]][:400])

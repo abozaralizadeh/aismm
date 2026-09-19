@@ -124,6 +124,12 @@ class SoraSettings:
     # (min(pool size, 3)) — enough to route around a dead endpoint without
     # burning a whole run on a pool of slow timeouts.
     max_attempts: int = 0
+    # How long a resource stays marked unusable after it proves it cannot serve
+    # Sora (key rejected, model not deployed). NOT forever: the fix for both is a
+    # change on the Azure side that this process cannot observe, so the pool
+    # re-tries a bad member after the TTL and heals itself. 0 disables the memory
+    # and every run rediscovers the dead resources from scratch.
+    health_ttl_seconds: int = 900
 
     def pool(self) -> list[dict]:
         """Return the Sora resource pool as a list of {endpoint, key, model}.
@@ -464,6 +470,7 @@ def load_settings() -> Settings:
             models=_split_csv(os.getenv("AZURE_OPENAI_MODEL_SORA")) or ["sora-2"],
             api_version=os.getenv("AZURE_OPENAI_API_VERSION_SORA", "preview"),
             max_attempts=int(os.getenv("SORA_MAX_ATTEMPTS", "0") or 0),
+            health_ttl_seconds=int(os.getenv("SORA_HEALTH_TTL_SECONDS", "900") or 0),
         ),
         dashboard=DashboardSettings(
             host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
