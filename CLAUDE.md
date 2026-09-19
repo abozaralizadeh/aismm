@@ -1059,6 +1059,21 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
 - **Tests must not read the developer's `.env`** — `tests/conftest.py` pins the env vars settings are
   built from *before* `aismm` is imported (config reads env at import time). Add a pin there when a
   new setting would change behavior under test.
+- **"One Chromium per run" needs a LOCK, because the SDK calls tools in PARALLEL.** `get_browser`
+  and `get_context` were check-then-act — `if state.get("_browser") is None:` followed by two
+  `await`s before the assignment — so a turn that browsed ten pages at once had ten coroutines all
+  see `None`, all launch a browser, and all but the last write get discarded. Measured live (run
+  5afab777): **8 "Playwright Chromium started" in two seconds**, 7 contexts, and then 8
+  `RuntimeError: Event loop is closed` tracebacks after `RUN DONE` — `close_browser` can only close
+  the one browser `state` remembers, so the orphans are finalized by GC after the loop has gone.
+  That is the SAME leak that once starved the VM into 484-second launches and `Target crashed`.
+  Both slots now re-check **under** the lock, the identical discipline
+  `tokens.valid_access_token` already uses; the locks are per-run, created with `setdefault` (one
+  dict op, no `await` inside, so the lock itself cannot race), **separate** for browser and context
+  because `asyncio.Lock` is not reentrant and `get_context` needs a browser, and dropped by
+  `close_browser`. Keep the unlocked FAST PATH before the lock or every page queues behind it. A
+  second context is not merely wasteful either: `_drop_clearance_cookie` works per context, so
+  parallel browses in different contexts defeat the Cloudflare fix too.
 - **Playwright browsing** ([tools/browse_tool.py](aismm/tools/browse_tool.py)): one Chromium per run,
   cached on `state["_browser"]` and closed by `manager_agent` in a `finally` — AIBlog's lesson is
   that a browser finalized later by GC raises "Event loop is closed". **Wait properly or you scrape

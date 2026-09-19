@@ -26,6 +26,7 @@ the instance metadata (and its credentials) to the model.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import socket
@@ -161,17 +162,48 @@ def is_public_url(url: str) -> tuple[bool, str]:
 
 # --- browser lifecycle -------------------------------------------------------- #
 
-async def get_browser(state: dict):
-    """Lazily launch one Chromium per run and cache it on ``state``."""
-    if state.get("_browser") is None:
-        from playwright.async_api import async_playwright
+def _lock(state: dict, key: str) -> asyncio.Lock:
+    """The per-run lock for one lifecycle slot.
 
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-        state["_playwright"] = playwright
-        state["_browser"] = browser
-        logger.info("Playwright Chromium started")
+    ``setdefault`` is a single dict operation with no ``await`` inside it, so
+    creating the lock cannot itself race the way the thing it guards did.
+    Browser and context get SEPARATE locks: ``asyncio.Lock`` is not reentrant,
+    and ``get_context`` needs a browser.
+    """
+    return state.setdefault(key, asyncio.Lock())
+
+
+async def get_browser(state: dict):
+    """Lazily launch ONE Chromium per run and cache it on ``state``.
+
+    The check and the act must be under a lock. This was
+    ``if state.get("_browser") is None:`` followed by two ``await``s before the
+    assignment — and the Agents SDK issues tool calls in PARALLEL, so a turn that
+    browsed ten pages at once had ten coroutines all see ``None``, all launch a
+    Chromium, and all but the last write get thrown away. Measured on one live
+    run: eight "Playwright Chromium started" lines inside two seconds.
+
+    The orphans are not merely wasteful. ``close_browser`` can only close the one
+    browser ``state`` remembers, so the rest are finalized by the garbage
+    collector after the loop has gone — which is the
+    ``RuntimeError: Event loop is closed`` traceback storm at the end of the run,
+    one per leaked browser. Earlier this starved the VM badly enough that a
+    Chromium launch took 484s and runs died with ``Target crashed``.
+    """
+    if state.get("_browser") is not None:      # fast path: no lock once it exists
+        return state["_browser"]
+    async with _lock(state, "_browser_lock"):
+        # RE-CHECK under the lock — whoever waited here while another coroutine
+        # launched must use that browser, not start a second one.
+        if state.get("_browser") is None:
+            from playwright.async_api import async_playwright
+
+            playwright = await async_playwright().start()
+            browser = await playwright.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            state["_playwright"] = playwright
+            state["_browser"] = browser
+            logger.info("Playwright Chromium started")
     return state["_browser"]
 
 
@@ -210,19 +242,31 @@ async def _browser_user_agent(browser) -> str:
 
 
 async def get_context(state: dict):
-    """One browser context per run, presenting as an ordinary desktop Chrome."""
-    if state.get("_context") is None:
-        browser = await get_browser(state)
-        options = {}
-        try:
-            user_agent = await _browser_user_agent(browser)
-            if user_agent:
-                options["user_agent"] = user_agent
-        except Exception as exc:  # noqa: BLE001 - a plain context still browses
-            logger.warning("Could not read the browser User-Agent (%s); "
-                           "sites that refuse headless browsers may block this run", exc)
-        state["_context"] = await browser.new_context(**options)
-        logger.info("Browser context ready (ua=%s)", options.get("user_agent", "default"))
+    """One browser context per run, presenting as an ordinary desktop Chrome.
+
+    Locked for the same reason as :func:`get_browser`, and the same live run
+    showed it: seven "Browser context ready" lines. A second context is worse
+    than a second browser here — ``_drop_clearance_cookie`` works per context, so
+    parallel browses landing in different contexts defeat the Cloudflare fix too.
+
+    ``get_browser`` is awaited OUTSIDE this lock: it takes its own, and
+    ``asyncio.Lock`` is not reentrant.
+    """
+    if state.get("_context") is not None:
+        return state["_context"]
+    browser = await get_browser(state)
+    async with _lock(state, "_context_lock"):
+        if state.get("_context") is None:
+            options = {}
+            try:
+                user_agent = await _browser_user_agent(browser)
+                if user_agent:
+                    options["user_agent"] = user_agent
+            except Exception as exc:  # noqa: BLE001 - a plain context still browses
+                logger.warning("Could not read the browser User-Agent (%s); "
+                               "sites that refuse headless browsers may block this run", exc)
+            state["_context"] = await browser.new_context(**options)
+            logger.info("Browser context ready (ua=%s)", options.get("user_agent", "default"))
     return state["_context"]
 
 
@@ -246,6 +290,8 @@ async def _drop_clearance_cookie(context) -> None:
 async def close_browser(state: dict) -> None:
     """Close the run's browser. Call from a ``finally`` in the same event loop."""
     state.pop("_context", None)          # closed with the browser below
+    state.pop("_browser_lock", None)
+    state.pop("_context_lock", None)
     browser, playwright = state.pop("_browser", None), state.pop("_playwright", None)
     try:
         if browser is not None:

@@ -566,3 +566,133 @@ def test_the_tool_docstring_points_at_buttons_when_something_is_missing():
     doc = tool.description if hasattr(tool, "description") else tool.__doc__
     assert "buttons" in doc
     assert "click" in doc
+
+
+# --- one browser per run, even when ten tool calls arrive at once ---------------------- #
+# Live evidence (run 5afab777): EIGHT "Playwright Chromium started" lines and seven
+# "Browser context ready" inside two seconds, then eight
+# `RuntimeError: Event loop is closed` tracebacks after the run finished.
+#
+# `get_browser` was check-then-act — `if state.get("_browser") is None:` and then
+# two awaits before the assignment — and the Agents SDK calls tools in PARALLEL.
+# Every coroutine saw None, every one launched a Chromium, and all but the last
+# write were discarded. `close_browser` can only close the browser `state`
+# remembers, so the orphans were finalized by GC after the loop closed: that is
+# where the tracebacks come from, one per leak.
+
+class _RaceBrowser:
+    def __init__(self, counters):
+        self.counters = counters
+
+    async def new_context(self, **options):
+        await asyncio.sleep(0)               # a real one yields here
+        self.counters["contexts"] += 1
+        return _RaceContext()
+
+    async def close(self):
+        self.counters["closed"] += 1
+
+
+class _RaceContext:
+    async def new_page(self):
+        return _RacePage()
+
+    async def close(self):
+        return None
+
+
+class _RacePage:
+    async def evaluate(self, _script):
+        return "Mozilla/5.0 HeadlessChrome/149.0.0.0 Safari/537.36"
+
+
+def _fake_playwright(monkeypatch, counters):
+    """Stand in for `async_playwright()`, yielding at every await a real one does."""
+    class _Chromium:
+        async def launch(self, **kw):
+            await asyncio.sleep(0)           # the window the race opened in
+            counters["launched"] += 1
+            return _RaceBrowser(counters)
+
+    class _PW:
+        chromium = _Chromium()
+
+        async def stop(self):
+            counters["stopped"] += 1
+
+    class _Starter:
+        async def start(self):
+            await asyncio.sleep(0)
+            return _PW()
+
+    import playwright.async_api as pw
+    monkeypatch.setattr(pw, "async_playwright", lambda: _Starter())
+
+
+def test_ten_parallel_browses_launch_exactly_one_chromium(monkeypatch):
+    counters = {"launched": 0, "contexts": 0, "closed": 0, "stopped": 0}
+    _fake_playwright(monkeypatch, counters)
+    state = {}
+
+    async def go():
+        return await asyncio.gather(*[browse_tool.get_browser(state) for _ in range(10)])
+
+    browsers = asyncio.run(go())
+    assert counters["launched"] == 1, f"leaked {counters['launched'] - 1} browser(s)"
+    assert len({id(b) for b in browsers}) == 1      # everyone got the SAME one
+
+
+def test_ten_parallel_browses_build_exactly_one_context(monkeypatch):
+    """A second context also defeats the Cloudflare fix: `_drop_clearance_cookie`
+    works per context, so parallel browses in different contexts keep the token."""
+    counters = {"launched": 0, "contexts": 0, "closed": 0, "stopped": 0}
+    _fake_playwright(monkeypatch, counters)
+    state = {}
+
+    async def go():
+        return await asyncio.gather(*[browse_tool.get_context(state) for _ in range(10)])
+
+    contexts = asyncio.run(go())
+    assert counters["launched"] == 1
+    # one for the User-Agent probe, one for the run itself — never one per caller
+    assert counters["contexts"] == 2, counters
+    assert len({id(c) for c in contexts}) == 1
+
+
+def test_the_one_browser_that_is_kept_is_the_one_that_gets_closed(monkeypatch):
+    """No orphan survives the run — an unclosed browser is the GC finalizer that
+    raises "Event loop is closed" long after anyone can catch it."""
+    counters = {"launched": 0, "contexts": 0, "closed": 0, "stopped": 0}
+    _fake_playwright(monkeypatch, counters)
+    state = {}
+
+    async def go():
+        await asyncio.gather(*[browse_tool.get_context(state) for _ in range(6)])
+        await browse_tool.close_browser(state)
+
+    asyncio.run(go())
+    assert counters["launched"] == counters["closed"] == 1
+    assert counters["stopped"] == 1
+
+
+def test_the_fast_path_needs_no_lock(monkeypatch):
+    """Once it exists, a browse must not queue behind a lock for every page."""
+    counters = {"launched": 0, "contexts": 0, "closed": 0, "stopped": 0}
+    _fake_playwright(monkeypatch, counters)
+    state = {}
+    asyncio.run(browse_tool.get_browser(state))
+    state.pop("_browser_lock", None)                 # gone: the fast path must not need it
+    again = asyncio.run(browse_tool.get_browser(state))
+    assert again is state["_browser"]
+    assert counters["launched"] == 1
+
+
+def test_close_browser_drops_the_locks_too(monkeypatch):
+    """They are per-run state; leaving them on a reused dict would bind a lock to
+    an event loop that has gone."""
+    counters = {"launched": 0, "contexts": 0, "closed": 0, "stopped": 0}
+    _fake_playwright(monkeypatch, counters)
+    state = {}
+    asyncio.run(browse_tool.get_context(state))
+    asyncio.run(browse_tool.close_browser(state))
+    assert "_browser_lock" not in state and "_context_lock" not in state
