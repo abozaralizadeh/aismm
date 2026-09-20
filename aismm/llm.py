@@ -22,14 +22,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import threading
-from functools import lru_cache
 
 import openai
 from agents import (ModelSettings, OpenAIResponsesModel, RunConfig,
                     set_default_openai_client)
 from openai import AsyncAzureOpenAI
 
+from .async_clients import ClientCache
 from .config import LLMSettings, settings
 
 logger = logging.getLogger("aismm.llm")
@@ -249,41 +248,48 @@ def _fingerprint(llm: LLMSettings) -> str:
     ])
 
 
-_MODEL_CACHE: dict[str, OpenAIResponsesModel] = {}
-_MODEL_CACHE_LOCK = threading.Lock()
+# Clients are cached per (event loop, fingerprint) — see ``async_clients`` for why the
+# loop is half the key. The short version: every run is its own ``asyncio.run``, and a
+# pooled connection opened on a loop that has since closed raises "Event loop is closed"
+# out of the next run's first request.
+_CLIENTS = ClientCache("llm")
+
+
+def _client_for(llm: LLMSettings) -> AsyncAzureOpenAI:
+    """The client for one connection, shared by everything in THIS run."""
+    def build() -> AsyncAzureOpenAI:
+        client = _build_client(llm)
+        _log_endpoint(llm)
+        return client
+
+    return _CLIENTS.get(_fingerprint(llm), build)
 
 
 def build_model_for(llm: LLMSettings) -> OpenAIResponsesModel:
     """Return a Responses model bound to a SPECIFIC connection.
 
-    Unlike :func:`build_model`, this does **not** call
-    ``set_default_openai_client`` — concurrent scheduler runs each carry their
-    own client on the returned model, so a per-instruction override cannot
-    clobber another run's default client. Clients are reused across runs by a
-    fingerprint of the connection (secret hashed, never stored raw).
+    Unlike :func:`build_model`, this does **not** call ``set_default_openai_client`` —
+    concurrent scheduler runs each carry their own client on the returned model, so a
+    per-instruction override cannot clobber another run's default client.
+
+    The ``OpenAIResponsesModel`` wrapper is rebuilt each call (it is a name plus a
+    client reference); what is cached, and what matters, is the CLIENT underneath.
     """
-    key = _fingerprint(llm)
-    with _MODEL_CACHE_LOCK:
-        model = _MODEL_CACHE.get(key)
-        if model is None:
-            client = _build_client(llm)
-            _log_endpoint(llm)
-            model = OpenAIResponsesModel(model=llm.model, openai_client=client)
-            _MODEL_CACHE[key] = model
-        return model
+    return OpenAIResponsesModel(model=llm.model, openai_client=_client_for(llm))
 
 
-@lru_cache(maxsize=1)
-def _client():
-    client = _build_client(settings.llm)
+def _client() -> AsyncAzureOpenAI:
+    client = _client_for(settings.llm)
+    # Registered on every call rather than once per process: the SDK default must
+    # point at a client belonging to the CURRENT loop, and a stale one is exactly the
+    # failure above. Nothing issues requests through the default today (hosted tools
+    # ride the model's own client), so re-registering is cheap and strictly safer.
     set_default_openai_client(client)
-    _log_endpoint(settings.llm)
     return client
 
 
-@lru_cache(maxsize=1)
 def build_model() -> OpenAIResponsesModel:
-    """Return the shared Responses model used by every agent (env default).
+    """Return the Responses model used by the env-default connection.
 
     This still registers the client as the SDK default so the hosted
     ``WebSearchTool`` and any SDK-default consumers route through it.

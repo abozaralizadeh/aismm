@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import cooldown, engagement_ledger, logging_setup, publish_ledger, tokens
+from .async_clients import close_loop_clients
 from .config import settings
 from .agent import run_for_account
 from .llm import describe_model_error
@@ -51,9 +52,27 @@ _LOCK_HEARTBEAT = 60
 RUN_TIMEOUT_SECONDS = settings.run_timeout_seconds
 
 
+async def _closing_clients(coro):
+    """Await ``coro``, then close every API client bound to this event loop.
+
+    ``asyncio.run`` below CLOSES the loop when this returns, and an httpx pool holds
+    keep-alive sockets whose asyncio transports belong to it. Left open, the next run's
+    client reuses them and dies on ``loop.call_soon`` against a closed loop —
+    ``RuntimeError: Event loop is closed``, thrown by the first model call, 0.4s into a
+    run with nothing in it to blame. See ``aismm/async_clients.py``.
+
+    This is the boundary that OWNS the loop, so it is the one place that can guarantee
+    the teardown happens on every path, including a timeout or a crash.
+    """
+    try:
+        return await coro
+    finally:
+        await close_loop_clients()
+
+
 def _run_async(coro):
     """Run an async coroutine from a sync context (scheduler thread / CLI)."""
-    return asyncio.run(coro)
+    return asyncio.run(_closing_clients(coro))
 
 
 async def _with_timeout(coro, seconds: int = 0):

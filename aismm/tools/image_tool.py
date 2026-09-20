@@ -31,6 +31,7 @@ from agents import function_tool
 from openai import AsyncAzureOpenAI
 
 from ..assets import public_url, read_bytes, save_bytes
+from ..async_clients import ClientCache
 from ..config import ImageSettings, settings
 from .registry import register_tool
 
@@ -103,7 +104,11 @@ def resolve_size(size: str, orientation: str, model: str) -> tuple[str, str]:
 # hashed, never stored raw) so concurrent runs with DIFFERENT image configs never
 # clobber each other — the same rationale as ``llm.build_model_for``'s cache. A
 # per-instruction ``ImageSettings`` arrives on ``state["image_settings"]``.
-_clients: dict[str, AsyncAzureOpenAI] = {}
+#
+# The EVENT LOOP is the other half of the key (``async_clients``): a plain dict here
+# handed run N+1 a client whose pooled sockets belonged to run N's closed loop, which
+# is "Event loop is closed" out of the first image call.
+_clients = ClientCache("image")
 
 
 def _image_fingerprint(img: ImageSettings) -> str:
@@ -112,17 +117,15 @@ def _image_fingerprint(img: ImageSettings) -> str:
 
 
 def _client_for(img: ImageSettings) -> AsyncAzureOpenAI:
-    key = _image_fingerprint(img)
-    client = _clients.get(key)
-    if client is None:
-        client = AsyncAzureOpenAI(
+    def build() -> AsyncAzureOpenAI:
+        return AsyncAzureOpenAI(
             api_key=img.api_key,
             api_version=img.api_version,
             azure_endpoint=img.endpoint,
             timeout=600.0,
         )
-        _clients[key] = client
-    return client
+
+    return _clients.get(_image_fingerprint(img), build)
 
 
 def _build_kwargs(*, model: str, size: str, quality: str, output_format: str,

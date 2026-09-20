@@ -275,7 +275,9 @@ def test_build_model_for_reuses_a_client_per_fingerprint():
                       azure_api_version="2025-04-01-preview")
     a = llm_module.build_model_for(llm)
     b = llm_module.build_model_for(dataclasses.replace(llm))  # same fingerprint
-    assert a is b
+    # The model wrapper is a cheap name+client pair rebuilt per call; the CLIENT
+    # underneath (the thing that holds the connection pool) is what is shared.
+    assert a._client is b._client
 
 
 # --- run_for_account fails clearly with no accessible LLM ------------------------------- #

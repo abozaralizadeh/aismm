@@ -22,11 +22,11 @@ VERSION = "2025-04-01-preview"
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    llm_module._client.cache_clear()
-    llm_module.build_model.cache_clear()
+    from aismm import async_clients
+
+    async_clients.reset_caches()
     yield
-    llm_module._client.cache_clear()
-    llm_module.build_model.cache_clear()
+    async_clients.reset_caches()
 
 
 def _with_llm(monkeypatch, **llm_kwargs):

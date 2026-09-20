@@ -1395,6 +1395,28 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   Tavily, DDG) — one file.
 - **Async from sync**: orchestrator/dashboard drive async agent+platform calls via `asyncio.run`
   (see `orchestrator._run_async`, dashboard OAuth callback). Keep platform methods async.
+- **…and because every run is its OWN `asyncio.run`, an API client may never be cached across
+  runs** ([async_clients.py](aismm/async_clients.py)). `asyncio.run` closes its loop on the way
+  out, while an httpx pool keeps idle keep-alive sockets whose asyncio transports belong to that
+  loop; the next run reuses the cached client, the pool evicts one of those connections, and
+  `transport.close()` calls `loop.call_soon` on a loop that is gone — `RuntimeError: Event loop is
+  closed`, raised out of the very FIRST `client.responses.create`, failing the run in 0.4s with
+  nothing in it to blame. Two caches had it (`llm._MODEL_CACHE`, `image_tool._clients`) and both
+  had been correct for months: **`httpx2`/`httpcore2`, which openai 3.x brought in, propagate that
+  out of `handle_async_request` where the old httpx swallowed it** — so raising a dependency floor
+  is what turned a latent bug into four dead runs a night (b7dcfcb8, fe070394, e5878e37, 6da06258
+  on `pocvm`; the first run after each restart always worked, which is the signature). Reproduced
+  in six lines: one `httpx2.AsyncClient`, two `asyncio.run` calls against a keep-alive server, and
+  the second raises. So a cache key is **(running event loop, fingerprint)** and
+  `orchestrator._run_async` wraps the coroutine in `_closing_clients`, which closes this loop's
+  clients in a `finally` — the boundary that owns the loop is the only place that can guarantee it
+  on every path, including a timeout or a crash. Three rules hold it together: the stored loop is
+  compared with **`is`**, not `id()` (CPython reuses a freed loop's address, and serving a new run
+  the old one's dead client is the whole bug); a client whose loop is already gone is **dropped,
+  never closed** — closing it is precisely what raises, and GC closes the file descriptors
+  directly (a `ResourceWarning` at worst); and the within-run sharing is untouched, which is what
+  the pooling was ever for. Not the same bug as the Playwright one below — that leaks a
+  subprocess and fires AFTER `RUN DONE`; this one fails the run before it does any work.
 - **Secrets**: `.env`, `tokens.key`, and `data/` are git-ignored. Never commit tokens or print
   decrypted ones.
 - **Dashboard SSO** ([dashboard/sso.py](aismm/dashboard/sso.py)): generic OIDC (Google/Entra/Okta —
