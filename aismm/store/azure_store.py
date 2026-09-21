@@ -47,7 +47,7 @@ from ..models import (
     UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
 )
 from .base import (
-    Store, build_image_settings, build_llm_settings, build_sora_settings,
+    Store, build_git_settings, build_image_settings, build_llm_settings, build_sora_settings,
 )
 
 logger = logging.getLogger("aismm.store.azure")
@@ -213,6 +213,7 @@ class AzureStore(Store):
             "llm_config_id": i.llm_config_id,
             "image_config_id": i.image_config_id,
             "video_config_id": i.video_config_id,
+            "git_config_id": i.git_config_id,
             "task_type": i.task_type.value,
             "engagement_targets": i.engagement_targets,
             "engagement_policy": i.engagement_policy,
@@ -237,6 +238,7 @@ class AzureStore(Store):
             llm_config_id=e.get("llm_config_id", ""),
             image_config_id=e.get("image_config_id", ""),
             video_config_id=e.get("video_config_id", ""),
+            git_config_id=e.get("git_config_id", ""),
             task_type=InstructionTask(e.get("task_type", "publish")),
             engagement_targets=e.get("engagement_targets", ""),
             engagement_policy=e.get("engagement_policy", ""),
@@ -537,6 +539,13 @@ class AzureStore(Store):
             return settings.image
         secrets = self._decrypt_provider_secrets(cfg)
         return build_image_settings(cfg, api_key=secrets.get("api_key", ""))
+
+    def resolve_git_settings(self, config_id):
+        cfg = self.get_provider_config(config_id) if config_id else None
+        if cfg is None or cfg.kind != "git" or not cfg.enabled:
+            return None
+        secrets = self._decrypt_provider_secrets(cfg)
+        return build_git_settings(cfg, token=secrets.get("token", ""))
 
     def resolve_sora_settings(self, config_id):
         from ..config import settings

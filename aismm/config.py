@@ -115,6 +115,35 @@ class ImageSettings:
 
 
 @dataclass(frozen=True)
+class GitSettings:
+    """A read-only GitHub connection (a PAT) managed in Settings → Git connections.
+
+    There is deliberately NO ``.env`` default: a token that reads private code is
+    something a person grants to specific instructions, not deployment plumbing
+    every run inherits. ``api_url`` is operator-set (GitHub Enterprise Server is
+    ``https://HOST/api/v3``) and is the ONLY host the token is ever sent to — the
+    agent names repositories, never URLs. ``repos`` optionally narrows the
+    connection to ``owner/name`` entries (an ``owner/*`` entry allows a whole
+    owner); empty means everything the token itself can see.
+    """
+    token: str = ""
+    api_url: str = "https://api.github.com"
+    repos: tuple[str, ...] = ()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.token and self.api_url)
+
+    def allows(self, repo: str) -> bool:
+        if not self.repos:
+            return True
+        name = (repo or "").strip().lower()
+        owner = name.split("/", 1)[0]
+        wanted = {r.strip().lower() for r in self.repos}
+        return name in wanted or f"{owner}/*" in wanted
+
+
+@dataclass(frozen=True)
 class SoraSettings:
     endpoints: list[str] = field(default_factory=list)
     keys: list[str] = field(default_factory=list)

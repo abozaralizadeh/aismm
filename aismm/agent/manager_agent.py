@@ -173,6 +173,30 @@ def _resolve_provider(instruction: Instruction, store: Store, kind: str):
             else store.resolve_sora_settings(cfg_id))
 
 
+def _resolve_git(instruction: Instruction, store: Store):
+    """The Git connection this instruction's repository tools read through, or ``None``.
+
+    Same access gate as the other connections, with one difference that matters:
+    there is NO deployment default. An empty selection is "no git access", not
+    "the .env token" — a token that reads private code is granted per instruction.
+    ``None`` just leaves the git tools out of the run.
+    """
+    cfg_id = instruction.git_config_id
+    if not cfg_id:
+        return None
+    cfg = store.get_provider_config(cfg_id)
+    if cfg is None or cfg.kind != "git":
+        return None
+    workspace = store.get_workspace(instruction.workspace_id)
+    creator = workspace.created_by if workspace else ""
+    is_owner = (not settings.auth.enabled) or settings.auth.is_owner(creator)
+    if not can_select(cfg, creator, {instruction.workspace_id, ""}, is_owner=is_owner):
+        logger.warning("Git connection %s is not accessible to instruction '%s'; "
+                       "the git tools are off for this run", cfg_id, instruction.name)
+        return None
+    return store.resolve_git_settings(cfg_id)
+
+
 async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
                           prompt_override: str = "") -> dict:
     """Run the agent once for one account. Returns the terminal result dict.
@@ -218,6 +242,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     state["image_settings"] = _resolve_provider(instruction, store, "image")
     sora_settings = _resolve_provider(instruction, store, "video")
     state["sora_settings"] = sora_settings
+    state["git_settings"] = _resolve_git(instruction, store)
     sora_token = sora_config._ACTIVE.set(
         sora_settings if sora_settings is not None else SoraSettings())
     instruction_state = store.get_state(instruction.id)

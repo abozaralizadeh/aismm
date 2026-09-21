@@ -1359,6 +1359,7 @@ def create_app() -> Flask:
                                llm_options=_llm_options(),
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),
+                               git_options=_provider_options("git"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
                                has_youtube=_has_youtube(),
@@ -1453,6 +1454,7 @@ def create_app() -> Flask:
                                llm_options=_llm_options(),
                                image_options=_provider_options("image"),
                                video_options=_provider_options("video"),
+                               git_options=_provider_options("git"),
                                modes=list(PublishMode), media_prefs=list(MediaPref),
                                twitter_communities=_twitter_communities(),
                                has_youtube=_has_youtube(),
@@ -1537,6 +1539,8 @@ def create_app() -> Flask:
                                                instr.image_config_id)
         instr.video_config_id = _pick_provider("video", "video_config_id",
                                                instr.video_config_id)
+        # Git has no deployment default, so "" really means "no repository access".
+        instr.git_config_id = _pick_provider("git", "git_config_id", instr.git_config_id)
         accounts = {a.id: a for a in store.list_accounts(workspace_id=_workspace_id())}
         chosen_accounts = [a for a in request.form.getlist("account_ids") if a in accounts]
         instr.set_account_ids(chosen_accounts)
@@ -2095,6 +2099,7 @@ def create_app() -> Flask:
                     [c for c in got if not llm_access.is_owned(c, email)])
         img_owned, img_shared = _split("image")
         vid_owned, vid_shared = _split("video")
+        git_owned, git_shared = _split("git")
 
         people: list[str] = []
         if _is_site_owner():
@@ -2110,6 +2115,7 @@ def create_app() -> Flask:
                                owned_configs=owned, shared_configs=shared,
                                image_owned=img_owned, image_shared=img_shared,
                                video_owned=vid_owned, video_shared=vid_shared,
+                               git_owned=git_owned, git_shared=git_shared,
                                share_people=people, env_llm_id=ENV_LLM_ID,
                                # Sharing names PEOPLE, and with sign-in off there
                                # is one implicit local operator who already owns
@@ -2272,7 +2278,7 @@ def create_app() -> Flask:
 
     @app.route("/settings/provider/<kind>", methods=["POST"])
     def save_provider_config(kind):
-        if kind not in ("image", "video"):
+        if kind not in ("image", "video", "git"):
             abort(404)
         store = get_store()
         f = request.form
@@ -2292,7 +2298,27 @@ def create_app() -> Flask:
         cfg.name = f.get("name", "").strip()
         cfg.enabled = f.get("enabled") == "on"
         secrets: dict | None
-        if kind == "image":
+        if kind == "git":
+            api_url = (f.get("api_url", "").strip() or "https://api.github.com").rstrip("/")
+            # The token is sent to this host on every call, so it must be HTTPS: a
+            # plain-http API URL would put a PAT that reads private code on the wire.
+            if not api_url.startswith("https://"):
+                flash("The GitHub API URL must start with https://.", "error")
+                return redirect(url_for("settings_view"))
+            repos = [r.strip().strip("/") for r in
+                     f.get("repos", "").replace("\n", ",").split(",") if r.strip()]
+            bad = [r for r in repos if r.count("/") != 1]
+            if bad:
+                flash(f"“{bad[0]}” is not a repository — use owner/name, or owner/* for "
+                      "everything an owner has.", "error")
+                return redirect(url_for("settings_view"))
+            token = f.get("token", "").strip()
+            if not cfg_id and not token:
+                flash("A Git connection needs a personal access token.", "error")
+                return redirect(url_for("settings_view"))
+            cfg.set_config({"api_url": api_url, "repos_csv": ", ".join(repos)})
+            secrets = {"token": token} if token else None
+        elif kind == "image":
             cfg.set_config({
                 "endpoint": f.get("endpoint", "").strip(),
                 "api_version": f.get("api_version", "").strip() or "2025-04-01-preview",
@@ -2405,6 +2431,10 @@ TOOL_GROUPS: list[tuple[str, str, str, tuple[str, ...]]] = [
      ("read_memory", "update_memory", "read_attachment")),
     ("Research", "Finding real, current material to post about.", "",
      ("web_search", "browse_page", "save_media", "describe_image")),
+    ("Git repositories", "Reading repositories — private ones too — through the "
+                         "instruction's Git connection. Read-only.", "",
+     ("git_list_repos", "git_recent_commits", "git_commit", "git_compare",
+      "git_read_file", "git_pull_requests")),
     ("Media", "Generating images and video.", "",
      ("generate_image", "generate_video", "plan_video", "create_video_sequence")),
     ("Instagram", "Reading the feed, comments and DMs.", "instagram",

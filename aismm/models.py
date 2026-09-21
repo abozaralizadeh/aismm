@@ -210,6 +210,10 @@ class Instruction(SQLModel, table=True):
     # leaves the generation tool absent, so there is no "no connection" failure.
     image_config_id: str = ""
     video_config_id: str = ""
+    # Which Git (GitHub PAT) connection the repository tools read through
+    # (``ProviderConfig`` of kind ``"git"``). Empty = NONE, not a default: there is
+    # no deployment-wide token, so the git tools are simply absent for this run.
+    git_config_id: str = ""
     # What this instruction's runs DO. ``publish`` (default) creates a post;
     # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
     # both — for an engage run it gates how replies go out (preview / approval /
@@ -533,7 +537,7 @@ class ProviderConfig(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     workspace_id: str = Field(default="", index=True)   # where it was created
     created_by: str = Field(default="", index=True)     # lowercased identity that owns it
-    kind: str = "image"                      # "image" | "video"
+    kind: str = "image"                      # "image" | "video" | "git"
     name: str = ""                           # label shown to everyone with access
     config_json: str = "{}"                  # non-secret settings (endpoint, model, …)
     secrets_enc: str = ""                    # Fernet-encrypted JSON of secret fields

@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
-from ..config import ImageSettings, LLMSettings, SoraSettings
+from ..config import GitSettings, ImageSettings, LLMSettings, SoraSettings
 from ..models import (
     Account, Instruction, InstructionFile, InstructionState, LLMConfig, PlatformApp,
     ProviderConfig, Run, RunStatus, StagedPost, StagedStatus, UserProfile, Workspace,
@@ -67,6 +67,18 @@ def build_sora_settings(config: ProviderConfig, *, keys: str) -> SoraSettings:
         models=_split_csv(c.get("models_csv", "")) or ["sora-2"],
         api_version=c.get("api_version") or "preview",
         max_attempts=max_attempts,
+    )
+
+
+
+def build_git_settings(config: ProviderConfig, *, token: str) -> GitSettings:
+    """Assemble ``GitSettings`` from a stored git connection + its DECRYPTED token."""
+    c = config.config
+    repos = tuple(r for r in _split_csv(c.get("repos_csv", "")) if "/" in r)
+    return GitSettings(
+        token=token,
+        api_url=(c.get("api_url") or "https://api.github.com").rstrip("/"),
+        repos=repos,
     )
 
 
@@ -175,6 +187,11 @@ class Store(ABC):
     def resolve_image_settings(self, config_id: str) -> ImageSettings | None:
         """DECRYPTED ``ImageSettings`` for an image connection, or ``None`` if
         missing/disabled. The env sentinel resolves to ``settings.image``."""
+
+    @abstractmethod
+    def resolve_git_settings(self, config_id: str) -> GitSettings | None:
+        """DECRYPTED ``GitSettings`` for a git connection, or ``None`` if missing,
+        disabled or not a git connection. There is no env sentinel for git."""
 
     @abstractmethod
     def resolve_sora_settings(self, config_id: str) -> SoraSettings | None:

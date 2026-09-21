@@ -277,12 +277,49 @@ restart to change it. Everything under <em>connections</em> is editable here.</p
   </label>
 {% endmacro %}
 
+{% macro git_fields(cfg) %}
+  {% set c = cfg.config if cfg else {} %}
+  <label>Name
+    <input type="text" name="name" value="{{ cfg.name if cfg else '' }}"
+           placeholder="e.g. My private repos" required>
+  </label>
+  <label>Personal access token
+    <input type="password" name="token" autocomplete="new-password"
+           placeholder="{{ 'leave blank to keep the stored token' if cfg else 'github_pat_…' }}"
+           {% if not cfg %}required{% endif %}>
+    <span class="hint">A <strong>fine-grained</strong> token is best: pick only the repositories
+      the agent should see and give it <em>Contents: read</em> and <em>Pull requests: read</em>
+      (Metadata is added automatically). The tools only ever read — nothing here can push.</span>
+  </label>
+  <label>Repositories (optional)
+    <textarea name="repos" rows="2"
+              placeholder="owner/repo, owner/other-repo, my-org/*">{{ c.get('repos_csv', '') if cfg else '' }}</textarea>
+    <span class="hint">Limit what the agent may open, even if the token can see more. One
+      <code>owner/name</code> per line or comma-separated; <code>owner/*</code> allows a whole
+      owner. Empty = everything the token can read.</span>
+  </label>
+  <label>API URL
+    <input type="url" name="api_url" value="{{ c.get('api_url', '') if cfg else 'https://api.github.com' }}"
+           placeholder="https://api.github.com">
+    <span class="hint">Leave as is for github.com. GitHub Enterprise Server:
+      <code>https://HOST/api/v3</code>.</span>
+  </label>
+  <label class="check">
+    <input type="checkbox" name="enabled" {% if not cfg or cfg.enabled %}checked{% endif %}>
+    Enabled
+  </label>
+{% endmacro %}
+
 {# --- one owned/shared/add section for an image or video kind ------------ #}
-{% macro provider_section(title, kind, fields, owned, shared, save_ep, delete_ep, share_ep, env_note) %}
+{% macro provider_section(title, kind, fields, owned, shared, save_ep, delete_ep, share_ep, env_note, intro='') %}
   <h2>{{ title }} connections</h2>
+  {% if intro %}
+    <p class="muted">{{ intro }}</p>
+  {% else %}
   <p class="muted">Add your own {{ title|lower }} generation connection and pick it per instruction.
     Keys are encrypted at rest and never shown back to you. Instructions left on
     <strong>Deployment default</strong> use the <code>.env</code> {{ env_note }}.</p>
+  {% endif %}
 
   <h3>Your connections</h3>
   {% if owned %}
@@ -339,6 +376,14 @@ restart to change it. Everything under <em>connections</em> is editable here.</p
 {{ provider_section("Video (Sora)", "video", video_fields, video_owned, video_shared,
                     "save_provider_config", "delete_provider_config", "share_provider_config",
                     "Sora pool above") }}
+
+{{ provider_section("Git", "git", git_fields, git_owned, git_shared,
+                    "save_provider_config", "delete_provider_config", "share_provider_config",
+                    "", intro="A GitHub personal access token lets an instruction's agent read "
+                    "your repositories — private ones included — to write about what you have "
+                    "been building. Pick the connection per instruction; there is no deployment "
+                    "default, so an instruction without one has no repository access. The token "
+                    "is encrypted at rest and never shown back.") }}
 
 <h2>Platform apps</h2>
 <div class="table-scroll">

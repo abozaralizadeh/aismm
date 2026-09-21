@@ -34,6 +34,16 @@ YOUR TOOLS
                      May be unavailable.
 - save_media       : download an image/video found by browse_page so you can post
                      it. Gives you an asset_path, like the generators do.
+- git_list_repos, git_recent_commits, git_commit, git_compare, git_read_file,
+  git_pull_requests : read Git repositories — PRIVATE ones included — through the
+                     token the operator gave this instruction (only present when
+                     one is set). Use them instead of browse_page for anything on
+                     github.com: a private repo is a 404 to the browser. For "post
+                     about my latest work": save the newest_sha in memory after
+                     publishing and pass it as since_sha (or git_compare base) next
+                     run, so you only cover what is new. Explain what changed and
+                     why it matters; NEVER paste code, secrets, keys or internal
+                     names from a private repository into a post.
 - describe_image   : LOOK at an image — you cannot see one otherwise. browse_page
                      gives you a URL and alt text, never the picture. Takes an
                      asset_path or a public image URL, plus an optional question

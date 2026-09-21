@@ -291,6 +291,8 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/workspaces.py](aismm/workspaces.py) | workspace membership, roles, and the read-time migration |
 | [aismm/agent/memory.py](aismm/agent/memory.py) | post-run summarizer for an oversized carry-over memory |
 | [aismm/agent/vision.py](aismm/agent/vision.py) | small vision agent behind the `describe_image` tool |
+| [aismm/tools/git_tools.py](aismm/tools/git_tools.py) | read-only GitHub tools behind a per-instruction PAT (private repos) |
+| [aismm/async_clients.py](aismm/async_clients.py) | async API clients cached per (event loop, fingerprint) |
 | [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
@@ -1393,6 +1395,27 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
 - **`WebSearchTool` is hosted** (runs in the Responses API). If a deployment/region lacks it, swap
   [tools/web_search.py](aismm/tools/web_search.py) for a fallback (LangChain `{"type":"web_search"}`,
   Tavily, DDG) — one file.
+- **Git repositories are read through a per-instruction PAT, and there is NO deployment default**
+  ([tools/git_tools.py](aismm/tools/git_tools.py); `ProviderConfig` kind `"git"`,
+  `Instruction.git_config_id`, `Store.resolve_git_settings`, `manager_agent._resolve_git`). Asked
+  for as "monitor my commits and post about them — now on my PRIVATE repos": `browse_page` gets a
+  404 there. It reuses the image/video connection machinery (encrypted secret, same sharing ACL,
+  same picker) with one deliberate difference — image/video fall back to a `.env` sentinel, git
+  does not: a token that reads private code is granted to specific instructions, not inherited by
+  every run, so `""` means "no git tools" and every factory returns `None`. Four rules: **GET only**
+  (there is no write path to get wrong); **the token goes only to the operator's `api_url`** — the
+  agent supplies `owner/name`, refs and paths, each validated (`_REPO_RE`/`_REF_RE`, no `..`) and
+  URL-quoted, so it cannot steer the `Authorization` header anywhere else, and the Settings route
+  refuses a non-https API URL; **the optional `repos` allowlist is enforced in code**
+  (`GitSettings.allows`, `owner/*` wildcards); **output is bounded and every cut is said** (patch,
+  file, file-count and directory caps). Tool descriptions go through
+  `function_tool(description_override=…)`, NOT `__doc__`: the SDK's docstring-style detector took
+  "One commit in detail: full message, …" for a section header and dropped the sentence, leaving
+  `git_commit` described by the privacy note alone. GitHub answers **404 for a private repo the
+  token can't see**, so a 404 is reported as "missing OR not visible to this token". Continuity is
+  the memory: `recent_commits` returns `newest_sha` and takes `since_sha`, and says when the saved
+  sha was not reached (a gap). The privacy note on every tool (describe, never paste code/secrets)
+  is advice to the model, not a guarantee — `approval` mode is the guarantee.
 - **Async from sync**: orchestrator/dashboard drive async agent+platform calls via `asyncio.run`
   (see `orchestrator._run_async`, dashboard OAuth callback). Keep platform methods async.
 - **…and because every run is its OWN `asyncio.run`, an API client may never be cached across

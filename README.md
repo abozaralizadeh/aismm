@@ -26,7 +26,7 @@ new platform or a new tool with a single file.
 - [Workspaces (several people, one deployment)](#workspaces)
 - [Platform apps (credentials in the UI)](#platform-apps-credentials-in-the-dashboard)
 - [Connecting accounts](#connecting-accounts) · [Instagram](#instagram) · [X / Twitter](#x-twitter) · [YouTube](#youtube) · [TikTok](#tiktok)
-- [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing)
+- [Continuity: memory, notes, browsing](#continuity-memory-notes-and-browsing) · [Private Git repos](#posting-about-your-git-repositories-private-ones-too)
 - [AI-content disclosure](#ai-content-disclosure)
 - [Storage: local or Azure Table + Blob](#storage-local-sqlite-or-azure-table--blob)
 - [The public-media-URL caveat (Instagram)](#the-public-media-url-caveat)
@@ -631,6 +631,37 @@ declares something non-media (an HTML error page at a `.jpg` URL) is still refus
 The saved file goes into your own storage — local assets dir, and the blob container when Azure is
 configured — and is then [converted to the target platform's format](#images-are-converted-locally-to-what-the-platform-accepts)
 at publish time. A 1536×1024 PNG panel becomes a 1440×960 JPEG for Instagram automatically.
+
+### Posting about your Git repositories (private ones too)
+
+For a public repo the agent can just `browse_page` github.com. A **private** repo is a 404 to anyone
+who isn't signed in, so give the agent a GitHub token instead:
+
+1. On GitHub: *Settings → Developer settings → Personal access tokens → **Fine-grained tokens** →
+   Generate new token*. Under *Repository access* pick **only the repos** the agent should see, and
+   under *Permissions* give **Contents: read** and **Pull requests: read** (Metadata is added for you).
+   An organisation's repos may also need the org to approve the token.
+2. In AISMM: **Settings → Git connections → Add a connection**. Paste the token. Optionally list the
+   repos this connection may open (`owner/name`, or `owner/*` for everything an owner has) — that
+   limit is enforced in code even if the token can see more. For GitHub Enterprise Server set the API
+   URL to `https://HOST/api/v3`.
+3. On the instruction, pick it under **Git connection**. There is **no deployment default**: an
+   instruction left on *None* has no repository access at all.
+
+The agent then gets six **read-only** tools — `git_list_repos`, `git_recent_commits`, `git_commit`,
+`git_compare`, `git_read_file`, `git_pull_requests`. None of them can push, comment or change
+anything. A brief like this works well:
+
+> Every Monday, look at what changed in `me/my-app` since the last post and write a short
+> build-in-public update: what shipped and why it matters. Don't mention internal names.
+
+To cover only what's new, the agent saves the newest commit sha in its memory after publishing and
+asks for commits *since* that sha next run. The tools remind it that the repos may be private: it
+describes what changed but must not paste code, secrets or internal names into a post — and with
+`approval` publish mode you read every post before it goes out, which is the right mode to start in.
+
+The token is encrypted at rest, sent only to the configured API URL (in a header, never the URL),
+and never shown back in the dashboard.
 
 ### Timeouts
 
