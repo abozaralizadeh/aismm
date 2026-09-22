@@ -5,6 +5,32 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-09-22 — "Why are all the videos silent?" They weren't.
+
+**Symptom:** the new reels sounded silent.
+
+**What the files said:** every one had an audio track, with no silent gap longer than a second.
+It was 60 seconds of soft stream noise, about -18 dB, with no voice and no music. It sounded
+muted, but it wasn't.
+
+**Cause:** the brief asked for almost no speech (it's a preschool cartoon) and never mentioned
+music. Our own prompt filled that gap without anyone deciding it: one line told Sora that a shot
+with no dialogue "carries ambient sound only". That's a quiet "no music" on every video.
+
+**The fix I got wrong first:** I swung the other way and told the agent that quiet videos always get
+music, with a line added by code as a backstop. The pushback was right: whether a channel has music
+is a creative decision, and it belongs in the instruction, not in the plumbing. My fix just
+swapped one hidden default for another.
+
+**The fix:** the prompt and code are now neutral. They stop the words of one shot leaking into the
+next, and everything else about the sound comes from the brief. Want music? Write it in the brief.
+
+**Takeaway for the post:** two lessons. Measure before you debug: "silent" was a perception, not a
+missing track. And be careful with defaults hidden in system prompts. They're creative decisions
+nobody made on purpose, and the fix is to remove them, not to swap in your own taste.
+
+---
+
 ## 2026-09-21 — The agent can read my private repos now
 
 **What shipped:** a *Git connection* in Settings. Paste a GitHub token, pick it on an instruction,

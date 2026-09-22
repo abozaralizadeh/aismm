@@ -87,8 +87,9 @@ and the source's spoken line comes over with the frames. A reel planned
 visibly different scenes, each of which had been written its own line. Every
 clause in the prompt pinned pictures and none mentioned sound, so
 ``_AUDIO_CONTRACT`` rides along with every remix: the picture is what is being
-edited, the words are only the ones in this shot's scene, and a shot with no
-line is silent.
+edited and the words are only the ones in this shot's scene. It says nothing
+about music or sound effects: those follow the style and the scene, which is to
+say the brief.
 
 **A remix inherits the source clip's duration** (the API takes only a prompt), so
 a chained sequence is uniform at ``seconds_each`` whatever ``scene_seconds`` asks
@@ -318,9 +319,15 @@ _AUDIO_CONTRACT = (
     "AUDIO: you are editing that clip's PICTURE only. Its speech, narration and "
     "voiceover do NOT carry over — do not repeat, re-use or re-time any line from "
     "it. The only words spoken in this shot are the ones written in the shot below; "
-    "if no line is written there, nobody speaks and the shot carries ambient sound "
-    "only."
+    "if none are written there, nobody speaks. Everything else about the sound "
+    "follows the style and the shot below."
 )
+
+# The contract says what NOT to inherit (the source clip's words) and nothing about what
+# the shot should sound like. That is a creative choice and it belongs to the brief. An
+# earlier wording ended "if no line is written there, nobody speaks and the shot carries
+# ambient sound only", which quietly decided "no music" for every remixed shot of every
+# instruction.
 
 
 def build_clip_prompt(scene: str, style: str, *, index: int, total: int,

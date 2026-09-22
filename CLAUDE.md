@@ -972,7 +972,7 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   each of which had been written its own line. The scenario *was* split correctly, so splitting is
   not where this is fixed: every clause in the prompt pinned pictures and none mentioned audio. The
   contract says the picture is what is being edited, the words are only the ones in this shot's
-  scene, and a shot with no line is silent. It rides the REMIX paths only — a created shot has no
+  scene, and a shot with no line has no speech (music and effects are the brief's call). It rides the REMIX paths only — a created shot has no
   source to inherit from, and the clause would be noise.
 - **A brief asking for a near-silent video is a DIRECTION, and the prompt had no counterpart for
   it.** The same reel's brief said "mostly without talking or text"; the agent wrote a voiceover into
@@ -983,6 +983,23 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   is spoken *from the brief* before anything is written, `style` is documented as looks-only ("a
   voice described there speaks in every clip"), and a silent shot with real action is explicitly not
   `under` — `plan_shot_lengths` already scored it `ok`, but only the tool knew that.
+- **What a video SOUNDS like is the INSTRUCTION's decision: our prompt and code stay neutral**
+  (reported as "why are all the recent videos silent?"). They were not silent files: the
+  09-21/09-22 preschool reels were 60s of stream ambience at about -18 dB with no silence gap,
+  which plays like a muted video. The brief asked for "almost no speech" and never mentioned music,
+  and our guidance had filled that gap on its own: the remix `_AUDIO_CONTRACT` ended "the shot
+  carries ambient sound only" (a silent "no music" on every remixed shot of every instruction), and
+  the prompt said "a shot you give no line to is silent". The first fix swung the other way (a
+  prompt rule saying quiet videos get music, plus a code-injected `_SOUNDTRACK_FALLBACK`), and the
+  operator rejected it: **music is a creative choice, and it belongs in the brief**. So the
+  contract now only stops the source clip's WORDS carrying over ("if none are written there,
+  nobody speaks. Everything else about the sound follows the style and the shot below"), the
+  prompt says speech and sound are separate and to take music and effects from the brief without
+  adding or ruling out what it doesn't mention, and `style` carries music only when the brief asks
+  for it. `tests/test_video_soundtrack.py` pins this in both directions: no text of ours may add
+  music, and none may rule it out. Want music on a channel? Write it in that instruction's brief.
+  Check the files before believing "silent": `ffmpeg -af volumedetect,silencedetect` separates a
+  missing track from one that is only quiet.
 - **Every forward link is another generation away from shot 1** (`_CHAIN_DRIFT_LINKS`). `[0, 0, 0,
   0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
   `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,
