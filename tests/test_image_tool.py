@@ -167,6 +167,55 @@ def test_opaque_background_is_always_allowed(monkeypatch, captured):
     assert captured["kwargs"]["background"] == "opaque"
 
 
+# --- gpt-image-2.5: matches is_gpt_image_2, but is not gpt-image-2 ------------------- #
+
+@pytest.mark.parametrize("quality", ["xhigh", "max"])
+def test_extended_quality_is_sent_on_gpt_image_2_5(monkeypatch, captured, quality):
+    _with_model(monkeypatch, "gpt-image-2.5-sunburst")
+    result = _run(quality=quality)
+    assert captured["kwargs"]["quality"] == quality
+    assert "adjustment" not in result
+
+
+@pytest.mark.parametrize("quality", ["xhigh", "max"])
+def test_extended_quality_falls_back_to_high_elsewhere(monkeypatch, captured, quality):
+    """gpt-image-2 400s on xhigh; high is the nearest tier, never the generic default."""
+    _with_model(monkeypatch, "gpt-image-2")
+    result = _run(quality=quality)
+    assert captured["kwargs"]["quality"] == "high"
+    assert "used 'high'" in result["adjustment"]
+
+
+def test_transparent_background_is_kept_for_gpt_image_2_5(monkeypatch, captured):
+    """The substring test says image-2, but 2.5 supports transparency again."""
+    _with_model(monkeypatch, "gpt-image-2.5-sunburst")
+    _run(background="transparent")
+    assert captured["kwargs"]["background"] == "transparent"
+
+
+def test_dropped_transparency_is_reported_back(monkeypatch, captured):
+    _with_model(monkeypatch, "gpt-image-2")
+    result = _run(background="transparent")
+    assert "opaque" in result["adjustment"]
+
+
+@pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-sunburst"])
+def test_webp_becomes_png_on_the_image_2_family(monkeypatch, captured, model):
+    """Both reject webp with a 400 that would fail the whole call."""
+    _with_model(monkeypatch, model)
+    result = _run(output_format="webp", compression=80)
+    assert captured["kwargs"]["output_format"] == "png"
+    assert "output_compression" not in captured["kwargs"]   # png takes no compression
+    assert "used png" in result["adjustment"]
+    assert result["asset_path"].endswith(".png")
+
+
+def test_webp_is_kept_for_gpt_image_1(monkeypatch, captured):
+    _with_model(monkeypatch, "gpt-image-1")
+    _run(output_format="webp")
+    assert captured["kwargs"]["output_format"] == "webp"
+
+
 # --- reference images ----------------------------------------------------------------- #
 
 def test_no_references_uses_the_generate_endpoint(monkeypatch, captured):

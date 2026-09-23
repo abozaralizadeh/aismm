@@ -29,6 +29,18 @@ next, and everything else about the sound comes from the brief. Want music? Writ
 missing track. And be careful with defaults hidden in system prompts. They're creative decisions
 nobody made on purpose, and the fix is to remove them, not to swap in your own taste.
 
+**Epilogue (09-23): it was never the code.** The next video still had no speech, and the prompt was
+neutral by then. So I read what the agent was actually told. The instruction's brief said *"looks
+only — no voice, no narrator … Almost no speech"*, and I was the one who wrote that line. Two weeks
+earlier I'd drafted a "revised brief" for this channel and quietly slipped in a creative choice
+nobody asked for. It got pasted in and obeyed faithfully ever since. It also stuck: the agent saves
+its style block in memory and reuses it every episode, so "no voice" carried on even after the
+brief was fixed. The fix was two edits to data, a backup, and zero lines of code.
+
+**The better takeaway:** when an agent keeps doing something odd, read its actual input (the brief
+*and* its memory) before changing the system. And when you write instructions for someone,
+write only what they asked for.
+
 ---
 
 ## 2026-09-21 — The agent can read my private repos now

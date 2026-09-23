@@ -13,8 +13,17 @@ latency against fidelity, and format matters (Instagram wants JPEG).
   ≤ 3:1) plus 1K/2K/4K presets, always processes reference images at high
   fidelity, and **rejects ``input_fidelity`` outright** — so it is never sent.
   It also does not support transparent backgrounds.
+* ``gpt-image-2.5`` (``-sunburst``) shares image-2's size rules, but adds the
+  ``xhigh`` and ``max`` quality tiers and supports transparent backgrounds again.
+  ``is_gpt_image_2`` matches it (a substring test), so every rule keyed on
+  "image-2" must decide explicitly whether 2.5 is the exception.
 * ``gpt-image-1`` supports transparency and ``input_fidelity``, and only a fixed
   set of sizes.
+* The image-2 family rejects ``webp`` output (400, the whole call fails), so it
+  is sent as ``png`` there.
+
+All of the above was measured against a live deployment, not taken from the API's
+error text: 2.5's 400 for an invalid quality still lists only low/medium/high/auto.
 
 Reference images go through the **edits** endpoint (up to 16). Referring to them
 as "image 1", "image 2" in the prompt is what steers which is used for what —
@@ -49,14 +58,26 @@ SIZE_PRESETS = {
     "4k": "3840x2160",
     "auto": "auto",
 }
-QUALITIES = {"auto", "low", "medium", "high"}
+QUALITIES = {"auto", "low", "medium", "high", "xhigh", "max"}
+# Only gpt-image-2.5 has these; anywhere else they fall back to "high" rather than
+# failing the call (gpt-image-2 answers "does not support quality 'xhigh'").
+EXTENDED_QUALITIES = {"xhigh", "max"}
 FORMATS = {"png", "jpeg", "jpg", "webp"}
 MAX_REFERENCE_IMAGES = 16
 _MAX_RATIO = 3.0
 
 
 def is_gpt_image_2(model: str) -> bool:
+    """The image-2 FAMILY — also true for gpt-image-2.5."""
     return "gpt-image-2" in (model or "").lower()
+
+
+def is_gpt_image_2_5(model: str) -> bool:
+    return "gpt-image-2.5" in (model or "").lower()
+
+
+def supports_transparency(model: str) -> bool:
+    return not is_gpt_image_2(model) or is_gpt_image_2_5(model)
 
 
 def resolve_size(size: str, orientation: str, model: str) -> tuple[str, str]:
@@ -129,22 +150,33 @@ def _client_for(img: ImageSettings) -> AsyncAzureOpenAI:
 
 
 def _build_kwargs(*, model: str, size: str, quality: str, output_format: str,
-                  background: str, compression: int | None) -> dict:
+                  background: str, compression: int | None) -> tuple[dict, list[str]]:
+    """Return ``(kwargs, notes)``; each note tells the agent what was substituted."""
     kwargs: dict = {"model": model, "size": size, "n": 1}
+    notes: list[str] = []
+    quality = (quality or "").lower()
+    if quality in EXTENDED_QUALITIES and not is_gpt_image_2_5(model):
+        notes.append(f"{model} has no {quality!r} quality; used 'high'")
+        quality = "high"
     if quality in QUALITIES and quality != "auto":
         kwargs["quality"] = quality
     fmt = (output_format or "").lower().replace("jpg", "jpeg")
+    if fmt == "webp" and is_gpt_image_2(model):
+        # The image-2 family accepts only png/jpeg; webp fails the whole call.
+        notes.append(f"{model} cannot output webp; used png")
+        fmt = "png"
     if fmt in {"png", "jpeg", "webp"}:
         kwargs["output_format"] = fmt
         if compression and fmt in {"jpeg", "webp"}:
             kwargs["output_compression"] = max(1, min(int(compression), 100))
     if background in {"transparent", "opaque"}:
-        if background == "transparent" and is_gpt_image_2(model):
+        if background == "transparent" and not supports_transparency(model):
             # gpt-image-2 rejects it; asking anyway fails the whole call.
             logger.info("Ignoring background=transparent — %s does not support it", model)
+            notes.append(f"{model} has no transparent background; left it opaque")
         else:
             kwargs["background"] = background
-    return kwargs
+    return kwargs, notes
 
 
 async def perform_generate_image(
@@ -155,10 +187,11 @@ async def perform_generate_image(
     """Generate (or edit, when references are given) one image. Extracted for tests."""
     img = state.get("image_settings") or settings.image
     model = img.model
-    resolved_size, note = resolve_size(size, orientation, model)
-    kwargs = _build_kwargs(model=model, size=resolved_size, quality=quality,
-                           output_format=output_format, background=background,
-                           compression=compression)
+    resolved_size, size_note = resolve_size(size, orientation, model)
+    kwargs, option_notes = _build_kwargs(model=model, size=resolved_size, quality=quality,
+                                         output_format=output_format, background=background,
+                                         compression=compression)
+    note = "; ".join(n for n in [size_note, *option_notes] if n)
     references = [p for p in (reference_asset_paths or []) if p][:MAX_REFERENCE_IMAGES]
 
     try:
@@ -220,11 +253,16 @@ def _make_generate_image(state: dict):
                 "WIDTHxHEIGHT" (e.g. "1440x1800"). Each edge is rounded to a
                 multiple of 16 and the aspect ratio clamped to 3:1 if needed;
                 the reply tells you when that happened.
-            quality: "auto" (default), "low" (fast), "medium", or "high".
+            quality: "auto" (default), "low" (fast), "medium", or "high". On
+                gpt-image-2.5 also "xhigh" and "max" — finer detail, but slower
+                and several times the cost; reserve them for a hero image. On
+                other models they become "high".
             output_format: "png" (default), "jpeg", or "webp". Prefer "jpeg" for
                 Instagram — it only accepts JPEG, and it is converted anyway.
+                gpt-image-2 / 2.5 cannot output webp; it becomes "png" there.
             background: "opaque" or "transparent". Transparency is unavailable on
-                gpt-image-2 and is ignored there rather than failing the call.
+                gpt-image-2 (it stays opaque there rather than failing the call);
+                gpt-image-1 and gpt-image-2.5 support it.
             reference_asset_paths: Up to 16 asset paths (from ``save_media`` or an
                 earlier ``generate_image``) to guide the result — use this to keep
                 a character, product or style consistent across posts.

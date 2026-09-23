@@ -826,6 +826,13 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   arbitrary sizes (edges ×16, ratio ≤3:1), **rejects `input_fidelity` outright**, and has no
   transparent background; image-1 accepts only three sizes but supports both. `resolve_size` fixes a
   size instead of letting the API fail with an unexplained error.
+- **gpt-image-2.5 ≠ gpt-image-2, yet `is_gpt_image_2` matches it** (substring test), so every
+  image-2 rule must say whether 2.5 is the exception. Measured on a live deployment (2026-09-23):
+  2.5 adds `xhigh`/`max` quality (gpt-image-2 400s on them — they now fall back to `high`) and
+  supports a transparent background (`supports_transparency`); it shares image-2's sizes. Both
+  reject `webp` output — the tool offered it and the whole call failed — so it is sent as `png`.
+  Each substitution comes back to the agent in `adjustment`. Don't trust the API's error text
+  for these: 2.5's 400 for a bad quality still lists only low/medium/high/auto.
 - **"Made for kids" is a DECLARATION every upload must answer, and it was hardcoded `False`**
   (`Instruction.youtube_made_for_kids` → `youtube.resolve_made_for_kids`, checkbox on the
   instruction form, `settings.youtube_made_for_kids` / `YOUTUBE_MADE_FOR_KIDS` as the deployment
