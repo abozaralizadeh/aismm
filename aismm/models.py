@@ -214,6 +214,12 @@ class Instruction(SQLModel, table=True):
     # (``ProviderConfig`` of kind ``"git"``). Empty = NONE, not a default: there is
     # no deployment-wide token, so the git tools are simply absent for this run.
     git_config_id: str = ""
+    # The `style` block repeated in every shot of every video (see aismm/video_style.py).
+    # `video_style` is the OPERATOR's: when set it is used verbatim and the agent's own
+    # style is ignored. `last_video_style` is written by CODE after each video, so the style
+    # actually sent to Sora is always visible on the form instead of hidden in memory.
+    video_style: str = ""
+    last_video_style: str = ""
     # What this instruction's runs DO. ``publish`` (default) creates a post;
     # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
     # both — for an engage run it gates how replies go out (preview / approval /

@@ -14,6 +14,7 @@ from agents import function_tool
 
 from ..assets import public_url, save_bytes
 from .. import video
+from ..video_style import resolve_style
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -129,9 +130,17 @@ def _make_generate_video(state: dict):
         it refuses images containing human faces, and the clip is then generated
         from the prompt alone.
         """
-        return await perform_generate_video(
+        # A Video style pinned on the instruction applies to single clips too: the
+        # operator wrote it for every video of this instruction, not just sequences.
+        style, _source, _note = resolve_style(state, "")
+        if style:
+            prompt = f"STYLE: {style}\n{prompt}"
+        result = await perform_generate_video(
             state, prompt, seconds=seconds, orientation=orientation,
             reference_asset_path=reference_asset_path)
+        if style and result.get("asset_path"):
+            result["style_source"] = "instruction"
+        return result
 
     return generate_video
 

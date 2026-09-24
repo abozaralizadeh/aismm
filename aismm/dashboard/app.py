@@ -1541,6 +1541,10 @@ def create_app() -> Flask:
                                                instr.video_config_id)
         # Git has no deployment default, so "" really means "no repository access".
         instr.git_config_id = _pick_provider("git", "git_config_id", instr.git_config_id)
+        # Only when the field was on the form: a POST without it (a script, an old
+        # bookmark) must not wipe a style the operator pinned.
+        if "video_style" in f:
+            instr.video_style = f.get("video_style", "").replace("\r\n", "\n").strip()
         accounts = {a.id: a for a in store.list_accounts(workspace_id=_workspace_id())}
         chosen_accounts = [a for a in request.form.getlist("account_ids") if a in accounts]
         instr.set_account_ids(chosen_accounts)

@@ -862,3 +862,17 @@ th .sort-active .sort-arrow { opacity: 1; }
 .account-group .platform-icon { opacity: .9; }
 .account-why { margin: 0 0 .5rem; color: var(--muted); }
 .account-superseded { opacity: .72; border-style: dashed; }
+
+/* The style the agent used in its last video: long prose, so it wraps instead of
+   scrolling sideways (a phone must never scroll the page horizontally). */
+.style-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 14em;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}

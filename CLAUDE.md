@@ -293,6 +293,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/agent/vision.py](aismm/agent/vision.py) | small vision agent behind the `describe_image` tool |
 | [aismm/tools/git_tools.py](aismm/tools/git_tools.py) | read-only GitHub tools behind a per-instruction PAT (private repos) |
 | [aismm/async_clients.py](aismm/async_clients.py) | async API clients cached per (event loop, fingerprint) |
+| [aismm/video_style.py](aismm/video_style.py) | the instruction's Video style: pinned by the operator, last used recorded by code |
 | [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
@@ -1007,6 +1008,26 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   music, and none may rule it out. Want music on a channel? Write it in that instruction's brief.
   Check the files before believing "silent": `ffmpeg -af volumedetect,silencedetect` separates a
   missing track from one that is only quiet.
+- **The video STYLE lives on the instruction, visible and editable** ([video_style.py](aismm/video_style.py),
+  `Instruction.video_style` + `last_video_style`). Reported as "Style should not be hidden from
+  user, should be accessible from the instruction". The `style` block is repeated verbatim in every
+  shot's prompt, yet it existed only in tool calls and, because briefs said "reuse the style
+  block", in the agent's MEMORY, where restrictions nobody chose travelled unseen. "Looks only: no
+  voice, no narrator, no dialogue" (a line Claude had drafted into the kids brief) survived in memory
+  after the brief was fixed, and a psychologist reel's style gained "no music cues" the brief never
+  asked for. **Before blaming prompt or code for what a video sounds like, read the run's brief
+  AND its memory** (first llm input in the LangSmith trace). Measure too: a voiced-frame count
+  (30ms frames that are loud and periodic at 85–400 Hz) told a video with dialogue apart from one
+  without when there was no transcription model to ask. Two fields: `video_style` is the
+  OPERATOR's, and when set it IS the style. `resolve_style` makes both `create_video_sequence` and
+  `generate_video` use it verbatim, the agent's own `style` is ignored and it is told so
+  (`style_note`), and the kickoff shows it (`kickoff_block`). `last_video_style` is written by CODE
+  after each successful video (`record_used_style`), so the operator always sees what was actually
+  sent to Sora and can pin it with "Use as Video style". It is **never auto-pinned**: pinning is a
+  human decision, and freezing a first draft would lock in whatever that run invented.
+  `record_used_style` **re-reads** the instruction before saving (the run's copy is stale, and
+  writing it back whole would undo an edit made while the video rendered) and never fails a video.
+  The save route only touches `video_style` when the field was posted.
 - **Every forward link is another generation away from shot 1** (`_CHAIN_DRIFT_LINKS`). `[0, 0, 0,
   0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
   `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,

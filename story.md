@@ -5,6 +5,30 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-09-24 — The style was hiding in the agent's memory
+
+**Symptom:** "still all of the videos are completely without speech!"
+
+**What the audio said:** not all of them anymore. I didn't have a transcription model, so I
+counted voiced sound instead (short bursts at a speaking voice's pitch). Last night's kids episode
+had 11–19 of those per shot, where earlier episodes had zero, so the characters were talking
+again. The psychologist reel had none, because the agent wrote "No spoken words, no voiceover…
+no music cues" into its style.
+
+**The real problem:** every shot starts with a "style" paragraph describing the characters, the
+look and the sound. Nobody could see it. It lived in the agent's tool calls and in its memory, and
+that's where a line like "no voice, no narrator" could live for weeks after anyone meant it.
+
+**What shipped:** a *Video style* box on each instruction, right under the brief. Fill it in and
+every video uses it word for word. Leave it empty and the agent writes its own, and the style it
+actually used is shown underneath with a button to pin it. It's never auto-pinned: that stays
+your decision.
+
+**Takeaway for the post:** anything that shapes every output should be something the user can see.
+Hidden state is where decisions go that nobody remembers making.
+
+---
+
 ## 2026-09-22 — "Why are all the videos silent?" They weren't.
 
 **Symptom:** the new reels sounded silent.

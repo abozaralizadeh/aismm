@@ -732,6 +732,22 @@ names the shots whose image was refused — precisely the shots now relying on `
 `input_reference` as a **starting frame**, so a collage yields a video of a collage; and merging
 several panels makes a visible face, and therefore a refusal, more likely rather than less.
 
+### The video style (what every shot looks and sounds like)
+
+Every shot of a video starts with the same **style** text: the characters, the art style, the
+light, and whatever you want about sound (music, who speaks, a narrator). Repeating it word for word
+is what keeps the clips looking like one video. It's on the instruction form, under the brief:
+
+- **Video style** is yours. Fill it in and every video of this instruction uses it exactly, and the
+  agent's own style is ignored. Put the cast and the sound here: *"…Gentle ukulele music; the
+  characters speak short, simple sentences."*
+- **Style used in the last video** shows what was actually sent to Sora. Leave your field empty and
+  the agent writes its own style each time; this is where you see it. **Use as Video style** copies
+  it into your field so you can pin it or edit it. Nothing is saved until you press Save.
+
+If a video sounds wrong (no speech, no music), read these two first. Anything in the style applies
+to every shot.
+
 ### Seeing an image
 
 Everything else the agent receives is text. `browse_page` hands it a URL, alt text and the

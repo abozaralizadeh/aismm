@@ -6,6 +6,8 @@ media, caption, and finish by calling ``publish`` exactly once.
 """
 from __future__ import annotations
 
+from .. import video_style
+
 MANAGER_INSTRUCTIONS = """\
 You are the AI Social Media Manager for a single social account. You act with FULL
 AUTONOMY: you decide what to post and produce it end to end. You are given a BRIEF
@@ -457,6 +459,7 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
 
     return (
         f"BRIEF:\n{instruction.brief}\n\n"
+        f"{video_style.kickoff_block(instruction)}"
         f"{attachments}"
         f"{continuity}"
         f"{operator}"
@@ -834,6 +837,7 @@ def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files
 
     return (
         f"BRIEF:\n{instruction.brief}\n\n"
+        f"{video_style.kickoff_block(instruction)}"
         f"{attachments}"
         f"{continuity}"
         f"{operator}"

@@ -197,6 +197,36 @@
           placeholder="Who is this account, what should it post, in what voice? e.g. 'A witty tech commentator. Post one punchy insight about a real, current AI development. Upbeat, concise, one emoji max.'">{{ instruction.brief if instruction else '' }}</textarea>
         <span class="hint">The agent researches, creates media, writes the caption, and publishes — all from this brief.</span>
       </label>
+
+      {# The style block every shot of every video repeats verbatim. It used to live only
+         in the agent's tool calls and memory, where restrictions nobody chose travelled
+         unseen (see aismm/video_style.py). #}
+      <label data-publish-only {% if not task_posts %}hidden{% endif %}>
+        <span class="field-label">Video style</span>
+        <textarea name="video_style" rows="4" id="video-style"
+          placeholder="Optional. The cast, the look and the sound, repeated in every shot, e.g. 'Stylised preschool cartoon animals: Pupu, a round cream puppy with a teal scarf… Soft watercolour, warm light. Gentle ukulele music; the characters speak short, simple sentences.'">{{ instruction.video_style if instruction else '' }}</textarea>
+        <span class="hint">Sent to Sora word for word at the start of every shot, so it holds the
+          characters and the look together. <strong>When set, it replaces the style the agent
+          would write.</strong> Leave it empty and the agent writes its own, shown below after
+          each video.</span>
+      </label>
+      {% if instruction and instruction.last_video_style %}
+        <details class="field" data-publish-only {% if not task_posts %}hidden{% endif %}
+                 {% if not instruction.video_style %}open{% endif %}>
+          <summary class="small">Style used in the last video
+            {% if instruction.video_style and instruction.video_style.strip() == instruction.last_video_style.strip() %}
+              <span class="muted">(your Video style)</span>
+            {% elif not instruction.video_style %}
+              <span class="muted">(written by the agent)</span>
+            {% endif %}
+          </summary>
+          <pre class="style-preview" id="last-video-style">{{ instruction.last_video_style }}</pre>
+          <button type="button" class="btn small" data-copy-style hidden
+                  title="Copy it into Video style above; nothing is saved until you press Save">
+            Use as Video style
+          </button>
+        </details>
+      {% endif %}
     </div>
   </fieldset>
 
@@ -783,6 +813,18 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  // "Use as Video style": copy the last used style into the field. Rendered hidden, so
+  // with scripting off there is no button that cannot work; the text stays selectable.
+  (function () {
+    var btn = document.querySelector('[data-copy-style]');
+    var src = document.getElementById('last-video-style');
+    var dst = document.getElementById('video-style');
+    if (!btn || !src || !dst) return;
+    btn.hidden = false;
+    btn.addEventListener('click', function () { dst.value = src.textContent.trim(); dst.focus(); });
+  })();
+</script>
 <script>
 // Conditional fields: shown only where they can actually do something.
 //

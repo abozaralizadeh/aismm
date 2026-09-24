@@ -127,6 +127,7 @@ from agents import function_tool
 
 from .. import video
 from ..assets import public_url, read_bytes, save_bytes
+from ..video_style import record_used_style, resolve_style
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -1227,6 +1228,7 @@ def _make_create_sequence(state: dict):
         if state.get("video_failures", 0) >= 2:
             return {"error": "video_circuit_open",
                     "message": "Video generation failed repeatedly this run."}
+        style, style_source, style_note = resolve_style(state, style)
         result = await perform_create_sequence(
             state, scenes, style=style, seconds_each=seconds_each,
             orientation=orientation, continuity=continuity, scene_seconds=scene_seconds,
@@ -1241,6 +1243,11 @@ def _make_create_sequence(state: dict):
         # two refused panels lock video generation for the rest of the run.
         if result.get("error") and result["error"] != "reference_refused":
             state["video_failures"] = state.get("video_failures", 0) + 1
+        result["style_source"] = style_source
+        if style_note:
+            result["style_note"] = style_note
+        if result.get("asset_path"):
+            record_used_style(state, style)
         return result
 
     return create_video_sequence
