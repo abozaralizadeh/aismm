@@ -201,32 +201,32 @@
       {# The style block every shot of every video repeats verbatim. It used to live only
          in the agent's tool calls and memory, where restrictions nobody chose travelled
          unseen (see aismm/video_style.py). #}
+      {% set vs_text, vs_pinned = video_style_box(instruction) %}
       <label data-publish-only {% if not task_posts %}hidden{% endif %}>
-        <span class="field-label">Video style</span>
-        <textarea name="video_style" rows="4" id="video-style"
-          placeholder="Optional. The cast, the look and the sound, repeated in every shot, e.g. 'Stylised preschool cartoon animals: Pupu, a round cream puppy with a teal scarf… Soft watercolour, warm light. Gentle ukulele music; the characters speak short, simple sentences.'">{{ instruction.video_style if instruction else '' }}</textarea>
+        <span class="field-label">Video style
+          {% if vs_pinned %}<span class="badge">yours</span>
+          {% elif vs_text %}<span class="badge badge-off">written by the agent</span>{% endif %}
+        </span>
+        <textarea name="video_style" rows="6" id="video-style"
+          placeholder="Optional. The cast, the look and the sound, repeated in every shot, e.g. 'Stylised preschool cartoon animals: Pupu, a round cream puppy with a teal scarf… Soft watercolour, warm light. Gentle ukulele music; the characters speak short, simple sentences.'">{{ vs_text }}</textarea>
+        {# What the box showed, so the save can tell an EDIT from an untouched agent draft
+           (video_style.style_from_form). #}
+        <input type="hidden" name="video_style_shown" value="{{ vs_text }}">
+        <input type="hidden" name="video_style_pinned" value="{{ '1' if vs_pinned else '0' }}">
         <span class="hint">Sent to Sora word for word at the start of every shot, so it holds the
-          characters and the look together. <strong>When set, it replaces the style the agent
-          would write.</strong> Leave it empty and the agent writes its own, shown below after
-          each video.</span>
+          characters, the look and the sound together.
+          {% if vs_pinned %}
+            This is <strong>your</strong> style: every video uses it exactly. Clear the box and
+            save to let the agent write its own again.
+          {% elif vs_text %}
+            This is what the agent used in its <strong>last video</strong>. Edit it and save, and
+            every video from then on uses your version instead. Saving without changing it
+            leaves the agent free to keep writing its own.
+          {% else %}
+            Leave it empty and the agent writes one; after its first video it appears here for
+            you to edit.
+          {% endif %}</span>
       </label>
-      {% if instruction and instruction.last_video_style %}
-        <details class="field" data-publish-only {% if not task_posts %}hidden{% endif %}
-                 {% if not instruction.video_style %}open{% endif %}>
-          <summary class="small">Style used in the last video
-            {% if instruction.video_style and instruction.video_style.strip() == instruction.last_video_style.strip() %}
-              <span class="muted">(your Video style)</span>
-            {% elif not instruction.video_style %}
-              <span class="muted">(written by the agent)</span>
-            {% endif %}
-          </summary>
-          <pre class="style-preview" id="last-video-style">{{ instruction.last_video_style }}</pre>
-          <button type="button" class="btn small" data-copy-style hidden
-                  title="Copy it into Video style above; nothing is saved until you press Save">
-            Use as Video style
-          </button>
-        </details>
-      {% endif %}
     </div>
   </fieldset>
 
@@ -813,18 +813,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-  // "Use as Video style": copy the last used style into the field. Rendered hidden, so
-  // with scripting off there is no button that cannot work; the text stays selectable.
-  (function () {
-    var btn = document.querySelector('[data-copy-style]');
-    var src = document.getElementById('last-video-style');
-    var dst = document.getElementById('video-style');
-    if (!btn || !src || !dst) return;
-    btn.hidden = false;
-    btn.addEventListener('click', function () { dst.value = src.textContent.trim(); dst.focus(); });
-  })();
-</script>
 <script>
 // Conditional fields: shown only where they can actually do something.
 //

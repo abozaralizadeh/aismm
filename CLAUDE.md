@@ -1022,12 +1022,36 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   OPERATOR's, and when set it IS the style. `resolve_style` makes both `create_video_sequence` and
   `generate_video` use it verbatim, the agent's own `style` is ignored and it is told so
   (`style_note`), and the kickoff shows it (`kickoff_block`). `last_video_style` is written by CODE
-  after each successful video (`record_used_style`), so the operator always sees what was actually
-  sent to Sora and can pin it with "Use as Video style". It is **never auto-pinned**: pinning is a
-  human decision, and freezing a first draft would lock in whatever that run invented.
+  after each successful video (`record_used_style`). **The form has ONE editable box**
+  (`form_value`): the pinned style if there is one, else the agent's last style, badged "written by
+  the agent". A read-only "last used" box with a copy button was rejected as "not editable — the
+  user should be able to edit it for the agent". Because that box is PRE-FILLED with the agent's
+  draft, saving it cannot mean "pin": every unrelated save would freeze the agent's latest draft.
+  `style_from_form` pins only an EDIT, compared against what the page SHOWED (posted back as hidden
+  `video_style_shown` + `video_style_pinned`), never against the current `last_video_style`, or a
+  video finishing while the page was open would make the untouched old text look like an edit.
+  Clearing a pinned style hands it back to the agent. A POST without the hidden fields is taken as
+  written.
   `record_used_style` **re-reads** the instruction before saving (the run's copy is stale, and
   writing it back whole would undo an edit made while the video rendered) and never fails a video.
   The save route only touches `video_style` when the field was posted.
+- **A video HAS SPOKEN WORDS unless the operator asked for less, and code enforces it**
+  (`video_style.speech_check` / `has_spoken_line`, the `wordless` parameter on
+  `create_video_sequence` and `generate_video`). Reported as "still all the videos are word-less
+  even if I did not ask for it". A scan of EVERY stored brief, note, memory and style found nothing
+  asking the kids channel for silence, and its 09-24/09-25 episodes had a line in every shot. On
+  09-26 ("how does a bell make a sound?") the agent chose "word-free" itself, wrote "a gentle
+  word-free story" into memory, and the next night copied that as precedent. Over September, 19 of
+  28 sequences had no spoken line anywhere. The prompt's step (b) now says word-less is the
+  OPERATOR's decision (not the audience's age, not a sound being the lesson, not memory), and the
+  backstop refuses a video with no spoken line in any shot or the style **before any Sora call**,
+  unless `wordless=True`, which is appended to `run.log`. A refusal is not a video failure (it
+  returns before the `video_failures` circuit breaker). A spoken line means **quoted words or an
+  explicit narrator/voice-over**, nothing looser: `Name:` also matched "A quiet wide view of the
+  meadow:" and "CHARACTERS:", and speech verbs matched "what the record will say". The detector was
+  checked against every real sequence of the month before shipping, and the false positives are
+  kept as test cases in `tests/test_video_speech.py`. Negations ("no speech", "no narrator") are
+  stripped first, since the agent writes them into scenes and styles.
 - **Every forward link is another generation away from shot 1** (`_CHAIN_DRIFT_LINKS`). `[0, 0, 0,
   0, 0]` is a legal chain and a drifting one; past three consecutive `remix(previous)` links
   `timing_notes` says so and suggests anchoring the later shots back to an early shot (`[0, 0, 1, 1,

@@ -23,7 +23,7 @@ from werkzeug.utils import secure_filename
 
 from ..config import YOUTUBE_PRIVACY_CHOICES, settings
 from ..assets import browser_url, public_url
-from .. import attachments, cooldown, llm_access, tokens, workspaces
+from .. import attachments, cooldown, llm_access, tokens, video_style, workspaces
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
@@ -396,6 +396,11 @@ def create_app() -> Flask:
     def _format_metrics_global(metrics):
         """A run's counters as ordered ``{label, value}`` pills for the templates."""
         return _format_metrics(metrics or {})
+
+    @app.template_global("video_style_box")
+    def _video_style_box(instruction):
+        """``(text, pinned)`` for the instruction form's one editable Video style box."""
+        return video_style.form_value(instruction) if instruction else ("", False)
 
     @app.template_global("time_until")
     def _time_until(when):
@@ -1542,9 +1547,16 @@ def create_app() -> Flask:
         # Git has no deployment default, so "" really means "no repository access".
         instr.git_config_id = _pick_provider("git", "git_config_id", instr.git_config_id)
         # Only when the field was on the form: a POST without it (a script, an old
-        # bookmark) must not wipe a style the operator pinned.
+        # bookmark) must not wipe a style the operator pinned. The box is pre-filled with
+        # the AGENT's style when nothing is pinned, so only an edit pins it — see
+        # video_style.style_from_form.
         if "video_style" in f:
-            instr.video_style = f.get("video_style", "").replace("\r\n", "\n").strip()
+            was = f.get("video_style_pinned")
+            instr.video_style = video_style.style_from_form(
+                f.get("video_style", ""),
+                shown=f.get("video_style_shown"),
+                was_pinned=None if was is None else was == "1",
+                current=instr.video_style or "")
         accounts = {a.id: a for a in store.list_accounts(workspace_id=_workspace_id())}
         chosen_accounts = [a for a in request.form.getlist("account_ids") if a in accounts]
         instr.set_account_ids(chosen_accounts)

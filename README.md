@@ -738,12 +738,16 @@ Every shot of a video starts with the same **style** text: the characters, the a
 light, and whatever you want about sound (music, who speaks, a narrator). Repeating it word for word
 is what keeps the clips looking like one video. It's on the instruction form, under the brief:
 
-- **Video style** is yours. Fill it in and every video of this instruction uses it exactly, and the
-  agent's own style is ignored. Put the cast and the sound here: *"…Gentle ukulele music; the
-  characters speak short, simple sentences."*
-- **Style used in the last video** shows what was actually sent to Sora. Leave your field empty and
-  the agent writes its own style each time; this is where you see it. **Use as Video style** copies
-  it into your field so you can pin it or edit it. Nothing is saved until you press Save.
+- **Before you set anything**, the box shows the style the agent used in its last video, marked
+  *written by the agent*. Edit it and save, and every video from then on uses your version: it's
+  now *yours*. Saving the form without touching it leaves the agent free to keep writing its own.
+- **Once it's yours**, every video of this instruction uses it exactly, and the agent's own style is
+  ignored. Put the cast and the sound here: *"…Gentle ukulele music; the characters speak short,
+  simple sentences."* Clear the box and save to hand it back to the agent.
+
+Videos have **spoken words unless you ask for less**. A video with no spoken line anywhere is
+refused before anything is rendered, unless the brief, the note or this style asks for a word-less
+one. "At most one phrase" means one phrase, not none.
 
 If a video sounds wrong (no speech, no music), read these two first. Anything in the style applies
 to every shot.

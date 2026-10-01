@@ -127,7 +127,7 @@ from agents import function_tool
 
 from .. import video
 from ..assets import public_url, read_bytes, save_bytes
-from ..video_style import record_used_style, resolve_style
+from ..video_style import record_used_style, resolve_style, speech_check
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -1100,6 +1100,7 @@ def _make_create_sequence(state: dict):
         scene_remix_from: list[int] | None = None,
         rendered_asset_paths: list[str] | None = None,
         on_reference_refused: str = "ask",
+        wordless: bool = False,
     ) -> dict:
         """Generate several Sora clips and merge them into one video.
 
@@ -1196,6 +1197,13 @@ def _make_create_sequence(state: dict):
                 WITH an accepted picture is not chained at all, so giving every
                 shot its own image opts the whole video out of remix.
             reference_asset_path: Shorthand for a single image on shot 1.
+            wordless: Leave False. A video has spoken words (a quoted line in at
+                least one shot, or a narrator), and one with none anywhere is
+                refused before anything is rendered. Set True ONLY when the brief,
+                the operator note or the Video style asks for a word-less video;
+                it is recorded on the run. A brief allowing "at most one phrase" is
+                not word-less: use the phrase. What an earlier video did is not a
+                reason.
             on_reference_refused: What to do when Sora rejects one of your
                 pictures. **"ask"** (the default) stops there and returns
                 ``error="reference_refused"`` with the reason Sora gave, the shot,
@@ -1229,6 +1237,9 @@ def _make_create_sequence(state: dict):
             return {"error": "video_circuit_open",
                     "message": "Video generation failed repeatedly this run."}
         style, style_source, style_note = resolve_style(state, style)
+        refused = speech_check(state, [*scenes, style], wordless)
+        if refused:
+            return refused     # before any Sora call; not a video failure either
         result = await perform_create_sequence(
             state, scenes, style=style, seconds_each=seconds_each,
             orientation=orientation, continuity=continuity, scene_seconds=scene_seconds,

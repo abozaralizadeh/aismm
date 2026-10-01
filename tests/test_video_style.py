@@ -25,6 +25,7 @@ from aismm.agent import prompts
 from aismm.models import Instruction
 
 PINNED = "Round cream puppy with a teal scarf. Soft watercolour. Gentle ukulele music."
+LINE = 'Pupu says, "Look, a rainbow!"'
 
 
 def _invoke(tool, **kwargs):
@@ -125,7 +126,7 @@ def test_create_video_sequence_uses_the_pinned_style(store, monkeypatch):
     monkeypatch.setattr(sequence_tool.sora_config, "enabled", lambda: True)
     state = {"instruction": instr, "store": store}
     tool = sequence_tool._make_create_sequence(state)
-    out = _invoke(tool, scenes=["a", "b"], style="Looks only: no voice, no narrator.")
+    out = _invoke(tool, scenes=[LINE, "b"], style="Looks only: no voice, no narrator.")
 
     assert seen["style"] == PINNED
     assert out["style_source"] == "instruction" and "was not used" in out["style_note"]
@@ -144,7 +145,7 @@ def test_create_video_sequence_records_the_agents_own_style(store, monkeypatch):
     monkeypatch.setattr(sequence_tool, "perform_create_sequence", fake_perform)
     monkeypatch.setattr(sequence_tool.sora_config, "enabled", lambda: True)
     tool = sequence_tool._make_create_sequence({"instruction": instr, "store": store})
-    out = _invoke(tool, scenes=["a"], style="agent's own look")
+    out = _invoke(tool, scenes=[LINE], style="agent's own look")
 
     assert out["style_source"] == "agent" and "style_note" not in out
     assert store.get_instruction(instr.id).last_video_style == "agent's own look"
@@ -162,7 +163,7 @@ def test_a_failed_video_records_nothing(store, monkeypatch):
     monkeypatch.setattr(sequence_tool, "perform_create_sequence", fake_perform)
     monkeypatch.setattr(sequence_tool.sora_config, "enabled", lambda: True)
     tool = sequence_tool._make_create_sequence({"instruction": instr, "store": store})
-    _invoke(tool, scenes=["a"], style="never rendered")
+    _invoke(tool, scenes=[LINE], style="never rendered")
     assert store.get_instruction(instr.id).last_video_style == ""
 
 
@@ -179,9 +180,9 @@ def test_generate_video_prefixes_the_pinned_style(monkeypatch):
     monkeypatch.setattr(video_tool.sora_config, "enabled", lambda: True)
     tool = video_tool._make_generate_video(
         {"instruction": Instruction(name="I", video_style=PINNED)})
-    out = _invoke(tool, prompt="The puppy waves.")
+    out = _invoke(tool, prompt=f"The puppy waves. {LINE}")
     assert seen["prompt"].startswith(f"STYLE: {PINNED}")
-    assert seen["prompt"].endswith("The puppy waves.")
+    assert seen["prompt"].endswith(LINE)
     assert out["style_source"] == "instruction"
 
 
@@ -235,13 +236,73 @@ def _form(instr, **extra):
     return data
 
 
-def test_the_form_shows_the_field_and_the_last_style_used(client, store):
-    instr = store.upsert_instruction(Instruction(name="Kids", brief="b",
-                                                 last_video_style="Looks only: no voice."))
+def test_the_agents_last_style_is_in_the_editable_box(client, store):
+    """Reported: "the style written by the agent is not editable". It now IS the box."""
+    agent = "Looks only: no voice."
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b", last_video_style=agent))
     page = client.get(f"/instructions/{instr.id}/edit").get_data(as_text=True)
-    assert 'name="video_style"' in page
-    assert "Style used in the last video" in page and "Looks only: no voice." in page
-    assert "data-copy-style" in page
+    box = page[page.index('name="video_style"'):]
+    assert box[box.index(">") + 1:].lstrip().startswith(agent), "agent's style must be editable"
+    assert "written by the agent" in page
+    assert 'name="video_style_pinned" value="0"' in page
+    assert "data-copy-style" not in page          # the read-only box + copy button are gone
+
+
+def test_a_pinned_style_is_shown_as_yours(client, store):
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b", video_style=PINNED,
+                                                 last_video_style="older agent draft"))
+    page = client.get(f"/instructions/{instr.id}/edit").get_data(as_text=True)
+    assert PINNED in page and "older agent draft" not in page
+    assert 'name="video_style_pinned" value="1"' in page
+
+
+def _save_box(client, instr, text, *, shown, pinned):
+    client.post("/instructions", data=_form(instr, video_style=text, video_style_shown=shown,
+                                            video_style_pinned="1" if pinned else "0"))
+
+
+def test_saving_the_agents_draft_untouched_does_not_pin_it(client, store):
+    agent = "agent draft"
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b", last_video_style=agent))
+    _save_box(client, instr, agent + "\r\n", shown=agent, pinned=False)  # browser CRLF
+    assert store.get_instruction(instr.id).video_style == ""
+
+
+def test_editing_the_agents_draft_pins_the_edit(client, store):
+    agent = "agent draft"
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b", last_video_style=agent))
+    _save_box(client, instr, agent + " Characters speak short lines.", shown=agent, pinned=False)
+    assert store.get_instruction(instr.id).video_style == agent + " Characters speak short lines."
+
+
+def test_a_video_finishing_while_the_page_was_open_is_not_mistaken_for_an_edit(client, store):
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b",
+                                                 last_video_style="draft shown on the page"))
+    later = store.get_instruction(instr.id)          # a video renders meanwhile
+    later.last_video_style = "a newer agent draft"
+    store.upsert_instruction(later)
+    _save_box(client, instr, "draft shown on the page", shown="draft shown on the page",
+              pinned=False)
+    assert store.get_instruction(instr.id).video_style == ""
+
+
+def test_clearing_a_pinned_style_hands_it_back_to_the_agent(client, store):
+    instr = store.upsert_instruction(Instruction(name="Kids", brief="b", video_style=PINNED))
+    _save_box(client, instr, "", shown=PINNED, pinned=True)
+    assert store.get_instruction(instr.id).video_style == ""
+
+
+@pytest.mark.parametrize("submitted,shown,was_pinned,current,expected", [
+    ("x", None, None, "", "x"),            # an old page/script: taken as written
+    ("x", "x", False, "", ""),             # untouched agent draft
+    ("y", "x", False, "", "y"),            # edited
+    ("", "x", False, "", ""),              # cleared an agent draft: still unpinned
+    ("x", "x", True, "x", "x"),            # untouched pinned style
+    ("", "x", True, "x", ""),              # cleared a pinned style
+])
+def test_style_from_form_rules(submitted, shown, was_pinned, current, expected):
+    assert video_style.style_from_form(submitted, shown=shown, was_pinned=was_pinned,
+                                       current=current) == expected
 
 
 def test_saving_the_form_stores_the_video_style(client, store):

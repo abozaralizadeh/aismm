@@ -14,7 +14,7 @@ from agents import function_tool
 
 from ..assets import public_url, save_bytes
 from .. import video
-from ..video_style import resolve_style
+from ..video_style import resolve_style, speech_check
 from . import sora_config
 from .registry import register_tool
 from .sora_client import (
@@ -107,7 +107,7 @@ def _make_generate_video(state: dict):
 
     @function_tool
     async def generate_video(prompt: str, seconds: int = 8, orientation: str = "portrait",
-                             reference_asset_path: str = "") -> dict:
+                             reference_asset_path: str = "", wordless: bool = False) -> dict:
         """Generate a short social video clip with Sora 2.
 
         Args:
@@ -124,6 +124,10 @@ def _make_generate_video(state: dict):
                 already have; do NOT describe the image in the prompt instead,
                 which throws away everything the picture actually shows. It is
                 fitted to the clip size for you.
+            wordless: Leave False. A clip needs a spoken line (in quotes) or a
+                narrator, or it is refused before anything is rendered. Set True
+                ONLY when the brief, the operator note or the Video style asks for
+                no words; it is recorded on the run.
 
         Returns ``asset_path`` and ``public_url`` to pass to ``publish``. When a
         reference was given, ``reference_used`` says whether Sora accepted it —
@@ -133,6 +137,9 @@ def _make_generate_video(state: dict):
         # A Video style pinned on the instruction applies to single clips too: the
         # operator wrote it for every video of this instruction, not just sequences.
         style, _source, _note = resolve_style(state, "")
+        refused = speech_check(state, [prompt, style], wordless)
+        if refused:
+            return refused
         if style:
             prompt = f"STYLE: {style}\n{prompt}"
         result = await perform_generate_video(

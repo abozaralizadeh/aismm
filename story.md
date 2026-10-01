@@ -5,6 +5,47 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-10-01 — "It's not editable": one box instead of two
+
+**Two follow-ups.** Word-less videos were still showing up, and the code that stops them had never
+been deployed: it was sitting uncommitted on my laptop. The two kids episodes after the memory
+cleanup did have dialogue. The psychologist reel didn't: its brief says "at most one phrase", and
+the agent took "at most one" to mean zero. The refusal now says plainly that allowing a phrase isn't
+asking for silence.
+
+**The style box:** I'd shown the agent's style read-only, with a "copy" button. The feedback was
+simple: let me edit it. So now there's one box. Before you touch it, it holds what the agent wrote.
+Edit it and it's yours.
+
+**The subtle part:** a box pre-filled with the agent's text can't treat "saved" as "chosen", or
+every unrelated save would freeze the agent's latest draft. Only an *edit* pins it, compared against
+what the page actually showed. Otherwise a video finishing while the page is open would make your
+untouched text look like a change.
+
+---
+
+## 2026-09-27 — The agent kept choosing silence, then remembering it
+
+**Symptom:** "still all the videos are word-less, even if I did not ask for it".
+
+**What the storage said:** I read every brief, note, memory and style on the account. Nothing
+asked the kids channel for silence. Two nights in a row it had characters talking in every shot.
+Then on the bell episode it decided, on its own, that the lesson was the *sound*, so nobody should
+speak. It wrote "a gentle word-free story" into its memory, and the next night copied that like an
+instruction. Across the whole month, **19 of 28 videos had not a single spoken line**.
+
+**The fix:** two layers. The prompt now says going word-less is the operator's call, not the
+agent's, and that what it did last time is not a reason. And the code refuses to render a video
+with no spoken line anywhere, before a cent is spent on Sora, unless the agent explicitly says
+`wordless=True`, which shows up in the run log.
+
+**The detail worth a post:** "does this shot have speech?" sounds easy. My first detector counted
+"Name:" as dialogue and got fooled by "A quiet wide view of the meadow:". I only trusted it after
+running it over every real video of the month and matching it against what I knew each one
+contained.
+
+---
+
 ## 2026-09-24 — The style was hiding in the agent's memory
 
 **Symptom:** "still all of the videos are completely without speech!"
