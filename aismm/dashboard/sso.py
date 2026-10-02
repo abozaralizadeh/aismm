@@ -54,7 +54,12 @@ logger = logging.getLogger("aismm.sso")
 # be able to fetch with no cookie (TikTok requires both URLs). ``site_verification``
 # serves the domain-ownership files (e.g. TikTok's tiktok<code>.txt) the same way.
 PUBLIC_ENDPOINTS = {"login", "auth_callback", "logout", "static", "asset", "healthz",
-                    "terms", "privacy", "site_verification"}
+                    "terms", "privacy", "site_verification",
+                    # User data deletion: Meta and TikTok call the two callbacks
+                    # server-to-server with no session, and the pages are for people
+                    # who never sign in here (aismm/data_deletion.py).
+                    "data_deletion_page", "data_deletion_status", "meta_data_deletion",
+                    "tiktok_data_deletion"}
 
 _SESSION_USER = "sso_user"
 _STATE_KEY = "sso_state"

@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 
 from ..config import GitSettings, ImageSettings, LLMSettings, SoraSettings
 from ..models import (
-    Account, Instruction, InstructionFile, InstructionState, LLMConfig, PlatformApp,
+    Account, DeletionRequest, Instruction, InstructionFile, InstructionState, LLMConfig,
+    PlatformApp,
     ProviderConfig, Run, RunStatus, StagedPost, StagedStatus, UserProfile, Workspace,
     WorkspaceMember,
 )
@@ -336,6 +337,25 @@ class Store(ABC):
     @abstractmethod
     def list_staged(self, *, pending_only: bool = False, limit: int = 100,
                     workspace_id: str | None = None) -> list[StagedPost]: ...
+
+    # --- data deletion (aismm/data_deletion.py) ---------------------------- #
+    @abstractmethod
+    def delete_runs_for_account(self, account_id: str) -> int:
+        """Delete every run of this account. Returns how many went."""
+
+    @abstractmethod
+    def delete_staged_for_account(self, account_id: str) -> int:
+        """Delete every staged post/reply of this account. Returns how many went."""
+
+    @abstractmethod
+    def upsert_deletion_request(self, request: DeletionRequest) -> DeletionRequest: ...
+
+    @abstractmethod
+    def get_deletion_request(self, code: str) -> DeletionRequest | None: ...
+
+    @abstractmethod
+    def list_deletion_requests(self, *, status: str | None = None) -> list[DeletionRequest]:
+        """Newest first, optionally only one status (the boot sweep wants "received")."""
 
     def open_staged_reply_keys(self, account_id: str) -> set[str]:
         """``{target_type}:{target_id}`` for this account's still-open staged replies.

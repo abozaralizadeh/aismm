@@ -20,6 +20,7 @@
     <nav>
       <a href="{{ url_for('terms') }}">Terms</a>
       <a href="{{ url_for('privacy') }}">Privacy</a>
+      <a href="{{ url_for('data_deletion_page') }}">Data deletion</a>
     </nav>
   </header>
   <main class="legal">
@@ -30,6 +31,7 @@
       {% if contact_email %}Questions: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.{% endif %}
       · <a href="{{ url_for('terms') }}">Terms of Service</a>
       · <a href="{{ url_for('privacy') }}">Privacy Policy</a>
+      · <a href="{{ url_for('data_deletion_page') }}">Data deletion</a>
     </p>
   </main>
 </body>

@@ -9,13 +9,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import io
+import json
 import logging
 import re
 import threading
 from collections.abc import Callable
 
 from flask import (
-    Flask, Response, abort, flash, g, redirect, render_template, request, send_file,
+    Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, send_file,
     send_from_directory, session, url_for,
 )
 from markupsafe import Markup, escape
@@ -23,7 +24,8 @@ from werkzeug.utils import secure_filename
 
 from ..config import YOUTUBE_PRIVACY_CHOICES, settings
 from ..assets import browser_url, public_url
-from .. import attachments, cooldown, llm_access, tokens, video_style, workspaces
+from .. import (attachments, cooldown, data_deletion, llm_access, tokens, video_style,
+               workspaces)
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
@@ -45,6 +47,8 @@ from ..platforms.twitter import HOME_TIMELINE as TW_HOME_TIMELINE
 from ..platforms.twitter import community_ids as twitter_community_ids
 from .. import orchestrator, scheduler
 from ..store import get_store
+
+logger = logging.getLogger("aismm.dashboard")
 
 
 def account_groups(accounts) -> dict:
@@ -1097,6 +1101,24 @@ def create_app() -> Flask:
                                       workspace_id=connect_workspace)
         return redirect(url_for("accounts"))
 
+    @app.route("/accounts/<account_id>/delete-data", methods=["POST"])
+    def delete_account_data(account_id):
+        """The manual path for platforms with no deletion callback (X, YouTube, LinkedIn,
+        Reddit) and for any request that arrives by email: the same purge as the
+        callbacks, with the same confirmation code to send back."""
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        req = data_deletion.submit(store, source="operator", account_id=account.id,
+                                   background=False)
+        flash(Markup(
+            f"Deleted all data of {escape(account.handle or account.external_id)}: "
+            f"{req.runs_deleted} run(s), {req.staged_deleted} staged item(s). Confirmation "
+            f"code <code>{escape(req.id)}</code> — status page: "
+            f'<a href="{escape(data_deletion.status_url(req.id))}">'
+            f"{escape(data_deletion.status_url(req.id))}</a>"), "success")
+        return redirect(url_for("accounts"))
+
     @app.route("/accounts/<account_id>/delete", methods=["POST"])
     def delete_account(account_id):
         store = get_store()
@@ -1130,6 +1152,11 @@ def create_app() -> Flask:
             redirect_uris={p.value: settings.redirect_uri(p.value) for p in PlatformName},
             terms_url=settings.dashboard.external_url("legal/terms"),
             privacy_url=settings.dashboard.external_url("legal/privacy"),
+            deletion_urls={
+                "meta": settings.dashboard.external_url("data-deletion/meta"),
+                "tiktok": settings.dashboard.external_url("data-deletion/tiktok"),
+                "page": settings.dashboard.external_url("data-deletion"),
+            },
         )
 
     @app.route("/apps", methods=["POST"])
@@ -1991,6 +2018,68 @@ def create_app() -> Flask:
     @app.route("/legal/privacy")
     def privacy():
         return render_template("legal/privacy.html", **_legal_context())
+
+    # ---- user data deletion (aismm/data_deletion.py) ---------------------- #
+    # All four are PUBLIC (sso.PUBLIC_ENDPOINTS): the two callbacks are called
+    # server-to-server by Meta and TikTok with no session, and the pages are for
+    # people who are not users of this dashboard at all.
+    @app.route("/data-deletion")
+    def data_deletion_page():
+        return render_template("legal/data_deletion.html", **_legal_context())
+
+    @app.route("/data-deletion/status", defaults={"code": ""})
+    @app.route("/data-deletion/status/<code>")
+    def data_deletion_status(code):
+        code = (code or request.args.get("code", "")).strip()
+        if not code:
+            return redirect(url_for("data_deletion_page"))
+        req = get_store().get_deletion_request(code)
+        if req is None:
+            return render_template("legal/data_deletion_status.html", req=None,
+                                   code=code, **_legal_context()), 404
+        return render_template("legal/data_deletion_status.html", req=req, code=code,
+                               **_legal_context())
+
+    @app.route("/data-deletion/meta", methods=["POST"])
+    def meta_data_deletion():
+        """Meta's Data Deletion Request Callback (Instagram and Facebook apps)."""
+        store = get_store()
+        try:
+            payload, app_id = data_deletion.parse_meta_signed_request(
+                request.form.get("signed_request", ""),
+                data_deletion.app_secrets(store, data_deletion.META_PLATFORMS))
+        except data_deletion.InvalidSignature as exc:
+            logger.warning("Rejected a Meta data deletion callback: %s", exc)
+            return jsonify({"error": "invalid signed_request"}), 400
+        user_id = str(payload.get("user_id", "") or "")
+        if not user_id:
+            return jsonify({"error": "signed_request carries no user_id"}), 400
+        req = data_deletion.submit(store, source="meta", user_id=user_id, app_id=app_id)
+        return jsonify({"url": data_deletion.status_url(req.id), "confirmation_code": req.id})
+
+    @app.route("/data-deletion/tiktok", methods=["POST"])
+    def tiktok_data_deletion():
+        """TikTok webhook: ``authorization.removed`` deletes that user's data."""
+        store = get_store()
+        body = request.get_data()
+        try:
+            client_key = data_deletion.verify_tiktok_signature(
+                request.headers.get("TikTok-Signature", ""), body,
+                data_deletion.app_secrets(store, [PlatformName.tiktok]))
+        except data_deletion.InvalidSignature as exc:
+            logger.warning("Rejected a TikTok webhook: %s", exc)
+            return jsonify({"error": "invalid signature"}), 401
+        try:
+            event = json.loads(body or b"{}")
+        except ValueError:
+            return jsonify({"error": "body is not JSON"}), 400
+        if event.get("event") != data_deletion.TIKTOK_EVENT:
+            return jsonify({"ok": True, "ignored": event.get("event", "")})
+        open_id = str(event.get("user_openid", "") or "")
+        if not open_id:
+            return jsonify({"error": "event carries no user_openid"}), 400
+        req = data_deletion.submit(store, source="tiktok", user_id=open_id, app_id=client_key)
+        return jsonify({"ok": True, "confirmation_code": req.id})
 
     # ---- domain-verification files --------------------------------------- #
     # TikTok (and other consoles) prove domain ownership by fetching a signature

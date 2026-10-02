@@ -1,0 +1,73 @@
+{% extends "legal/layout.html" %}
+{% block title %}Deleting your data · AISM²{% endblock %}
+{% block content %}
+<h1>Deleting your data</h1>
+<p class="muted">Last updated {{ updated }}.</p>
+
+<p>
+  If you connected an Instagram, Facebook, TikTok, X, YouTube, LinkedIn or Reddit account to
+  {{ product_name }}, you can have everything we store about that account deleted at any time.
+</p>
+
+<h2>What is deleted</h2>
+<ul>
+  <li>The connection itself: the access tokens that let the Service act for you (stored
+    encrypted), your account name and ID, and the settings kept with it.</li>
+  <li>The history of what the Service did on that account: captions, links to published posts,
+    the statistics it read about them, and its logs of each run.</li>
+  <li>Anything waiting for approval: drafted posts and replies, including any quoted comments or
+    messages they answer.</li>
+</ul>
+<p>
+  Posts that were already published stay on the platform, because they are yours there: delete
+  them in the platform's own app. Server logs are size-limited and are overwritten as they rotate.
+</p>
+
+<h2>How to ask</h2>
+
+<h3>Instagram and Facebook</h3>
+<p>
+  These accounts connect through Facebook Login, so the request starts in your Facebook settings:
+  open <strong>Settings &amp; privacy → Settings → Apps and websites</strong>, find
+  {{ product_name }}, remove it, and ask for your data to be deleted. Facebook tells us
+  automatically, we delete your data straight away, and Facebook shows you a
+  <strong>confirmation code</strong> that you can check below.
+</p>
+
+<h3>TikTok</h3>
+<p>
+  In TikTok, open <strong>Settings and privacy → Security &amp; permissions → Apps and
+  services</strong> and remove {{ product_name }}. TikTok tells us, and we delete the data of that
+  account automatically.
+</p>
+
+<h3>X, YouTube, LinkedIn and Reddit</h3>
+<p>
+  These platforms do not tell apps when you remove them, so please do both of these:
+</p>
+<ol>
+  <li>Remove the Service's access:
+    <a href="https://x.com/settings/connected_apps" rel="noopener">X</a> ·
+    <a href="https://myaccount.google.com/permissions" rel="noopener">Google (YouTube)</a> ·
+    <a href="https://www.linkedin.com/psettings/permitted-services" rel="noopener">LinkedIn</a> ·
+    <a href="https://www.reddit.com/prefs/apps" rel="noopener">Reddit</a>.</li>
+  <li>{% if contact_email %}Email <a href="mailto:{{ contact_email }}?subject=Data%20deletion%20request">{{ contact_email }}</a>{% else %}Contact the operator of this service{% endif %}
+    with the platform and the account name. We delete the data within 30 days and reply with a
+    confirmation code.</li>
+</ol>
+
+<h3>Any platform, by email</h3>
+<p>
+  You can always ask by email instead{% if contact_email %}:
+  <a href="mailto:{{ contact_email }}?subject=Data%20deletion%20request">{{ contact_email }}</a>{% endif %}.
+  Tell us the platform and the account name.
+</p>
+
+<h2>Check a request</h2>
+<form method="get" action="{{ url_for('data_deletion_status') }}" class="form inline-form">
+  <label>Confirmation code
+    <input type="text" name="code" required autocomplete="off" spellcheck="false">
+  </label>
+  <button class="btn btn-primary" type="submit">Check status</button>
+</form>
+{% endblock %}

@@ -41,6 +41,8 @@ from .instagram import (
     _safe_url,
     _BLOCKED_SUBCODES,
     _RATE_LIMIT_CODES,
+    meta_user_id,
+    with_user_id,
 )
 from .registry import register
 
@@ -136,6 +138,7 @@ class Facebook(SocialPlatform):
         replace the last. Claiming every Page from a single login avoids that.
         """
         pages = await self._list_pages(access_token)
+        user_id = await meta_user_id(access_token)
         identities = []
         for page in pages:
             token = page.get("access_token", "")
@@ -146,7 +149,8 @@ class Facebook(SocialPlatform):
             identities.append(Identity(
                 external_id=page["id"],
                 handle=page.get("name", ""),
-                meta={"access_token": token, "page_name": page.get("name", "")},
+                meta=with_user_id({"access_token": token, "page_name": page.get("name", "")},
+                                  user_id),
             ))
         if not identities:
             raise RuntimeError(

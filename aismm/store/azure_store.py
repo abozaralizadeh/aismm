@@ -41,7 +41,8 @@ from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, AttachmentPurpose, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction,
+    Account, AttachmentPurpose, DeletionRequest, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID,
+    Instruction,
     InstructionFile, InstructionState, InstructionTask, LLMConfig, MediaPref, PlatformApp,
     PlatformName, ProviderConfig, PublishMode, Run, RunStatus, StagedPost, StagedStatus,
     UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
@@ -65,6 +66,7 @@ PK_MEMBER = "member"
 PK_LLM = "llm"
 PK_PROVIDER = "provider"
 PK_USER = "user"
+PK_DELETION = "deletion"
 
 # Azure caps a single string property at 64 KB; ComicBook uses a similar guard.
 MAX_PROPERTY_CHARS = 32_000
@@ -776,6 +778,54 @@ class AzureStore(Store):
     def update_staged(self, staged):
         self._upsert(PK_STAGED, staged.id, self._staged_to_entity(staged))
         return staged
+
+    def _delete_where_account(self, partition, account_id):
+        # Table Storage cannot filter on a property server-side without a scan anyway,
+        # so read the partition and delete the matches one by one.
+        doomed = [e["RowKey"] for e in self._query(partition)
+                  if e.get("account_id", "") == account_id]
+        for row in doomed:
+            self._delete(partition, row)
+        return len(doomed)
+
+    def delete_runs_for_account(self, account_id):
+        return self._delete_where_account(PK_RUN, account_id)
+
+    def delete_staged_for_account(self, account_id):
+        return self._delete_where_account(PK_STAGED, account_id)
+
+    @staticmethod
+    def _deletion_from_entity(e) -> DeletionRequest:
+        return DeletionRequest(
+            id=e["RowKey"], source=e.get("source", ""), user_ref=e.get("user_ref", ""),
+            app_id=e.get("app_id", ""), status=e.get("status", "received"),
+            accounts_deleted=int(e.get("accounts_deleted", 0) or 0),
+            runs_deleted=int(e.get("runs_deleted", 0) or 0),
+            staged_deleted=int(e.get("staged_deleted", 0) or 0),
+            detail=e.get("detail", ""),
+            requested_at=_parse_dt(e.get("requested_at")) or _now(),
+            completed_at=_parse_dt(e.get("completed_at")),
+        )
+
+    def upsert_deletion_request(self, request):
+        self._upsert(PK_DELETION, request.id, {
+            "source": request.source, "user_ref": request.user_ref, "app_id": request.app_id,
+            "status": request.status, "accounts_deleted": request.accounts_deleted,
+            "runs_deleted": request.runs_deleted, "staged_deleted": request.staged_deleted,
+            "detail": request.detail, "requested_at": request.requested_at,
+            "completed_at": request.completed_at,
+        })
+        return request
+
+    def get_deletion_request(self, code):
+        entity = self._get(PK_DELETION, code) if code else None
+        return self._deletion_from_entity(entity) if entity else None
+
+    def list_deletion_requests(self, *, status=None):
+        items = [self._deletion_from_entity(e) for e in self._query(PK_DELETION)]
+        if status:
+            items = [r for r in items if r.status == status]
+        return sorted(items, key=lambda r: r.requested_at, reverse=True)
 
     def list_staged(self, *, pending_only=False, limit=100, workspace_id=None):
         items = [self._staged_from_entity(e) for e in self._query(PK_STAGED)]

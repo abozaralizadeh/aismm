@@ -356,6 +356,38 @@ def _raise_graph(exc: httpx.HTTPStatusError) -> None:
     raise RuntimeError(message) from None
 
 
+PROVIDER_USER_KEY = "provider_user_id"
+
+
+def with_user_id(meta: dict, user_id: str) -> dict:
+    """``meta`` plus the Facebook user id, only when it was actually read.
+
+    A reconnect MERGES new meta over the stored one, so an empty value here would
+    erase a good id recorded at an earlier connect.
+    """
+    return {**meta, PROVIDER_USER_KEY: user_id} if user_id else meta
+
+
+async def meta_user_id(access_token: str) -> str:
+    """The app-scoped Facebook user id behind a USER token, or ``""``.
+
+    Meta's Data Deletion Request Callback names the person by THIS id, and nothing else
+    we store carries it: an account row holds the Instagram account id and the Page
+    id. So it is recorded at connect (``account.meta["provider_user_id"]``), and
+    without it a deletion request could not be matched to anything. Best effort: a
+    connect must never fail over it; older accounts are matched through
+    ``/debug_token`` instead (see aismm/data_deletion.py).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(f"{GRAPH}/me", params={"fields": "id"},
+                                 headers=_auth(access_token))
+        return str(r.json().get("id", "")) if r.status_code < 400 else ""
+    except Exception as exc:  # noqa: BLE001 - never block a connect on this
+        logger.warning("Could not read the Facebook user id at connect: %s", exc)
+        return ""
+
+
 class Instagram(SocialPlatform):
     name = PlatformName.instagram
     capabilities = Capabilities(
@@ -502,8 +534,9 @@ class Instagram(SocialPlatform):
             # Publishing uses the PAGE access token; store it as the account token.
             # The PAGE id is stored too: Instagram MESSAGING hangs off the Page,
             # not off the IG user id (see _messaging_target).
-            meta={"access_token": page_token, "page_name": page.get("name", ""),
-                  "page_id": str(page.get("id", ""))},
+            meta=with_user_id({"access_token": page_token, "page_name": page.get("name", ""),
+                               "page_id": str(page.get("id", ""))},
+                              await meta_user_id(access_token)),
         )
 
     async def fetch_identities(self, access_token: str) -> list[Identity]:
@@ -519,6 +552,7 @@ class Instagram(SocialPlatform):
         one that isn't gets reported by the accounts page's permission check.
         """
         pages = await self._list_pages(access_token)
+        user_id = await meta_user_id(access_token)
         identities = []
         for page in pages:
             iba = page.get("instagram_business_account")
@@ -533,8 +567,8 @@ class Instagram(SocialPlatform):
             identities.append(Identity(
                 external_id=iba["id"],
                 handle=iba.get("username") or page.get("name", ""),
-                meta={"access_token": token, "page_name": page.get("name", ""),
-                      "page_id": str(page.get("id", ""))},
+                meta=with_user_id({"access_token": token, "page_name": page.get("name", ""),
+                                   "page_id": str(page.get("id", ""))}, user_id),
             ))
 
         if not identities:
@@ -589,6 +623,9 @@ class Instagram(SocialPlatform):
                 "scopes": list(data.get("scopes", [])),
                 "is_valid": bool(data.get("is_valid", False)),
                 "profile_id": str(data.get("profile_id", "")),
+                # The person who granted the token — what Meta's deletion callback
+                # names. Read for accounts connected before it was recorded.
+                "user_id": str(data.get("user_id", "")),
                 "expires_at": data.get("expires_at", 0),
             }
         except Exception as exc:  # noqa: BLE001 - diagnostics must never break a page

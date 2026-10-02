@@ -294,6 +294,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/tools/git_tools.py](aismm/tools/git_tools.py) | read-only GitHub tools behind a per-instruction PAT (private repos) |
 | [aismm/async_clients.py](aismm/async_clients.py) | async API clients cached per (event loop, fingerprint) |
 | [aismm/video_style.py](aismm/video_style.py) | the instruction's Video style: pinned by the operator, last used recorded by code |
+| [aismm/data_deletion.py](aismm/data_deletion.py) | Meta/TikTok deletion callbacks, the purge, confirmation codes |
 | [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
@@ -1509,6 +1510,29 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   directly (a `ResourceWarning` at worst); and the within-run sharing is untouched, which is what
   the pooling was ever for. Not the same bug as the Playwright one below — that leaks a
   subprocess and fires AFTER `RUN DONE`; this one fails the run before it does any work.
+- **User data deletion has ONE purge behind every route** ([data_deletion.py](aismm/data_deletion.py)).
+  Meta requires a Data Deletion Request Callback or an instructions page; both exist. `POST
+  /data-deletion/meta` takes Meta's `signed_request` (`<sig>.<payload>`, base64url, HMAC-SHA256 of
+  the payload SEGMENT keyed with the app secret, tried against every Meta app: `.env` and every
+  `PlatformApp` for instagram/facebook) and must answer `{"url", "confirmation_code"}`. `POST
+  /data-deletion/tiktok` is TikTok's `authorization.removed` webhook (`TikTok-Signature:
+  t=…,s=…` = HMAC of `"{t}.{raw body}"`, 5-minute replay window). X/YouTube/LinkedIn/Reddit have no
+  callback, so `/data-deletion` (public instructions) plus the Accounts page's **Delete all data**
+  (`delete_account_data`) cover them. All four public endpoints are in `sso.PUBLIC_ENDPOINTS`, since
+  the platforms call with no session. **Meta names the person by the APP-SCOPED Facebook user id,
+  which no account row carried** (it held the IG account id and the Page id), so `meta_user_id`
+  records it at connect as `meta["provider_user_id"]` via `with_user_id`. That helper omits the key
+  when the read failed, because a reconnect MERGES meta and an empty value would erase a good id.
+  Older accounts are matched through `/debug_token`'s `user_id` (who granted the stored Page token),
+  and the answer is kept. The purge (`purge_account`) deletes staged items, runs, the instruction
+  links and the account. Media stays (the operator's work); published posts stay on the platform.
+  **The user id is never stored**: `DeletionRequest.user_ref` is a sha256, and accounts are matched
+  by hashing theirs. The confirmation code is the row id and random, because the status page is
+  public. The purge runs in a daemon thread so Meta gets its answer at once; a retried callback
+  returns the same open request; `scheduler._finish_data_deletions` re-runs `received`/`failed` ones
+  at boot. New store methods (`delete_runs_for_account`, `delete_staged_for_account`,
+  `*_deletion_request`) are in both backends. `dashboard/app.py` had no module `logger`, so an
+  existing `logger.info` in the X community-name fallback would have raised `NameError`; it has one now.
 - **Secrets**: `.env`, `tokens.key`, and `data/` are git-ignored. Never commit tokens or print
   decrypted ones.
 - **Dashboard SSO** ([dashboard/sso.py](aismm/dashboard/sso.py)): generic OIDC (Google/Entra/Okta —

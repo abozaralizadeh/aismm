@@ -230,6 +230,13 @@
             Check permissions
           </button>
         </form>
+        <form method="post" action="{{ url_for('delete_account_data', account_id=a.id) }}"
+              onsubmit="return confirm('Delete ALL data of {{ a.handle or a.external_id }}?\n\nThis disconnects it AND permanently deletes its run history and anything waiting for approval, and removes it from every instruction. Use it when its owner asks for their data to be deleted. It cannot be undone.');">
+          <button class="btn btn-danger small"
+                  title="For a data deletion request: disconnect AND delete its run history and staged items. Gives you a confirmation code to send back.">
+            Delete all data
+          </button>
+        </form>
         <form method="post" action="{{ url_for('delete_account', account_id=a.id) }}"
               onsubmit="return confirm('Disconnect {{ a.handle or a.external_id }}?{% if uses %}\n\n{{ uses | length }} instruction(s) publish through it and will stop.{% endif %}');">
           <button class="btn btn-danger small">Disconnect</button>

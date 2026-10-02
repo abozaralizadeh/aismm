@@ -461,6 +461,28 @@ Connect · Brand B — Meta app →
 > is reachable today — connect the second through its own Meta app / Facebook login, or ask for a
 > Page picker to be added.
 
+### User data deletion (required by Meta, expected everywhere)
+
+Meta requires every app that accesses user data to let people ask for that data to be deleted,
+through a **data deletion callback** or an **instructions page**. AISMM has both, and the same purge
+behind every route. It deletes the account (its encrypted tokens and everything stored with it), its
+run history, anything waiting for approval, and its place in every instruction. Generated media is
+yours and stays; posts already published stay on the platform.
+
+| Platform | Register this in the developer console | What triggers it |
+|---|---|---|
+| Instagram, Facebook | **Data Deletion Request URL** → `<public URL>/data-deletion/meta` (App settings → Basic) | The person removes the app on Facebook and asks for deletion |
+| TikTok | **Webhook callback URL** → `<public URL>/data-deletion/tiktok` | TikTok's `authorization.removed` event |
+| X, YouTube, LinkedIn, Reddit | No callback exists. If asked, give `<public URL>/data-deletion` | The person emails you; you press **Delete all data** on the Accounts page |
+
+The **Apps** page shows the exact URL to paste for each platform. Every request gets a confirmation
+code and a public status page (`/data-deletion/status/<code>`). All of these URLs work without
+signing in, because the platforms call them with no session.
+
+Meta names the person by their app-scoped Facebook user id, which AISMM records at connect. Accounts
+connected before that are matched by asking Graph who granted their stored token, so nothing needs
+reconnecting.
+
 ---
 
 ## Connecting accounts

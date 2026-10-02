@@ -1,0 +1,31 @@
+{% extends "legal/layout.html" %}
+{% block title %}Data deletion status · AISM²{% endblock %}
+{% block content %}
+<h1>Data deletion status</h1>
+{% if not req %}
+  <p>There is no deletion request with the code <code>{{ code }}</code>. Check the code and try
+    again, or <a href="{{ url_for('data_deletion_page') }}">see how to ask for deletion</a>.</p>
+{% else %}
+  <p>Confirmation code <code>{{ req.id }}</code>, received
+    {{ req.requested_at.strftime('%d %B %Y, %H:%M') }} UTC.</p>
+  {% if req.status == 'completed' %}
+    <p><strong>Done.</strong> Everything we stored about
+      {{ req.accounts_deleted }} connected account{{ '' if req.accounts_deleted == 1 else 's' }}
+      has been deleted{% if req.completed_at %} ({{ req.completed_at.strftime('%d %B %Y, %H:%M') }} UTC){% endif %}:
+      the connection and its tokens, {{ req.runs_deleted }} record{{ '' if req.runs_deleted == 1 else 's' }}
+      of activity, and {{ req.staged_deleted }} item{{ '' if req.staged_deleted == 1 else 's' }}
+      waiting for approval.</p>
+  {% elif req.status == 'nothing_found' %}
+    <p><strong>Done.</strong> We hold no data about this account: none of our connected accounts
+      belongs to it, so there was nothing to delete.</p>
+  {% elif req.status == 'failed' %}
+    <p><strong>In progress.</strong> The deletion did not finish on the first attempt and will be
+      retried automatically. {% if contact_email %}If this does not change soon, write to
+      <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> with this code.{% endif %}</p>
+  {% else %}
+    <p><strong>In progress.</strong> Your request has been received and the deletion is running.
+      This page updates when it is done.</p>
+  {% endif %}
+{% endif %}
+<p><a href="{{ url_for('data_deletion_page') }}">How data deletion works</a></p>
+{% endblock %}

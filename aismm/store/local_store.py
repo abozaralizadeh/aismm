@@ -19,7 +19,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from ..config import ensure_dirs, settings
 from ..crypto import decrypt, encrypt
 from ..models import (
-    Account, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction, InstructionFile,
+    Account, DeletionRequest, ENV_IMAGE_ID, ENV_LLM_ID, ENV_VIDEO_ID, Instruction,
+    InstructionFile,
     InstructionState, LLMConfig, Lock, PlatformApp, ProviderConfig, Run, RunStatus,
     StagedPost, StagedStatus, UserProfile, Workspace, WorkspaceMember,
 )
@@ -524,6 +525,36 @@ class LocalStore(Store):
             s.commit()
             s.refresh(merged)
             return merged
+
+    def delete_runs_for_account(self, account_id):
+        with Session(self._engine) as s:
+            result = s.exec(sa_delete(Run).where(Run.account_id == account_id))
+            s.commit()
+            return int(result.rowcount or 0)
+
+    def delete_staged_for_account(self, account_id):
+        with Session(self._engine) as s:
+            result = s.exec(sa_delete(StagedPost).where(StagedPost.account_id == account_id))
+            s.commit()
+            return int(result.rowcount or 0)
+
+    def upsert_deletion_request(self, request):
+        with Session(self._engine) as s:
+            merged = s.merge(request)
+            s.commit()
+            s.refresh(merged)
+            return merged
+
+    def get_deletion_request(self, code):
+        with Session(self._engine) as s:
+            return s.get(DeletionRequest, code) if code else None
+
+    def list_deletion_requests(self, *, status=None):
+        with Session(self._engine) as s:
+            q = select(DeletionRequest)
+            if status:
+                q = q.where(DeletionRequest.status == status)
+            return list(s.exec(q.order_by(DeletionRequest.requested_at.desc())))
 
     def list_staged(self, *, pending_only=False, limit=100, workspace_id=None):
         with Session(self._engine) as s:

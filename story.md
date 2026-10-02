@@ -5,6 +5,28 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-10-01 — "Delete my data": one button, three doors
+
+**The requirement:** Meta won't keep an app approved unless people can ask for their data to be
+deleted. Either the app gives Facebook a callback URL to call, or it publishes instructions.
+
+**What shipped:** both, plus TikTok. Remove the app on Facebook and ask for deletion, and Facebook
+calls us. Remove it on TikTok, and TikTok calls us. X, YouTube, LinkedIn and Reddit have no such
+callback, so there's a public page explaining how to ask, and a "Delete all data" button for the
+operator. Every route ends in the same purge and hands out a confirmation code with a public status
+page.
+
+**The catch nobody mentions:** Facebook tells you *who* to delete by an ID unique to your app, and
+we had never stored it. We stored the Instagram account ID and the Page ID, so a request would have
+matched nothing. Now it's recorded at connect. For accounts connected before that, we ask Facebook
+who granted each stored token.
+
+**A detail worth a post:** we keep a record of every request, but not the ID of the person who made
+it, only a hash. Keeping the exact identifier someone asked you to forget, in the log of their
+request to be forgotten, would be a strange way to comply.
+
+---
+
 ## 2026-10-01 — "It's not editable": one box instead of two
 
 **Two follow-ups.** Word-less videos were still showing up, and the code that stops them had never

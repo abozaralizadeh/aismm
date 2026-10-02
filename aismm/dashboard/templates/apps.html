@@ -124,6 +124,22 @@
       <code class="copyable">{{ terms_url }}</code>
       <code class="copyable">{{ privacy_url }}</code>
 
+      <h4>User data deletion</h4>
+      {% if selected.value in ('instagram', 'facebook') %}
+        <p class="hint">In the Meta app dashboard (App settings → Basic, and Instagram settings
+          if shown), set <strong>Data Deletion Request URL</strong> to:</p>
+        <code class="copyable">{{ deletion_urls.meta }}</code>
+      {% elif selected.value == 'tiktok' %}
+        <p class="hint">In TikTok for Developers → your app → Webhooks, set the
+          <strong>Callback URL</strong> to this (it handles <code>authorization.removed</code>):</p>
+        <code class="copyable">{{ deletion_urls.tiktok }}</code>
+      {% else %}
+        <p class="hint">This platform has no deletion callback. If the console asks for
+          user data deletion instructions, give it this page:</p>
+      {% endif %}
+      <p class="hint">Public instructions page (accepted by Meta as the alternative too):</p>
+      <code class="copyable">{{ deletion_urls.page }}</code>
+
       {% if guide.notes %}<p class="hint note-block">ℹ️ {{ guide.notes|md_inline }}</p>{% endif %}
       {% if guide.docs %}
         <p><a href="{{ guide.docs }}" target="_blank" rel="noopener">Platform documentation ↗</a></p>

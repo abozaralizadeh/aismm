@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import enum
 import json
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -596,6 +597,34 @@ class ProviderConfig(SQLModel, table=True):
         if self.is_env:
             return "Deployment default"
         return f"{self.kind} · {self.config.get('model') or '?'}"
+
+
+def _confirmation_code() -> str:
+    return secrets.token_urlsafe(12)
+
+
+class DeletionRequest(SQLModel, table=True):
+    """A request to delete a person's data, and what became of it.
+
+    Meta's Data Deletion Request Callback must answer with a status URL and a
+    confirmation code the person can use to check on the request; the ``id`` IS that
+    code, so it is random and unguessable (the status page is public). The platform's
+    user id is never stored: ``user_ref`` is a sha256 of it, which is enough to match
+    accounts (their ids are hashed the same way) and to show that a request was
+    received, without keeping the very identifier the person asked us to forget.
+    """
+
+    id: str = Field(default_factory=_confirmation_code, primary_key=True)
+    source: str = ""                        # "meta" | "tiktok" | "operator"
+    user_ref: str = Field(default="", index=True)
+    app_id: str = ""                        # the developer app that sent it, when known
+    status: str = "received"                # received | completed | nothing_found | failed
+    accounts_deleted: int = 0
+    runs_deleted: int = 0
+    staged_deleted: int = 0
+    detail: str = ""
+    requested_at: datetime = Field(default_factory=_now)
+    completed_at: datetime | None = None
 
 
 class UserProfile(SQLModel, table=True):

@@ -156,6 +156,7 @@ def start() -> BackgroundScheduler:
     if not sched.running:
         sched.start()
     _reap_stale_runs()
+    _finish_data_deletions()
     _schedule_housekeeping(sched)
     refresh_jobs()
     return sched
@@ -235,6 +236,25 @@ def _schedule_metrics_refresh(sched) -> None:
                       replace_existing=True, misfire_grace_time=3600)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not schedule the metrics refresh: %s", exc)
+
+
+def _finish_data_deletions() -> None:
+    """Finish deletion requests a restart interrupted. Never fatal.
+
+    A deletion runs in a background thread so the platform's callback is answered at
+    once; a deploy mid-way leaves it ``received``, and the person's status page would
+    say "in progress" forever without this.
+    """
+    try:
+        from . import data_deletion
+        from .store import get_store
+
+        finished = data_deletion.process_pending(get_store())
+        if finished:
+            logger.warning("Finished %d interrupted data deletion request(s) at startup",
+                           finished)
+    except Exception as exc:  # noqa: BLE001 - never block the scheduler on this
+        logger.warning("Could not finish pending data deletions: %s", exc)
 
 
 def _reap_stale_runs() -> None:
