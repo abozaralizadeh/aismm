@@ -18,7 +18,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from aismm import scheduler as scheduler_module
 from aismm.models import Instruction
-from aismm.schedules import describe, parse_schedule, parse_trigger
+from aismm.schedules import CronLinesTrigger, describe, parse_schedule, parse_trigger
 
 UTC = dt.timezone.utc
 ANCHOR = dt.datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
@@ -90,10 +90,10 @@ def test_a_past_start_does_not_change_a_cron_schedule():
 
 
 def test_raw_cron_accepts_an_anchor():
-    """from_crontab has no start_date parameter — we build the trigger by hand."""
+    """A raw cron line takes the same "don't fire before" anchor as the rest."""
     start = dt.datetime.now(UTC) + dt.timedelta(days=2)
     trigger = parse_trigger("0 9 * * *", anchor=start)
-    assert isinstance(trigger, CronTrigger)
+    assert isinstance(trigger, CronLinesTrigger)
     assert _next(trigger) >= start
 
 

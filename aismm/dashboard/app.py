@@ -24,8 +24,8 @@ from werkzeug.utils import secure_filename
 
 from ..config import YOUTUBE_PRIVACY_CHOICES, settings
 from ..assets import browser_url, public_url
-from .. import (attachments, cooldown, data_deletion, llm_access, tokens, video_style,
-               workspaces)
+from .. import (attachments, cooldown, data_deletion, llm_access, schedules, tokens,
+               video_style, workspaces)
 from ..agent.prompts import MANAGER_INSTRUCTIONS
 from ..assets import save_bytes
 from ..models import (
@@ -49,6 +49,16 @@ from .. import orchestrator, scheduler
 from ..store import get_store
 
 logger = logging.getLogger("aismm.dashboard")
+
+# The instruction page's Schedule widget (https://github.com/abozaralizadeh/cronai),
+# loaded in this order. GitHub Pages first: it caches for 10 minutes, while
+# jsDelivr's @master is cached up to 7 days in the browser, so a fix to the widget
+# would take a week to arrive. jsDelivr is the backup if Pages is unreachable, and
+# the page falls back to a plain-text box if neither loads.
+CRONAI_WIDGET_URLS = (
+    "https://abozaralizadeh.github.io/cronai/widget/cronai-widget.js",
+    "https://cdn.jsdelivr.net/gh/abozaralizadeh/cronai@master/widget/dist/cronai-widget.js",
+)
 
 
 def account_groups(accounts) -> dict:
@@ -405,6 +415,21 @@ def create_app() -> Flask:
     def _video_style_box(instruction):
         """``(text, pinned)`` for the instruction form's one editable Video style box."""
         return video_style.form_value(instruction) if instruction else ("", False)
+
+    @app.template_global("schedule_box")
+    def _schedule_box(instruction):
+        """``(words, saved)`` for the Schedule widget: what to show, and whether it is
+        a widget schedule (restored whole) or the older grammar (shown as text, UTC)."""
+        value = instruction.schedule if instruction else ""
+        return schedules.label(value), schedules.is_saved(value)
+
+    @app.template_global("cronai_widget_urls")
+    def _cronai_widget_urls():
+        return list(CRONAI_WIDGET_URLS)
+
+    @app.template_global("schedule_label")
+    def _schedule_label(schedule):
+        return schedules.label(schedule)
 
     @app.template_global("time_until")
     def _time_until(when):
@@ -1242,7 +1267,7 @@ def create_app() -> Flask:
             needle = search.lower()
             rows = [i for i in rows
                     if needle in i.name.lower() or needle in (i.brief or "").lower()
-                    or needle in (i.schedule or "").lower()]
+                    or needle in schedules.label(i.schedule).lower()]
         if enabled in ("1", "0"):
             rows = [i for i in rows if i.enabled == (enabled == "1")]
         if mode:
@@ -1260,7 +1285,7 @@ def create_app() -> Flask:
         keys = {"name": lambda i: (i.name.lower(),),
                 "created_at": lambda i: (i.created_at, i.name.lower()),
                 "accounts": lambda i: (len(i.account_ids or []), i.name.lower()),
-                "schedule": lambda i: ((i.schedule or "").lower(), i.name.lower()),
+                "schedule": lambda i: (schedules.label(i.schedule).lower(), i.name.lower()),
                 "next_run": lambda i: (_next_at(i), i.name.lower()),
                 "publish_mode": lambda i: (i.publish_mode.value, i.name.lower()),
                 "media": lambda i: (i.media_pref.value, i.name.lower()),
@@ -1506,7 +1531,18 @@ def create_app() -> Flask:
                                 workspace_id=_new_workspace_id())
         instr.name = f.get("name", "Untitled").strip() or "Untitled"
         instr.brief = f.get("brief", "").strip()
-        instr.schedule = f.get("schedule", "").strip()
+        # The widget posts its JSON as `schedule_json`; without it (a script, an
+        # older page, the widget could not load) the plain `schedule` box counts.
+        try:
+            if "schedule_json" in f:
+                instr.schedule = schedules.from_widget(
+                    f.get("schedule_json", ""), typed=f.get("schedule_typed"),
+                    shown=f.get("schedule_shown", ""), current=instr.schedule or "")
+            else:
+                instr.schedule = schedules.from_text(f.get("schedule", ""),
+                                                     current=instr.schedule or "")
+        except schedules.ScheduleError as exc:
+            flash(f"Schedule not changed: {exc}.", "error")
         instr.schedule_start_at = _parse_datetime_local(f.get("schedule_start_at", ""))
         instr.publish_mode = PublishMode(f.get("publish_mode", "dry_run"))
         instr.task_type = InstructionTask(f.get("task_type", "publish"))

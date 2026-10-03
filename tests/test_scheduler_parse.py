@@ -1,12 +1,14 @@
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from aismm.scheduler import parse_trigger
+from aismm.schedules import CronLinesTrigger
 
 
 def test_cron():
+    # Standard cron, read by our own trigger: APScheduler's CronTrigger numbers
+    # weekdays from Monday, so it cannot run cron lines as written.
     t = parse_trigger("0 9 * * *")
-    assert isinstance(t, CronTrigger)
+    assert isinstance(t, CronLinesTrigger)
 
 
 def test_interval_short():

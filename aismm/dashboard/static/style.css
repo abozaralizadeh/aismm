@@ -748,6 +748,9 @@ th .sort-active .sort-arrow { opacity: 1; }
   .form input[type=email], .form input[type=number], .form input[type=url],
   .form textarea, .form select,
   .filters input[type=search], .filters select, input, select, textarea { font-size: 16px; }
+  /* The Schedule widget's text box lives in its shadow DOM, out of reach of the
+     rule above; it exposes it as part "input" (15px by default: iOS would zoom). */
+  cron-ai::part(input) { font-size: 16px; }
   .btn, .tab { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 }
 
@@ -783,13 +786,28 @@ th .sort-active .sort-arrow { opacity: 1; }
 }
 .form .subform legend { padding: 0 6px; font-weight: 600; }
 
-/* The schedule cheat-sheet: a long help block folded away until asked for. */
-.schedule-help { margin-top: 8px; }
-.schedule-help > summary { cursor: pointer; color: var(--accent); }
-.schedule-help h4 { margin: 14px 0 4px; font-size: 0.95em; }
-.schedule-help table { font-size: 0.95em; }
-.schedule-help td:first-child { white-space: nowrap; }
-.schedule-help p { margin: 8px 0; }
+/* The Schedule widget (the hosted cronai <cron-ai>) in the dashboard's colours.
+   Its own dark palette is a deep navy beside our greys; the chip colours (time,
+   day, month...) are left as the widget draws them. Page CSS on the element
+   outranks the widget's :host rules, which is how it is meant to be themed. */
+cron-ai {
+  display: block;
+  --cai-font: inherit;
+  --cai-bg: var(--bg);
+  --cai-surface: var(--panel-2);
+  --cai-surface-alt: var(--panel);
+  --cai-border: var(--border);
+  --cai-text: var(--text);
+  --cai-muted: var(--muted);
+  --cai-faint: #6b7385;
+  --cai-accent: var(--accent);
+  --cai-accent-soft: rgba(110, 168, 254, .16);
+  --cai-on-accent: #0f1115;
+  --cai-success: var(--ok);
+  --cai-warning: var(--warn);
+  --cai-danger: var(--danger);
+}
+.schedule-field .schedule-zone { margin-top: .2rem; }
 
 /* A button sitting inside a flash message (the stale-run cleanup). */
 .flash .inline-form { display: inline-block; margin-left: 8px; }

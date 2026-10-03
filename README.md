@@ -1556,8 +1556,32 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]   # run onc
 
 ### Schedules
 
-Times of day, weekday filters, intervals and cron — combined freely. Everything is UTC, and the
-instruction form shows a **readback** of how your text was understood.
+You write a schedule in plain English. The instruction page embeds
+[**cronai**](https://github.com/abozaralizadeh/cronai) (`<cron-ai>`), which turns
+`every other friday at 5pm except in august` into cron lines on the spot and shows what it
+understood, as coloured chips, a sentence, and the next three runs. It also fixes typos
+("evrey wensday") and accepts raw cron if you prefer it.
+
+![The Schedule field on the instruction page](docs/screenshots/schedule-widget.jpg)
+
+- **Time zone.** A schedule runs in the zone picked under it, which starts as your browser's.
+  "9am" means 9am there, and summer time is handled: a time the clocks skip doesn't run that
+  day, and one they repeat runs once.
+- **What runs is what it showed.** The scheduler reads the saved cron lines with the same rules
+  as the widget. That means standard cron (`0` = Sunday), day-of-month *or* weekday when both
+  are set, `L` / `5L` / `1#2`, and "every N weeks". The test suite replays the hosted widget's
+  own next-run answers for 100+ schedules to keep the two in step (`node
+  scripts/make_cronai_fixtures.mjs` refreshes them).
+- **Saved as JSON** in the instruction (`{"v":1,"text","crons","timezone","description",…}`). The
+  instructions list shows your words, and **Reads as** shows the description and zone.
+- **Not understood?** Save is held back until the words make sense, or the box is empty (an
+  instruction you only start with *Run now*).
+- **Loading.** The widget script comes from GitHub Pages, then jsDelivr if Pages is unreachable.
+  If neither loads, the page shows the plain text box below instead.
+
+**Older schedules** written in the previous text grammar keep running exactly as before (UTC). The
+widget shows their words in UTC, and they are only replaced when you change the words or the time
+zone. That grammar also remains the plain-text fallback:
 
 | You type | It means |
 |---|---|
@@ -1567,24 +1591,28 @@ instruction form shows a **readback** of how your text was understood.
 | `09:30 and 17:45 weekends` | two times, Saturday and Sunday |
 | `every 6h` · `30m` · `every 2 days` | intervals (floor: 1 minute) |
 | `hourly` · `daily` · `weekly` · `@daily` | named cadences |
-| `0 */4 * * *` | raw cron still works |
+| `0 */4 * * *` | raw cron (standard: `4` in the weekday field is Thursday) |
 | `every 6h; 08:00 mon` | mix them — `;` or a newline starts a new rule |
 
-An instruction can therefore produce **several triggers**, and the scheduler registers one job per
-trigger. A schedule it cannot parse logs a warning and never fires, rather than guessing — a bare
-`6` is ambiguous (06:00? every 6 hours?) and is refused for that reason. Editing an instruction
-live-reschedules its jobs.
+In that grammar an instruction can produce **several triggers**, and the scheduler registers one
+job per trigger. A schedule it cannot parse logs a warning and never fires, rather than guessing: a
+bare `6` is ambiguous (06:00? every 6 hours?) and is refused for that reason. Intervals take a
+**single count and unit**: `every 90 minutes` (or `90m`) works, `every 1.5h` and `every 1h30m` do
+not. Editing an instruction live-reschedules its jobs.
 
-Note that intervals take a **single count and unit**: `every 90 minutes` (or `90m`) works,
-`every 1.5h` and `every 1h30m` do not — and an unparseable schedule never fires, so check the
-readback.
+Raw cron in the old grammar used to go straight to APScheduler, which numbers weekdays from
+**Monday**. So `0 16 * * 4` fired on Fridays, and `weekly` / `@weekly` on Mondays. It is now read as
+standard cron: Thursday, and Sunday.
 
 #### When does an interval actually start?
 
-An `every Nh` schedule counts from a fixed **anchor**, shown as **Next run** on the instructions page:
+An older-format `every Nh` schedule counts from a fixed **anchor**, shown as **Next run** on the
+instructions page:
 
 - the instruction's optional **Starts** field, if you set one;
 - otherwise the moment the instruction was **created**.
+
+(A widget schedule such as "every 3 hours" is clock-aligned cron, so it has no phase to keep.)
 
 So `every 1h` on an instruction created at 08:12 fires at 09:12, 10:12, … — not on the hour. Set
 *Starts* to `09:00` to put it on the hour instead, or to a future time to delay the first run.

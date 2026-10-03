@@ -116,19 +116,42 @@ def test_interval_has_a_floor():
 
 # --- cron ---------------------------------------------------------------------------- #
 
+def _fires(trigger, count=3, now=None):
+    import datetime as dt
+    now = now or dt.datetime(2026, 10, 4, 10, 0, tzinfo=dt.timezone.utc)   # a Sunday
+    out, fire = [], trigger.get_next_fire_time(None, now)
+    while fire and len(out) < count:
+        out.append(fire.strftime("%a %H:%M"))
+        fire = trigger.get_next_fire_time(fire, fire)
+    return out
+
+
 def test_raw_cron_still_works():
     triggers = parse_schedule("0 9 * * *")
     assert len(triggers) == 1
-    assert _fields(triggers[0])["hour"] == "9"
+    assert _fires(triggers[0]) == ["Mon 09:00", "Tue 09:00", "Wed 09:00"]
 
 
 def test_step_cron():
-    assert _fields(parse_schedule("0 */4 * * *")[0])["hour"] == "*/4"
+    assert _fires(parse_schedule("0 */4 * * *")[0]) == ["Sun 12:00", "Sun 16:00", "Sun 20:00"]
 
 
 def test_cron_nicknames():
-    assert _fields(parse_schedule("@daily")[0])["hour"] == "0"
-    assert isinstance(parse_schedule("@hourly")[0], CronTrigger)
+    assert _fires(parse_schedule("@daily")[0], 1) == ["Mon 00:00"]
+    assert _fires(parse_schedule("@hourly")[0], 2) == ["Sun 10:00", "Sun 11:00"]
+    # @weekly is Sunday midnight. APScheduler, reading 0 as Monday, made it Monday.
+    assert _fires(parse_schedule("@weekly")[0], 1) == ["Sun 00:00"]
+
+
+def test_raw_cron_weekdays_are_standard_cron():
+    """4 is THURSDAY in cron. Fed straight to APScheduler (0 = Monday) it was
+    Friday, which is how the live "Comicbook reel" (0 16 * * 4) posted on Fridays."""
+    assert _fires(parse_schedule("0 16 * * 4")[0], 2) == ["Thu 16:00", "Thu 16:00"]
+    assert _fires(parse_schedule("0 9 * * 1-5")[0], 5) == [
+        "Mon 09:00", "Tue 09:00", "Wed 09:00", "Thu 09:00", "Fri 09:00"]
+    assert describe("0 16 * * 4") == "at 16:00 UTC on thu"
+    assert describe("30 8 * * 1-5") == "at 08:30 UTC on mon-fri"
+    assert describe("0 0 1 8 *") == "at 00:00 UTC on day 1 in aug"
 
 
 def test_invalid_cron_is_rejected():

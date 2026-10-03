@@ -89,6 +89,7 @@ def cmd_auth(args) -> int:
 
 
 def cmd_list(_args) -> int:
+    from . import schedules
     from .store import get_store
 
     store = get_store()
@@ -100,7 +101,7 @@ def cmd_list(_args) -> int:
     print(f"\nInstructions ({len(instrs)}):")
     for i in instrs:
         print(f"  {i.id[:8]}  {i.name:24}  mode={i.publish_mode.value:8}  "
-              f"sched={i.schedule or '—':12}  accounts={len(i.account_ids)}  "
+              f"sched={schedules.label(i.schedule) or '—':12}  accounts={len(i.account_ids)}  "
               f"{'on' if i.enabled else 'off'}")
     print()
     return 0

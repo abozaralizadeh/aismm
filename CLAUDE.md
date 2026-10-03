@@ -31,6 +31,7 @@ pytest -q                       # 30 unit tests (no network, no creds needed)
 python scripts/smoke_llm.py     # verifies Azure/APIM LLM wiring (needs LLM creds)
 python scripts/smoke_sora.py    # generates one Sora clip (skips if unconfigured)
 python scripts/smoke_sora.py --pool   # print the Sora resource pool, no API calls
+node scripts/make_cronai_fixtures.mjs   # refresh the cronai parity fixture from the hosted engine
 ```
 
 There is no lint/format config; match the surrounding style (stdlib logging, `from __future__ import
@@ -295,7 +296,7 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
 | [aismm/async_clients.py](aismm/async_clients.py) | async API clients cached per (event loop, fingerprint) |
 | [aismm/video_style.py](aismm/video_style.py) | the instruction's Video style: pinned by the operator, last used recorded by code |
 | [aismm/data_deletion.py](aismm/data_deletion.py) | Meta/TikTok deletion callbacks, the purge, confirmation codes |
-| [aismm/schedules.py](aismm/schedules.py) | schedule text → APScheduler triggers (times, weekdays, intervals, cron) |
+| [aismm/schedules.py](aismm/schedules.py) | schedule → triggers: cronai widget JSON (`CronLinesTrigger`, standard cron) or the older text grammar |
 | [aismm/models.py](aismm/models.py) | SQLModel tables + `PublishMode`/`PlatformName`/`RunStatus`/… enums |
 | [aismm/wsgi.py](aismm/wsgi.py) | gunicorn entrypoint — starts the scheduler, then exposes the dashboard as `application` |
 | [setup_service.sh](setup_service.sh) | idempotent systemd install/update for a Linux server |
@@ -802,8 +803,41 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   `describe()` dedupes the hours (reading back "at 03:00 and 03:00" looks like a bug rather than a
   cross-product) and appends "N× a week" whenever a part has more than one time of day, which is the
   only thing that makes the multiplication visible. Steps and unparsed day fields are NOT counted —
-  a wrong count is worse than none. The instruction form carries the full cheat-sheet in a
-  `<details>`; keep it in step with what the parser accepts.
+  a wrong count is worse than none. This is the OLDER grammar: the form now writes schedules
+  in the cronai widget, and this grammar survives for stored schedules and the plain-text
+  fallback box (its cheat-sheet is gone; README "Schedules" keeps the table).
+- **The Schedule field is the hosted cronai widget, and our scheduler runs what it SHOWED**
+  ([schedules.py](aismm/schedules.py), `instruction_form.html`). Asked for as "use cronai embedded in
+  the instruction page instead of our cron scheduler", with "just use the embedded javascript, not
+  the project code": nothing of cronai is vendored. The page loads `CRONAI_WIDGET_URLS`
+  (`dashboard/app.py`): GitHub Pages first, then jsDelivr, then the plain-text box. Order matters:
+  Pages caches 10 minutes, while jsDelivr's `@master` is cached up to **7 days** in the browser, so a
+  widget fix would take a week to arrive. Both measured the same speed (~48ms, ~108KB). The widget
+  saves `{"v":1,"text","crons","timezone","description","everyWeeks"?,"anchor"?}` into
+  `Instruction.schedule`. `read_saved` validates it server-side, `label()` is what lists, the CLI
+  and search show, and `describe()` is the readback. **APScheduler's `CronTrigger` cannot run those
+  lines**: weekday 0 is MONDAY there (cron: Sunday), and a line restricting both day fields fires
+  when BOTH match (cron: EITHER). So `CronLinesTrigger` evaluates them the way cronai does: names,
+  `?`, wrap-around ranges, `L` / `5L` / `1#2`, DST-skipped times skipped, a repeated time's FIRST
+  instant, the every-N-weeks guard `floor((t - anchor)/week) % N == 0`, and one trigger (so one job)
+  for all of a schedule's lines. The older grammar's raw cron and named cadences use it too, in UTC,
+  which fixed a live bug: "Comicbook reel" (`0 16 * * 4`, Thursday) had been posting on **Fridays**.
+  **Parity is tested against the hosted engine, not asserted**:
+  `tests/fixtures/cronai_runs.json` (111 schedules × 4 start points, two DST weekends) is generated
+  by `node scripts/make_cronai_fixtures.mjs`, which downloads the engine to a temp file. Regenerate
+  it when cronai changes. One deliberate divergence: `1-7` / `5-7` include Sunday here (standard
+  cron), while cronai's engine drops it. That was reported upstream, and the widget never emits such
+  a range. **Saving** (`from_widget`): the widget posts `""` for an empty box AND for words it did
+  not understand, so the page script mirrors the words into `schedule_typed`. What the box shows is
+  saved, with ONE exception: an older-grammar schedule whose words and zone (UTC) are untouched is
+  kept verbatim. The widget re-reads those words as clock-aligned cron, which would silently move an
+  interval's phase on any save of the brief, or wipe a schedule it cannot read. Changed words that
+  were not understood are refused (flash) and blocked client-side. The time-zone `<select>` is ours
+  (`Intl.supportedValuesOf`), setting the widget's `timezone` attribute. Widget gaps worked around on
+  our side: the text box is 15px on touch, so `cron-ai::part(input)` sets 16px under
+  `pointer: coarse` (test pinned); and there is no `delegatesFocus`, so the script focuses the
+  `textarea` in the open shadow root. The dashboard's dark tokens are mapped onto `--cai-*` on the
+  element, which outranks the widget's `:host` palette.
 - **One schedule → SEVERAL triggers** ([schedules.py](aismm/schedules.py)): `parse_schedule` returns a
   list and `refresh_jobs` registers one job per trigger (`instr:<id>`, `instr:<id>:1`, …). Ambiguous
   input is REFUSED, not guessed — a bare `6` could be 06:00 or every 6h. `describe()` is the

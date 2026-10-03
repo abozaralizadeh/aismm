@@ -5,6 +5,43 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-10-04 — Plain-English schedules, and a reel that posted on the wrong day
+
+**The ask:** swap the schedule box on the instruction page for
+[cronai](https://github.com/abozaralizadeh/cronai), my own widget that turns plain English into
+cron with a tiny on-device model. And use the hosted script, not a copy of its code.
+
+![Typing a schedule in plain English](docs/screenshots/schedule-widget.jpg)
+
+**What it's like now:** type "every weekday at 9am and 6pm except in august" and the widget shows
+what it understood as you type: coloured chips, a sentence, and the next three runs, in your own
+time zone. The old box wanted `09:00,18:00 mon-fri` in UTC and came with a cheat-sheet explaining
+why a comma and a semicolon meant different things. That cheat-sheet is gone.
+
+**The catch nobody would have seen:** the widget shows the next runs, but our scheduler
+(APScheduler) is what actually fires them, and it doesn't read cron the standard way. It counts
+weekdays from Monday, so cron's `4` (Thursday) means Friday to it. And when a line names both a
+day of the month and a weekday, it wants both to match, where cron wants either. Looking through
+the live instructions found it had already happened: the "Comicbook reel", saved as
+`0 16 * * 4`, had been posting every **Friday** instead of Thursday. The readback even said
+"on 4", so nobody could tell.
+
+**The fix:** a small trigger of our own that reads cron lines exactly as the widget does
+(standard weekdays, either-or days, last Friday, second Monday, every other week, and the
+summer-time days). Then, instead of trusting it, a test. A script runs 111 schedules through the
+*hosted* widget engine and records the runs it promises, across both summer-time weekends. The
+test suite checks the scheduler fires at the same moments: 444 out of 444 match.
+
+**Being careful with what's already there:** existing schedules keep running exactly as before
+until someone actually changes their words or time zone. The widget can't read some of them, and
+re-reading the rest as cron would quietly shift interval schedules. If GitHub Pages is down, the
+script comes from jsDelivr. If both are down, the old text box comes back.
+
+**Found along the way, for cronai itself:** "at 2:30 every night" came out as 14:30, and cron
+ranges ending in 7 (`1-7`) forgot that 7 is Sunday.
+
+---
+
 ## 2026-10-01 — "Delete my data": one button, three doors
 
 **The requirement:** Meta won't keep an app approved unless people can ask for their data to be

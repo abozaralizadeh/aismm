@@ -17,7 +17,7 @@ import re
 
 from agents import function_tool
 
-from .. import cooldown, disclosure, media, publish_ledger, tokens
+from .. import cooldown, disclosure, media, publish_ledger, schedules, tokens
 from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
@@ -106,13 +106,18 @@ def _normalize_image_for(asset_path: str, caps, platform_name: str,
 
 
 def _schedule_advice(instruction) -> str:
-    """Name the likely cause when an instruction fires often enough to trip limits."""
-    schedule = (getattr(instruction, "schedule", "") or "").lower()
-    for marker in ("every 1h", "every 1 h", "every 30m", "every 15m", "every 5m",
-                   "every 10m", "every 20m", "every 2h"):
-        if marker in schedule:
-            return (f" This instruction runs '{instruction.schedule}' — that is far more often "
-                    f"than a single account can publish. Lengthen the schedule.")
+    """Name the likely cause when an instruction fires often enough to trip limits.
+
+    Counted from the schedule's real fires, not matched on its wording: a widget
+    schedule says "every hour", which no list of "every 1h"-style strings catches.
+    Every two hours (12 a day) or more often is the threshold it always had.
+    """
+    schedule = getattr(instruction, "schedule", "") or ""
+    per_day = schedules.fires_per_day(schedule)
+    if per_day >= 12:
+        return (f" This instruction runs '{schedules.label(schedule)}' (about "
+                f"{round(per_day)} times a day) — that is far more often than a single "
+                f"account can publish. Lengthen the schedule.")
     return ""
 
 
