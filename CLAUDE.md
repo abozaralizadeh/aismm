@@ -1070,6 +1070,23 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   `record_used_style` **re-reads** the instruction before saving (the run's copy is stale, and
   writing it back whole would undo an edit made while the video rendered) and never fails a video.
   The save route only touches `video_style` when the field was posted.
+  **Carrying the look over is a per-instruction CHOICE** (`Instruction.keep_style`, checkbox
+  "Keep the same style on every run", on by default so existing instructions are unchanged).
+  Reported as "the style is forcing the same style in every instruction from the creation day;
+  some we want different every time, and then it should not be passed to the model". No
+  instruction had a pinned style: the repeat came from the brief and from the agent's MEMORY
+  ("STYLE BLOCK: …" lines). So off has to cut every path, not one: `active_style` (not
+  `pinned_style`) is what `resolve_style` and `kickoff_block` read, so neither the kickoff nor
+  `create_video_sequence` / `generate_video` get the Video style, and `kickoff_block` returns
+  `VARIED_BLOCK` instead: make a new look for this post's images AND videos, do not reuse a style
+  block, palette or character designs from memory or earlier posts, do not save one in memory.
+  Memory is the agent's free text, so that part is an instruction, not a filter. The stored
+  `video_style` is untouched and the box is hidden, not cleared (`data-keep-style-only`, ANDed
+  into the form's one `sync()`), so ticking it again restores it. `form_value` keeps reading the
+  raw `pinned_style` for the same reason. A checkbox posts nothing when unticked, hence the
+  `style_fields_present` marker. The column defaults to on in both stores (`_add_missing_columns`
+  writes the model default; Azure reads a missing key as `True`), pinned by
+  `tests/test_keep_style.py`.
 - **A video HAS SPOKEN WORDS unless the operator asked for less, and code enforces it**
   (`video_style.speech_check` / `has_spoken_line`, the `wordless` parameter on
   `create_video_sequence` and `generate_video`). Reported as "still all the videos are word-less

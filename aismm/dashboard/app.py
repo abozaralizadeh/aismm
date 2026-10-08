@@ -1613,6 +1613,10 @@ def create_app() -> Flask:
         # bookmark) must not wipe a style the operator pinned. The box is pre-filled with
         # the AGENT's style when nothing is pinned, so only an edit pins it — see
         # video_style.style_from_form.
+        # An unticked checkbox posts nothing, so only a form that carried the marker
+        # may switch it off; a POST without the field leaves the setting alone.
+        if f.get("style_fields_present"):
+            instr.keep_style = f.get("keep_style") == "on"
         if "video_style" in f:
             was = f.get("video_style_pinned")
             instr.video_style = video_style.style_from_form(

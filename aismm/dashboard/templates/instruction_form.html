@@ -202,7 +202,22 @@
          in the agent's tool calls and memory, where restrictions nobody chose travelled
          unseen (see aismm/video_style.py). #}
       {% set vs_text, vs_pinned = video_style_box(instruction) %}
-      <label data-publish-only {% if not task_posts %}hidden{% endif %}>
+      {% set keep_style = not instruction or instruction.keep_style %}
+      {# Off: no Video style is sent and the agent is told to make a new look each run
+         (video_style.keeps_style). The marker tells an unticked box apart from a form
+         that never had it, the same trap tools_present solves. #}
+      <input type="hidden" name="style_fields_present" value="1">
+      <div class="field" data-publish-only {% if not task_posts %}hidden{% endif %}>
+        <label class="check">
+          <input type="checkbox" name="keep_style" data-keep-style {% if keep_style %}checked{% endif %}>
+          Keep the same style on every run
+        </label>
+        <span class="hint">On: a Video style you set is used for every video, and the agent may
+          carry its look over from earlier posts. Off: nothing about earlier looks is passed on.
+          The agent gets no Video style and makes a new look for each post's images and videos.
+          {% if vs_pinned %}Switching off keeps your Video style text for later; it is just not used.{% endif %}</span>
+      </div>
+      <label data-publish-only data-keep-style-only {% if not task_posts or not keep_style %}hidden{% endif %}>
         <span class="field-label">Video style
           {% if vs_pinned %}<span class="badge">yours</span>
           {% elif vs_text %}<span class="badge badge-off">written by the agent</span>{% endif %}
@@ -779,8 +794,10 @@
   var task = form.querySelector('[data-task]');
   var autoWarn = form.querySelector('[data-auto-warn]');
   var platformNote = form.querySelector('[data-platform-note]');
+  var keepStyle = form.querySelector('[data-keep-style]');
   var conditional = Array.prototype.slice.call(form.querySelectorAll(
-    '[data-publish-only], [data-outreach-only], [data-engage-only], [data-platform]'));
+    '[data-publish-only], [data-outreach-only], [data-engage-only], [data-platform], ' +
+    '[data-keep-style-only]'));
   var accountBoxes = Array.prototype.slice.call(
     form.querySelectorAll('input[data-account-platform]'));
 
@@ -811,6 +828,10 @@
         show = !!chosen[el.dataset.platform] || el.hasAttribute('data-platform-keep');
         if (show) { anyPlatformShown = true; }
       }
+      // The Video style box only matters while the look is kept from run to run.
+      if (show && el.hasAttribute('data-keep-style-only')) {
+        show = !keepStyle || keepStyle.checked;
+      }
       el.hidden = !show;
     });
     if (autoWarn) { autoWarn.hidden = v !== 'auto'; }
@@ -823,6 +844,7 @@
 
   task.addEventListener('change', sync);
   accountBoxes.forEach(function (box) { box.addEventListener('change', sync); });
+  if (keepStyle) { keepStyle.addEventListener('change', sync); }
   sync();
 })();
 

@@ -221,6 +221,10 @@ class Instruction(SQLModel, table=True):
     # actually sent to Sora is always visible on the form instead of hidden in memory.
     video_style: str = ""
     last_video_style: str = ""
+    # Whether the look carries over from run to run. Off: no Video style reaches the
+    # agent and it is told to make a new look for each post, images and videos alike
+    # (video_style.keeps_style). On by default, which is how every instruction worked.
+    keep_style: bool = True
     # What this instruction's runs DO. ``publish`` (default) creates a post;
     # ``engage`` responds to comments/mentions. ``publish_mode`` still applies to
     # both — for an engage run it gates how replies go out (preview / approval /

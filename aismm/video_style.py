@@ -20,6 +20,14 @@ Two fields on ``Instruction``:
   ``video_style``) or correct it. It is never fed back to the agent: pinning is a human
   decision, and an auto-pinned first draft would freeze whatever that run happened to
   invent.
+
+And one switch, ``keep_style`` (on by default). Reported as "the style is forcing the
+same style in every instruction from the creation day; some we want different every
+time". Off means NOTHING about an earlier look reaches the next run: the Video style is
+not sent and not forced into the video tools (it stays stored, so switching back on
+restores it), and the kickoff tells the agent to make a new look for this post's images
+and videos and to neither reuse nor save one in memory. Memory is the agent's own free
+text, so that part is an instruction rather than a filter.
 """
 from __future__ import annotations
 
@@ -33,13 +41,32 @@ IGNORED_NOTE = ("This instruction has a Video style set by the operator, and eve
                 "(a new guest character, today's location) in the shots instead.")
 
 
+VARIED_BLOCK = (
+    "VISUAL STYLE: this instruction is set to a DIFFERENT look on every run. Create a new "
+    "visual style for this post's images and videos instead of repeating an earlier one. Do "
+    "not reuse a style block, palette or character designs from your memory or from earlier "
+    "posts, and do not save the style in memory. Anything the brief or the operator note "
+    "asks for still applies.\n\n")
+
+
+def keeps_style(instruction) -> bool:
+    """Whether this instruction carries its look over from run to run (the default)."""
+    return bool(getattr(instruction, "keep_style", True))
+
+
 def pinned_style(instruction) -> str:
+    """The operator's stored Video style, whether or not it is in use right now."""
     return (getattr(instruction, "video_style", "") or "").strip()
+
+
+def active_style(instruction) -> str:
+    """The Video style that actually reaches the agent: none when the look must vary."""
+    return pinned_style(instruction) if keeps_style(instruction) else ""
 
 
 def resolve_style(state: dict, passed: str) -> tuple[str, str, str]:
     """``(style_to_use, source, note)``. ``source`` is ``"instruction"`` or ``"agent"``."""
-    pinned = pinned_style(state.get("instruction"))
+    pinned = active_style(state.get("instruction"))
     passed = (passed or "").strip()
     if pinned:
         note = IGNORED_NOTE if passed and passed != pinned else ""
@@ -112,7 +139,9 @@ def style_from_form(submitted: str, *, shown: str | None, was_pinned: bool | Non
 
 
 def kickoff_block(instruction) -> str:
-    """Tell the agent about a pinned style up front, so it writes shots that fit it."""
+    """Tell the agent up front which look to use: the pinned one, or a new one each run."""
+    if not keeps_style(instruction):
+        return VARIED_BLOCK
     pinned = pinned_style(instruction)
     if not pinned:
         return ""

@@ -767,6 +767,12 @@ is what keeps the clips looking like one video. It's on the instruction form, un
   ignored. Put the cast and the sound here: *"…Gentle ukulele music; the characters speak short,
   simple sentences."* Clear the box and save to hand it back to the agent.
 
+**Want a different look every time?** Untick **Keep the same style on every run** (above the box,
+on by default). Then nothing about earlier looks reaches the next run. The Video style isn't sent,
+and the agent is told to make a new look for each post's images and videos, and not to reuse or
+save one in its memory. Your Video style text is kept, hidden, for when you tick it again. Leave it
+ticked for a series that needs the same characters and look every episode.
+
 Videos have **spoken words unless you ask for less**. A video with no spoken line anywhere is
 refused before anything is rendered, unless the brief, the note or this style asks for a word-less
 one. "At most one phrase" means one phrase, not none.

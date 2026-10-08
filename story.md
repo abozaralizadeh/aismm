@@ -5,7 +5,25 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
-## 2026-10-04 — Plain-English schedules, and a reel that posted on the wrong day
+## 2026-10-08: Same look, or a new one every time?
+
+**The complaint:** every instruction kept the look it had on day one. Fine for a kids' cartoon
+series, where the puppy has to be the same puppy every episode. Wrong for a psychology account
+where each post is about a different topic and should look like it.
+
+**What was actually doing it:** not the Video style box, which turned out to be empty on every
+instruction. The look travelled in the agent's own notes. Its memory had lines like "STYLE BLOCK:
+stylised preschool cartoon animals…", and each run read them and dutifully did it again.
+
+**The fix:** one checkbox per instruction, "Keep the same style on every run". It's ticked by
+default, so nothing changed for anyone who didn't touch it. Untick it and the next run gets no style
+at all. Instead it's told to invent a fresh look for its images and videos, to ignore any style
+saved in its notes, and to stop saving one. A style you wrote yourself isn't thrown away, just
+parked until you tick the box again.
+
+---
+
+## 2026-10-04: Plain-English schedules, and a reel that posted on the wrong day
 
 **The ask:** swap the schedule box on the instruction page for
 [cronai](https://github.com/abozaralizadeh/cronai), my own widget that turns plain English into
