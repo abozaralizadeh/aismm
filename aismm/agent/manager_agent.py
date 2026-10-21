@@ -209,7 +209,7 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
     Memory and the operator note are NOT re-inlined in that case: the point is to
     send exactly what is in the box, so what you read is what the agent gets.
     """
-    caps = get_platform(account.platform).capabilities
+    caps = get_platform(account.platform).capabilities_for(account)
     task = instruction.task_type
     engage = task is InstructionTask.engage
     outreach = task is InstructionTask.outreach

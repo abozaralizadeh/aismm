@@ -416,6 +416,11 @@ def create_app() -> Flask:
         """``(text, pinned)`` for the instruction form's one editable Video style box."""
         return video_style.form_value(instruction) if instruction else ("", False)
 
+    @app.template_global("x_long_posts")
+    def _x_long_posts(account):
+        from ..platforms.twitter import long_posts
+        return long_posts(account)
+
     @app.template_global("schedule_box")
     def _schedule_box(instruction):
         """``(words, saved)`` for the Schedule widget: what to show, and whether it is
@@ -785,6 +790,61 @@ def create_app() -> Flask:
             flash(f"Reddit posts go to r/{sr}.", "success")
         else:
             flash(f"Reddit posts go to your profile (u_{account.handle}).", "success")
+        return redirect(url_for("accounts"))
+
+    @app.route("/accounts/<account_id>/x-long-posts", methods=["POST"])
+    def set_x_long_posts(account_id):
+        """Long posts or threads on this X account: follow what X reports, or say so."""
+        from ..platforms.twitter import LONG_POSTS_KEY, long_posts
+
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.twitter:
+            abort(404)
+        choice = request.form.get("x_long_posts", "").strip().lower()
+        meta = dict(account.meta)
+        if choice in ("yes", "no"):
+            meta[LONG_POSTS_KEY] = choice
+        else:
+            meta.pop(LONG_POSTS_KEY, None)
+        account.set_meta(meta)
+        store.upsert_account(account)
+        flash(f"{account.handle or account.external_id} now posts "
+              + ("one long post (up to 25,000 characters)." if long_posts(account)
+                 else "threads of 280 characters."), "success")
+        return redirect(url_for("accounts"))
+
+    @app.route("/accounts/<account_id>/x-premium/check", methods=["POST"])
+    def check_x_premium(account_id):
+        """Ask X whether this account has a paid tier. One read of /users/me."""
+        from ..platforms.twitter import SUBSCRIPTION_KEY, long_posts
+
+        store = get_store()
+        account = _owned(store.get_account(account_id))
+        _require_owner()
+        if account.platform is not PlatformName.twitter:
+            abort(404)
+        access_token = tokens.valid_access_token_sync(account, store)
+        if not access_token:
+            flash("No stored token, reconnect this account.", "error")
+            return redirect(url_for("accounts"))
+        try:
+            identity = asyncio.run(get_platform(account.platform).fetch_identity(access_token))
+        except Exception as exc:  # noqa: BLE001
+            flash(f"X did not answer: {exc}", "error")
+            return redirect(url_for("accounts"))
+        subscription = identity.meta.get(SUBSCRIPTION_KEY, "")
+        if not subscription:
+            flash("X did not report a subscription for this account. Pick Yes or No by hand.",
+                  "error")
+            return redirect(url_for("accounts"))
+        meta = dict(account.meta)
+        meta[SUBSCRIPTION_KEY] = subscription
+        account.set_meta(meta)
+        store.upsert_account(account)
+        flash(f"X says {account.handle or account.external_id} has: {subscription}. Posts are "
+              + ("one long post." if long_posts(account) else "threads of 280."), "success")
         return redirect(url_for("accounts"))
 
     @app.route("/accounts/<account_id>/dm-access", methods=["POST"])

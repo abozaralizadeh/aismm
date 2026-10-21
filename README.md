@@ -1252,7 +1252,13 @@ The same shape as the Instagram surface, and likewise only present on runs that 
 **Publishing** goes through the one gated `publish` tool. X takes **up to 4 images** in a post
 (`asset_paths=[…]`) or **one video** — mixed sets are refused.
 
-**A caption over 280 characters becomes a thread**, rather than being cut off. It splits on the
+**Premium accounts post it as one long post.** Any paid X tier (Basic, Premium, Premium+) allows up
+to 25,000 characters in a single post, and the API honours it. AISM2 reads the tier when you connect
+(`subscription_type` on `/users/me`), and the X card on the Accounts page shows which mode each
+account is in. You can override it there, or press *Check with X now* for an account connected
+before this existed. One long post is also one billed request instead of one per part.
+
+**Without Premium, a caption over 280 characters becomes a thread**, rather than being cut off. It splits on the
 largest natural boundary that fits — paragraph, then sentence, then word — so nothing breaks
 mid-word, and each post is numbered `n/m` (the counter is inside the 280, not added on top):
 

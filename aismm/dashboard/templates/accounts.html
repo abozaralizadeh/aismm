@@ -163,6 +163,34 @@
             <div class="row"><button class="btn small">Save destination</button></div>
           </form>
         </details>
+
+        {% set sub = a.meta.get('x_subscription', '') %}
+        {% set lp_choice = a.meta.get('x_long_posts', '') %}
+        <details class="account-section">
+          <summary>
+            Posts are
+            <strong>{% if x_long_posts(a) %}one long post (up to 25,000 characters){% else %}threads of 280{% endif %}</strong>
+          </summary>
+          <form method="post" action="{{ url_for('set_x_long_posts', account_id=a.id) }}" class="form">
+            <label>Long posts
+              <select name="x_long_posts">
+                <option value="" {% if not lp_choice %}selected{% endif %}>Follow X
+                  ({% if sub %}it says {{ sub }}{% else %}not checked yet{% endif %})</option>
+                <option value="yes" {% if lp_choice == 'yes' %}selected{% endif %}>Yes, this account has Premium</option>
+                <option value="no" {% if lp_choice == 'no' %}selected{% endif %}>No, split into threads</option>
+              </select>
+            </label>
+            <span class="hint">
+              Any paid X tier (Basic, Premium, Premium+) allows one post of up to 25,000
+              characters. Without it X cuts a post at 280, so AISM2 splits longer text into a
+              thread. One long post is also one billed request instead of one per part.
+            </span>
+            <div class="row">
+              <button class="btn small">Save</button>
+              <button class="btn small" formaction="{{ url_for('check_x_premium', account_id=a.id) }}">Check with X now</button>
+            </div>
+          </form>
+        </details>
       {% endif %}
 
       {% if a.platform.value == 'instagram' %}

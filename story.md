@@ -5,6 +5,20 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-10-21: Why was my X Premium account posting threads?
+
+Posting by hand on X, I could write a long post in one go. AISM2 kept chopping the same kind of
+text into threads of 280. Turns out the 280 was baked in for every X account, Premium or not.
+
+X actually tells you which tier an account is on, in a field called `subscription_type`, and the
+call AISM2 already makes when you connect an account can ask for it for free. So now a Premium
+account (any paid tier) gets one post of up to 25,000 characters, and everyone else still gets a
+thread. There's a switch on the Accounts page for when X doesn't say, and a button to ask again.
+
+Nice side effect: X bills per request, so a six-part thread was six charges. Now it's one.
+
+---
+
 ## 2026-10-08: Same look, or a new one every time?
 
 **The complaint:** every instruction kept the look it had on day one. Fine for a kids' cartoon

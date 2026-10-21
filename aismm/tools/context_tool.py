@@ -20,7 +20,7 @@ def _make_get_context(state: dict):
         instruction = state["instruction"]
         from ..platforms.registry import get_platform  # lazy
 
-        caps = get_platform(account.platform).capabilities
+        caps = get_platform(account.platform).capabilities_for(account)
         return {
             "instruction_name": instruction.name,
             "brief": instruction.brief,

@@ -191,7 +191,7 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     from ..platforms.registry import get_platform  # lazy
 
     platform = get_platform(account.platform)
-    caps = platform.capabilities
+    caps = platform.capabilities_for(account)   # an X Premium account posts 25,000 chars
     if kind == "video" and not caps.supports_video:
         return {"error": "unsupported_media", "message": f"{account.platform.value} can't post video."}
     if kind == "image" and not caps.supports_image:

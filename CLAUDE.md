@@ -107,6 +107,19 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   and the **AI label is pinned to the first post** via `pin_suffix`: appended at the end it would
   land on `n/n`, unseen by anyone who only meets `1/n` in a timeline, which is the "first exposure"
   the label is for. A failure mid-thread reports what already went out instead of losing those ids.
+  **…unless the account has X Premium, where one post holds 25,000 characters** (any paid tier:
+  `subscription_type` Basic/Premium/PremiumPlus, anything but None). Reported as "when I post myself
+  the allowed length is much higher than what AISM2 uses": 280 was a class constant, so a Premium
+  account was cut into threads it never needed, a billed request per part. The limit now belongs to
+  the ACCOUNT: `SocialPlatform.capabilities_for(account)` (base returns `capabilities`) is what
+  `perform_publish`, `build_kickoff`, the context tool, `Twitter.publish` and `Twitter.reply` read,
+  and X lifts `caption_limit` to `LONG_POST_LIMIT` when `twitter.long_posts(account)`. That reads
+  `meta["x_long_posts"]` (operator, "yes"/"no") over `meta["x_subscription"]` (what
+  `fetch_identity` got from `/users/me?user.fields=subscription_type`, the same request it already
+  made). The subscription key is left OUT when X does not report it, because a reconnect merges meta.
+  Unknown means 280, the safe answer: without Premium X truncates a long post. Accounts connected
+  before this have no subscription recorded, hence the Accounts page's *Check with X now*.
+  Anything new that sizes a post must ask `capabilities_for`, not `.capabilities`.
 - **Platform-specific tool modules mirror each other** (`instagram_tools.py`, `twitter_tools.py`):
   every factory returns `None` unless the run targets that platform, so an IG run isn't handed the
   six X tools. Write tools (reply, delete) act immediately and are deliberately NOT behind

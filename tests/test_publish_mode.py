@@ -37,6 +37,9 @@ def test_live_calls_platform(store, monkeypatch):
     class FakePlatform:
         capabilities = Capabilities(True, True, True, False, "landscape", 280)
 
+        def capabilities_for(self, account):
+            return self.capabilities
+
         async def publish(self, *, access_token, account, caption, asset_path, media_kind,
                           instruction=None, asset_paths=None, placement="feed"):
             published["called"] = (access_token, caption, media_kind)

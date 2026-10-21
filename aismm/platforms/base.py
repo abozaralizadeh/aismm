@@ -162,6 +162,11 @@ class SocialPlatform(ABC):
     async def fetch_identity(self, access_token: str) -> Identity:
         """Look up the connected profile (id + display handle + platform meta)."""
 
+    def capabilities_for(self, account: Account | None) -> Capabilities:
+        """What THIS account can do. Usually the platform's own; X lifts the caption
+        limit for Premium accounts. Anything sizing a post must ask here."""
+        return self.capabilities
+
     async def fetch_identities(self, access_token: str) -> list[Identity]:
         """EVERY profile this authorization covers, not just the first.
 

@@ -14,6 +14,7 @@ to the v1.1 flow (see README).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import re
@@ -295,6 +296,32 @@ def shares_with_followers(account, instruction=None) -> bool:
     return bool((account.meta or {}).get("share_with_followers"))
 
 
+# Any paid X tier (Basic, Premium, PremiumPlus) lifts ONE post from 280 to
+# 25,000 characters, through the API too. Without it X cuts the text at 280, so
+# the limit belongs to the ACCOUNT, not to the platform, and a Premium account
+# was being split into threads it never needed (each part a billed request).
+LONG_POST_LIMIT = 25_000
+# What X's /users/me `subscription_type` said, recorded at connect or by the
+# Accounts page's "Check now". Absent means we never asked.
+SUBSCRIPTION_KEY = "x_subscription"
+# The operator's answer, "yes" or "no". Absent means follow what X reported.
+LONG_POSTS_KEY = "x_long_posts"
+
+
+def has_premium(subscription: str) -> bool:
+    """X documents Basic, Premium, PremiumPlus or None; every paid tier counts."""
+    return (subscription or "").strip().lower() not in ("", "none")
+
+
+def long_posts(account) -> bool:
+    """Whether this account posts one long post instead of a 280-character thread."""
+    meta = (getattr(account, "meta", None) or {}) if account is not None else {}
+    override = str(meta.get(LONG_POSTS_KEY, "") or "").strip().lower()
+    if override in ("yes", "no"):
+        return override == "yes"
+    return has_premium(meta.get(SUBSCRIPTION_KEY, ""))
+
+
 # X phrases the outreach-reply refusal a few ways; match on the stable parts so a
 # minor wording change doesn't drop us back to the generic "reconnect" hint.
 _REPLY_BLOCK_MARKERS = (
@@ -404,14 +431,31 @@ class Twitter(SocialPlatform):
         logger.info("X community rotation: posted to %s, next is %s",
                     ids[cursor % len(ids)], ids[meta["community_cursor"]])
 
+    def capabilities_for(self, account) -> Capabilities:
+        """A Premium account posts up to 25,000 characters in ONE post."""
+        if not long_posts(account):
+            return self.capabilities
+        return dataclasses.replace(
+            self.capabilities, caption_limit=LONG_POST_LIMIT,
+            notes=f"X Premium: one post up to {LONG_POST_LIMIT} characters, so no thread is "
+                  "needed. Up to 4 images OR 1 video.")
+
     async def fetch_identity(self, access_token: str) -> Identity:
         async with httpx.AsyncClient(timeout=30) as client:
+            # subscription_type rides the same request, so knowing whether the
+            # account has Premium costs nothing extra.
             r = await client.get(f"{API}/users/me",
-                                 headers={"Authorization": f"Bearer {access_token}"})
+                                 headers={"Authorization": f"Bearer {access_token}"},
+                                 params={"user.fields": "subscription_type"})
             if r.status_code >= 400:
                 raise self._api_error(r)
             data = r.json().get("data", {})
-        return Identity(external_id=data.get("id", ""), handle=data.get("username", ""))
+        # Left out when X did not say: a reconnect MERGES meta, and an empty value
+        # would wipe a good answer recorded earlier.
+        meta = ({SUBSCRIPTION_KEY: str(data["subscription_type"])}
+                if data.get("subscription_type") else {})
+        return Identity(external_id=data.get("id", ""), handle=data.get("username", ""),
+                        meta=meta)
 
     async def _upload_media(self, client, access_token, path, media_kind) -> str:
         """Chunked upload via the v2 **sub-path** endpoints, returning the media id.
@@ -495,7 +539,7 @@ class Twitter(SocialPlatform):
         argument 'asset_paths'`` after the agent had already generated the image.
         """
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-        caps = self.capabilities
+        caps = self.capabilities_for(account)
         paths = [p for p in (asset_paths or [asset_path]) if p]
         # One video, or up to four images — X refuses a mixed set.
         if media_kind == "video":
@@ -996,14 +1040,15 @@ class Twitter(SocialPlatform):
                 raise self._api_error(r)
             return r.json().get("data", {}) or {}
 
-    async def reply(self, access_token: str, post_id: str, text: str) -> dict:
+    async def reply(self, access_token: str, post_id: str, text: str,
+                    account: Account | None = None) -> dict:
         """Reply to a post, in the account's voice. Posts IMMEDIATELY."""
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(
                 f"{API}/tweets",
                 headers={"Authorization": f"Bearer {access_token}",
                          "Content-Type": "application/json"},
-                json={"text": text[: self.capabilities.caption_limit],
+                json={"text": text[: self.capabilities_for(account).caption_limit],
                       "reply": {"in_reply_to_tweet_id": post_id}})
             if r.status_code >= 400:
                 raise self._api_error(r)
@@ -1026,7 +1071,7 @@ class Twitter(SocialPlatform):
                 raise RuntimeError("X needs the DM conversation id to reply — none was given.")
             data = await self.send_dm(access_token, reply_to, text)
             return {"id": str(data.get("dm_event_id") or ""), "url": ""}
-        data = await self.reply(access_token, target_id, text)
+        data = await self.reply(access_token, target_id, text, account)
         new_id = data.get("id", "")
         handle = (account.handle or "i").lstrip("@")
         return {"id": new_id,
