@@ -1205,6 +1205,13 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   `?api-version=2024-06-01` both 404. Hence `check_resource`/`check_pool` and
   `python scripts/smoke_sora.py --check`, which reproduces the whole diagnosis above in seconds,
   creates no job and bills nothing. Run it before believing a pool is load-balancing.
+- **A listed deployment is not a working one: read its `status`.** Azure ended inference for every
+  `sora-2` version on **2026-11-02** (the `/openai/models` listing carries the date as
+  `deprecation.inference`). The deployments stayed in `/openai/deployments` with `status: "failed"`,
+  so `check_resource` kept saying "sora-2 is deployed" while every create on every pool member
+  answered `400 BadRequestForDependentService` in about a second. `check_resource` now requires
+  `status == "succeeded"`. The Azure OpenAI catalog had NO video model left after that date, so
+  every video run fails until a different video provider is wired in behind the registry.
 - **One LangSmith trace per run, named after the INSTRUCTION** (`manager_agent._trace_name` /
   `_trace_metadata` around the whole of `run_for_account`'s agent section). The SDK's default
   workflow name is "Agent workflow", so every trace in the project had the same name and finding the
@@ -1268,6 +1275,11 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   control was a `<button>`, so it wasn't in `links` either: the agent could neither see the image nor
   discover the thing that reveals it, and correctly reported it couldn't finish. `buttons` is the
   discovery path; keep it in the tool docstring and the prompt.
+  **A click result names what it opened** (`_MARK_IMAGES_JS` before the click, `revealed_by_click`
+  after). Run fd2a9eb0 clicked `#charSheetLink`, got the sheet back as the 15th image with no alt
+  and no caption among fourteen panels, and failed saying the sheet was missing. Images the click
+  revealed now come first, tagged with the control's label, plus `element_id`. Also: an
+  `<img src="">` reports the PAGE url as `img.src`, so the extractor reads the attribute first.
   **`save_media` sniffs bytes, never trusts `Content-Type`** (`sniff_media`): blobs uploaded without
   a content type serve `application/octet-stream`, which made real PNGs unpostable. Magic numbers →
   Pillow → content-type → URL extension, but a declared non-media type (text/html, pdf) still wins

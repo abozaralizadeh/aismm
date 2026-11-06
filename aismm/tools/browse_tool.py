@@ -314,6 +314,9 @@ async def close_browser(state: dict) -> None:
 # in (a comic panel's dialogue, a figure's caption).
 _EXTRACT_IMAGES_JS = """
 () => {
+  // An <img src=""> reports the PAGE's url as img.src, so a modal image that has
+  // not been opened yet used to be listed as an image of the page itself.
+  const own = (img) => img.currentSrc || (img.getAttribute('src') ? img.src : '');
   const best = (img) => {
     // A thumbnail in src often has the full asset in a data attribute or srcset.
     for (const attr of ['data-full', 'data-src', 'data-original', 'data-lazy-src']) {
@@ -324,7 +327,7 @@ _EXTRACT_IMAGES_JS = """
       const last = img.srcset.split(',').pop().trim().split(/\\s+/)[0];
       if (last) return last;
     }
-    return img.currentSrc || img.src || '';
+    return own(img);
   };
   const caption = (img) => {
     const fig = img.closest('figure');
@@ -338,9 +341,11 @@ _EXTRACT_IMAGES_JS = """
     return '';
   };
   return [...document.images].map(img => ({
-    src: img.currentSrc || img.src || '',
+    src: own(img),
     full: best(img),
-    alt: (img.alt || '').trim(),
+    alt: (img.alt || img.title || img.getAttribute('aria-label') || '').trim(),
+    id: img.id || '',
+    before: img.dataset.aismmBefore === undefined ? null : img.dataset.aismmBefore,
     width: img.naturalWidth,
     height: img.naturalHeight,
     caption: caption(img).slice(0, 600),
@@ -396,6 +401,34 @@ def _bot_wall(status: int | None, title: str, text: str) -> str:
     return ""
 
 
+# Run just before a click: remember what every image showed, so the result can say
+# which images the click REVEALED. A character sheet in a modal has no alt text and
+# no caption, and in a list of fifteen panels nothing else told the agent that the
+# picture it had clicked for was right there (run fd2a9eb0 failed saying so).
+_MARK_IMAGES_JS = """
+() => { for (const img of document.images) {
+  img.dataset.aismmBefore = img.currentSrc || (img.getAttribute('src') ? img.src : '');
+} }
+"""
+
+
+async def _control_label(page, selector: str) -> str:
+    """The words on the control about to be clicked ("View character reference sheet")."""
+    try:
+        label = await page.eval_on_selector(
+            selector, "e => (e.getAttribute('title') || e.getAttribute('aria-label')"
+                      " || e.innerText || '').trim()")
+    except Exception:  # noqa: BLE001 - a label is a nicety, never a reason to fail
+        return ""
+    return (label or "")[:80]
+
+
+def _revealed(image: dict) -> bool:
+    """Did this image appear, or change picture, because of the click?"""
+    before = image.get("before")
+    return before is None or before != (image.get("src") or "")
+
+
 def _is_decorative(image: dict) -> bool:
     """Drop favicons, tracking pixels and spacers — never what the agent wants."""
     src = (image.get("src") or "").lower()
@@ -448,9 +481,11 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
                     await page.wait_for_selector(wait_for, timeout=_SELECTOR_TIMEOUT_MS)
                 except Exception:  # noqa: BLE001
                     logger.info("wait_for selector %r never appeared on %s", wait_for, url)
-            clicked = ""
+            clicked, click_label = "", ""
             if click:
                 try:
+                    await page.evaluate(_MARK_IMAGES_JS)
+                    click_label = await _control_label(page, click)
                     await page.click(click, timeout=_SELECTOR_TIMEOUT_MS)
                     clicked = click
                     # Whatever the click opened has to fetch and paint before we
@@ -526,15 +561,23 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
         if not absolute or absolute in seen:
             continue
         seen.add(absolute)
-        kept.append({
+        item = {
             "url": absolute,
             "alt": image.get("alt", ""),
             "width": image.get("width") or 0,
             "height": image.get("height") or 0,
             "caption": (image.get("caption") or "").strip(),
-        })
-        if len(kept) >= _MEDIA_LIMIT:
-            break
+        }
+        if image.get("id"):
+            item["element_id"] = image["id"]
+        if clicked and _revealed(image):
+            item["revealed_by_click"] = (f"{clicked} ({click_label})" if click_label
+                                         else clicked)
+        kept.append(item)
+    # What the click opened is what the agent clicked for, so it goes first, and it
+    # is never the image that falls off the end of the list.
+    kept.sort(key=lambda i: "revealed_by_click" not in i)
+    kept = kept[:_MEDIA_LIMIT]
 
     video_urls, seen_videos = [], set()
     for item in videos or []:
@@ -554,9 +597,10 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
         if len(controls) >= _LINK_LIMIT:
             break
 
+    revealed = sum("revealed_by_click" in i for i in kept)
     logger.info("browse_page %s -> %d chars, %d image(s), %d link(s), %d button(s)%s",
                 url, len(text), len(kept), len(links or []), len(controls),
-                f", clicked {clicked!r}" if clicked else "")
+                f", clicked {clicked!r} (revealed {revealed} image(s))" if clicked else "")
     result = {
         "url": url,
         "title": title,
@@ -569,6 +613,10 @@ async def perform_browse_page(state: dict, url: str, scroll: bool = True,
     }
     if click:
         result["clicked"] = clicked
+        if clicked and not any("revealed_by_click" in i for i in kept):
+            result["click_note"] = (
+                "The click worked but no new image appeared. If you expected one, call "
+                "again with wait_for set to that image's selector.")
         if not clicked:
             result["click_failed"] = (
                 f"Nothing matched {click!r}, so the page was read unchanged. Check the "
@@ -615,6 +663,9 @@ def _make_browse_page(state: dict):
                 only exists once opened — e.g. "#charSheetLink" to open a
                 character-sheet modal. Take the selector from ``buttons``. The
                 result reports ``clicked``, or ``click_failed`` if nothing matched.
+                Images the click opened come FIRST in ``images`` and carry
+                ``revealed_by_click`` (the control and its label): that is the
+                picture you clicked for, even when it has no alt text or caption.
         """
         return await perform_browse_page(state, url, scroll, wait_for, click)
 

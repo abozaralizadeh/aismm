@@ -280,6 +280,16 @@ def test_a_resource_without_the_model_names_what_it_does_have(monkeypatch):
     assert "gpt-4.1" in result["detail"] and "model-router" in result["detail"]
 
 
+def test_a_failed_deployment_is_not_healthy(monkeypatch):
+    """What a retired model looks like: still listed, status "failed", every create a 400."""
+    _checking(monkeypatch, 200, {"data": [{"id": "sora-2", "status": "failed"},
+                                          {"id": "gpt-image-2", "status": "succeeded"}]})
+    result = asyncio.run(sora_client.check_resource(
+        {"endpoint": "https://r0.openai.azure.com", "key": "k", "model": "sora-2"}))
+    assert result["ok"] is False
+    assert "'failed'" in result["detail"] and "retire" in result["detail"]
+
+
 def test_a_rotated_key_is_reported_as_the_key(monkeypatch):
     _checking(monkeypatch, 401, "invalid subscription key")
     result = asyncio.run(sora_client.check_resource(

@@ -280,12 +280,22 @@ class _FakePage:
             return "Episode text"
         if "loading" in script or "scrollTo" in script:      # force-lazy-images
             return None
+        if "aismmBefore = img" in script:                       # snapshot before a click
+            self.marked = True
+            return None
+        marked = getattr(self, "marked", False)
         images = [{"src": f"https://cdn/panel{n}.png", "alt": f"Panel {n}",
-                   "width": 1024, "height": 1024} for n in (1, 2)]
-        if self.revealed:
-            images.append({"src": "https://cdn/charsheet.png", "alt": "",
-                           "width": 1536, "height": 1024})
+                   "width": 1024, "height": 1024,
+                   "before": f"https://cdn/panel{n}.png" if marked else None}
+                  for n in (1, 2)]
+        # The modal <img> is in the page all along, with src="" until the click.
+        images.append({"src": "https://cdn/charsheet.png" if self.revealed else "",
+                       "alt": "", "id": "modalImg", "width": 1536, "height": 1024,
+                       "before": "" if marked else None})
         return images
+
+    async def eval_on_selector(self, selector, script):
+        return "View character reference sheet"
 
     async def eval_on_selector_all(self, selector, script):
         if selector.startswith("a[href]"):
@@ -347,6 +357,34 @@ def test_clicking_reveals_it(monkeypatch):
     assert page.clicked == ["#charSheetLink"]
     assert result["clicked"] == "#charSheetLink"
     assert any("charsheet" in i["url"] for i in result["images"])
+
+
+def test_the_revealed_image_is_named_and_listed_first(monkeypatch):
+    """Run fd2a9eb0: the sheet WAS in the list, unnamed among the panels, and the
+    agent reported it missing. The click result now says which picture it opened."""
+    from aismm.tools.browse_tool import perform_browse_page
+
+    page = _FakePage()
+    _browser_with(page, monkeypatch)
+    result = asyncio.run(perform_browse_page(
+        {}, "https://genbox/comicbook?date=2026-05-25", click="#charSheetLink"))
+
+    first = result["images"][0]
+    assert "charsheet" in first["url"] and first["element_id"] == "modalImg"
+    assert first["revealed_by_click"] == "#charSheetLink (View character reference sheet)"
+    assert not any("revealed_by_click" in i for i in result["images"][1:])
+    assert "click_note" not in result
+
+
+def test_an_empty_src_is_not_listed_as_the_page_itself(monkeypatch):
+    """<img src=""> reports the page url as img.src; it must not become an "image"."""
+    from aismm.tools.browse_tool import _EXTRACT_IMAGES_JS, perform_browse_page
+
+    assert "getAttribute('src') ? img.src : ''" in _EXTRACT_IMAGES_JS
+    page = _FakePage()
+    _browser_with(page, monkeypatch)
+    result = asyncio.run(perform_browse_page({}, "https://genbox/comicbook?date=2026-05-25"))
+    assert len(result["images"]) == 2
 
 
 def test_buttons_are_reported_so_the_control_is_discoverable(monkeypatch):

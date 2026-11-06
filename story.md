@@ -5,6 +5,26 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-11-06: Most runs failing, and two very different reasons
+
+**Symptom:** a third of the last fifty runs failed.
+
+**Reason one, the big one:** Azure switched off Sora 2 on 2 November. Every version of the model
+has an end date in Azure's model list, and that was it. The deployments are still listed, just
+marked "failed", and every video request gets an instant 400 with "Bad request for dependent
+service". Our health check looked only at whether the deployment existed, so it cheerfully said
+all three were fine. It reads the status now. Azure has no other video model to switch to, so
+video instructions will keep failing until another provider is plugged in.
+
+**Reason two, a small one that read like a big one:** the comic carousel run clicked the
+"character sheet" button, got the sheet back, and still said the sheet was missing. It was the
+15th picture in a list of panels, with no name and no caption. The browser tool now says which
+picture a click opened and puts it first.
+
+**Not a bug:** the X runs failing with 402. That's the X API account out of credits.
+
+---
+
 ## 2026-10-21: Why was my X Premium account posting threads?
 
 Posting by hand on X, I could write a long post in one go. AISM2 kept chopping the same kind of

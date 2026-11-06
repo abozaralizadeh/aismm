@@ -386,13 +386,24 @@ async def check_resource(resource: dict) -> dict:
         out["detail"] = f"HTTP {resp.status_code}: {_response_body(resp)[:200]}"
         return out
     try:
-        names = sorted(d.get("id") or "" for d in (resp.json().get("data") or []))
+        deployments = {d.get("id") or "": d for d in (resp.json().get("data") or [])}
     except Exception as exc:  # noqa: BLE001
         out["detail"] = f"could not read the deployment list: {exc}"
         return out
+    names = sorted(deployments)
     if out["model"] not in names:
-        out["detail"] = (f"no {out['model']!r} deployment — this resource has: "
+        out["detail"] = (f"no {out['model']!r} deployment, this resource has: "
                          f"{', '.join(n for n in names if n) or 'nothing deployed'}")
+        return out
+    # The deployment existing is not enough. When Azure retired sora-2 (inference
+    # ended 2026-11-02) every deployment stayed in the list with status "failed",
+    # and this check kept saying "deployed" while every create answered
+    # 400 BadRequestForDependentService.
+    status = str(deployments[out["model"]].get("status") or "").lower()
+    if status and status != "succeeded":
+        out["detail"] = (f"{out['model']} is deployed but Azure reports its status as "
+                         f"{status!r}: it cannot serve requests. A retired model shows up "
+                         f"like this; check the model's retirement date in Azure AI Foundry")
         return out
     out["ok"] = True
     out["detail"] = f"{out['model']} is deployed"
