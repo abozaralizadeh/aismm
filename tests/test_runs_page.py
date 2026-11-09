@@ -163,8 +163,6 @@ def test_first_page_shows_only_one_page_of_runs(dash, seeded):
     page = dash.test_client().get("/runs?per_page=25").get_data(as_text=True)
     assert page.count("details →") == 25
     assert "Page 1 of 2" in page
-    assert "Refreshes every 30 seconds" in page
-    assert "window.location.reload(); }, 30000)" in page
 
 
 def test_second_page_shows_the_rest(dash, seeded):
@@ -377,3 +375,24 @@ def test_approving_a_reply_flashes_success_not_an_error(dash, store, seeded, mon
     assert "Reply sent." in page
     assert "https://x.com/abo0zar/status/2085" in page
     assert "flash-error" not in page and "'status': 'replied'" not in page
+
+
+# --- the page reloads itself only while a run is in progress ------------------------ #
+# Every reload re-reads the run table, and a tab left open on /runs used to reload
+# every 30 seconds all day: on Azure that was the bulk of a cross-region read bill.
+
+def test_no_reload_when_nothing_is_running(dash, seeded):
+    page = dash.test_client().get("/runs").get_data(as_text=True)
+    assert "window.location.reload()" not in page
+    assert "refreshes every 30 seconds" not in page
+
+
+def test_reloads_while_a_run_is_running_but_never_in_a_hidden_tab(dash, seeded, store):
+    run = store.list_runs(limit=1)[0]
+    run.status = RunStatus.running
+    store.update_run(run)
+    page = dash.test_client().get("/runs").get_data(as_text=True)
+    assert "A run is in progress: refreshes every 30 seconds" in page
+    assert "window.location.reload()" in page
+    assert "document.visibilityState === 'visible'" in page
+    assert "visibilitychange" in page

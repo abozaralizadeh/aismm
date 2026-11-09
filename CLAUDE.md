@@ -225,6 +225,20 @@ The publish gate is the core design point (autonomy + guardrail): the agent alwa
   arbitrary columns), search covers caption/error/log/url plus the instruction *name*, and
   LocalStore does it in SQL while AzureStore does it in Python (Table Storage can't). Fetch one run
   with `get_run`, not by scanning a list.
+- **A LIST view reads run SUMMARIES, never full runs** (`Store.run_summaries` → `(rows, total)`,
+  `published_run_summaries`). On Azure every list is a scan of the whole run partition, and each
+  row carries its full prompt and log. A tab left open on /runs reloaded every 30s with three such
+  scans per load: about 16,000 queries and 700 GB a month of reads, billed cross-region because
+  `pocvm` is in Italy North and `pkrstr` in West Europe. AzureStore now reads the list columns only
+  (`_RUN_SUMMARY_FIELDS`, `select=`), once per `RUN_SUMMARY_TTL_SECONDS` (45s), and serves the page,
+  its total and every `count_runs` from that one read. Any run write in this process clears it;
+  only a run the CLI writes can be up to 45s late. A summary has `prompt == log == ""`, so **never
+  hand one to `update_run`**: it would write the blanks over the real fields. That is why
+  `list_runs`, `recent_published_runs` (the metrics sweep writes back) and the stale-run reap still
+  read full rows, narrowed server-side by `status eq '…'` where a status is given. A search reads
+  full rows too, because it covers the log. The SQLite defaults are just `list_runs` + `count_runs`.
+  /runs reloads itself only while a run is RUNNING and only in a visible tab (`running_now`); a
+  page that reloads on a timer forever is a standing bill, not a convenience.
 - **Workspaces scope accounts, instructions, runs and staged posts** ([workspaces.py](aismm/workspaces.py)).
   A workspace is a SILO, not just an instruction folder — scoping instructions alone would still let
   every member publish to every connected account, so a private workspace would not be private.

@@ -5,6 +5,24 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-11-09: A dashboard tab that cost 700 GB a month
+
+**Symptom:** the Azure bill showed about 700 GB a month of Table Storage reads on the storage
+account, roughly 16,000 queries a day at 1.5 MB each, and all of it cross-region.
+
+**Cause:** the Runs page reloaded itself every 30 seconds, whether or not anything was happening.
+Each reload read the whole runs table three times (once to count, once to list, once to look for
+stuck runs), and every run row carries the full prompt the agent got and its whole log. The VM
+sits in Italy North and the storage account in West Europe, so every byte crossed regions. One
+tab left open in a browser was enough.
+
+**Fix:** list pages now ask only for the columns they show, read the table once and reuse that
+for 45 seconds (any new or updated run clears it straight away), and the stuck-run check asks the
+table for running rows only. The Runs page only refreshes while a run is actually in progress, and
+never in a background tab. Same pages, same numbers, no data moved.
+
+**Lesson:** an auto-refresh is a recurring cost. Make it stop when there is nothing to watch.
+
 ## 2026-11-06: Most runs failing, and two very different reasons
 
 **Symptom:** a third of the last fifty runs failed.

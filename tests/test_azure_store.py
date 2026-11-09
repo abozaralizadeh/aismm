@@ -5,6 +5,7 @@ behaviours the lock depends on: ``create_entity`` raising ``ResourceExistsError`
 on a duplicate key, and PartitionKey filtering.
 """
 import dataclasses
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -24,6 +25,7 @@ class FakeTableClient:
 
     def __init__(self):
         self.rows: dict[tuple[str, str], dict] = {}
+        self.queries: list[tuple[str, list | None]] = []  # (filter, select) per query
 
     def create_entity(self, entity):
         key = (entity["PartitionKey"], entity["RowKey"])
@@ -43,9 +45,17 @@ class FakeTableClient:
     def delete_entity(self, partition_key, row_key):
         self.rows.pop((partition_key, row_key), None)
 
-    def query_entities(self, query_filter, **kwargs):
-        wanted = query_filter.split("'")[1]
-        return [dict(v) for (pk, _), v in self.rows.items() if pk == wanted]
+    def query_entities(self, query_filter, select=None, **kwargs):
+        """``Name eq 'value'`` clauses joined by ``and``, plus ``select`` like the service:
+        a selected property the entity lacks comes back as None."""
+        self.queries.append((query_filter, select))
+        clauses = [(name, value.replace("''", "'")) for name, value in
+                   re.findall(r"(\w+) eq '((?:[^']|'')*)'", query_filter)]
+        found = [dict(v) for v in self.rows.values()
+                 if all(str(v.get(name)) == value for name, value in clauses)]
+        if select:
+            found = [{name: row.get(name) for name in select} for row in found]
+        return found
 
 
 @pytest.fixture()

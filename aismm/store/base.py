@@ -312,17 +312,43 @@ class Store(ABC):
         """
         candidates = self.list_runs(status=RunStatus.published, workspace_id=workspace_id,
                                     limit=limit, sort="created_at", descending=True)
-        cutoff = _as_utc(since)
-        result: list[Run] = []
-        for run in candidates:
-            if not run.external_id:
-                continue
-            if cutoff is not None:
-                created = _as_utc(run.created_at)
-                if created is not None and created < cutoff:
-                    continue
-            result.append(run)
-        return result
+        return _published_since(candidates, since)
+
+    # --- run SUMMARIES: for list views only --------------------------------- #
+    # A list page shows a run's status, names, caption and thumbnail, never its
+    # prompt or log, and those two are most of a run row's bytes. On Azure the
+    # run table is read whole (it cannot filter or page server-side), so a page
+    # that pulled them paid for megabytes it never displayed, every 30 seconds.
+    # These methods may return runs WITHOUT prompt and log. Never pass one to
+    # ``update_run``: that would write the empty fields back over the real ones.
+
+    def run_summaries(self, *, limit: int = 100, offset: int = 0, status=None,
+                      instruction_id: str | None = None, account_id: str | None = None,
+                      workspace_id: str | None = None, search: str = "",
+                      sort: str = "created_at",
+                      descending: bool = True) -> tuple[list[Run], int]:
+        """One page of runs for DISPLAY plus the total that matches, in one go.
+
+        The default asks ``count_runs`` and ``list_runs``, which is right for a
+        backend that can count and page in its own query (SQLite). AzureStore
+        overrides it to answer both from ONE read without prompt and log.
+        """
+        filters = {"status": status, "instruction_id": instruction_id,
+                   "account_id": account_id, "workspace_id": workspace_id,
+                   "search": search}
+        total = self.count_runs(**filters)
+        rows = self.list_runs(limit=limit, offset=offset, sort=sort, descending=descending,
+                              **filters)
+        return rows, total
+
+    def published_run_summaries(self, *, since: datetime | None = None, limit: int = 200,
+                                workspace_id: str | None = None) -> list[Run]:
+        """``recent_published_runs`` for DISPLAY: the same runs, maybe without prompt and log.
+
+        The metrics sweep must keep using ``recent_published_runs``, because it
+        writes each run back with fresh counters.
+        """
+        return self.recent_published_runs(since=since, limit=limit, workspace_id=workspace_id)
 
     # --- staged posts ------------------------------------------------------ #
     @abstractmethod
@@ -465,3 +491,18 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _published_since(candidates, since: datetime | None) -> list[Run]:
+    """The runs that went live (carry a post id) and are not older than ``since``."""
+    cutoff = _as_utc(since)
+    result: list[Run] = []
+    for run in candidates:
+        if not run.external_id:
+            continue
+        if cutoff is not None:
+            created = _as_utc(run.created_at)
+            if created is not None and created < cutoff:
+                continue
+        result.append(run)
+    return result

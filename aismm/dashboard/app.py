@@ -1855,11 +1855,21 @@ def create_app() -> Flask:
         filters = {"status": status_filter, "instruction_id": instruction_id or None,
                    "account_id": account_id or None, "search": search,
                    "workspace_id": _workspace_id()}
-        total = store.count_runs(**filters)
+        # One read answers the page AND the total (on Azure, without prompt/log).
+        rows, total = store.run_summaries(limit=per_page, offset=(page - 1) * per_page,
+                                          sort=sort, descending=descending, **filters)
         pages = max((total + per_page - 1) // per_page, 1)
-        page = min(page, pages)
-        rows = store.list_runs(limit=per_page, offset=(page - 1) * per_page,
-                               sort=sort, descending=descending, **filters)
+        if page > pages:  # a stale link past the end: show the last page instead
+            page = pages
+            rows, total = store.run_summaries(limit=per_page,
+                                              offset=(page - 1) * per_page,
+                                              sort=sort, descending=descending, **filters)
+        # The page reloads itself only while something is actually running.
+        running_now = store.count_runs(status=RunStatus.running,
+                                       workspace_id=_workspace_id()) > 0
+        scope = _workspace_id()
+        scoped_instructions = store.list_instructions(workspace_id=scope)
+        scoped_accounts = store.list_accounts(workspace_id=scope)
 
         current = {"q": search, "status": status, "instruction": instruction_id,
                    "account": account_id, "sort": sort,
@@ -1876,11 +1886,12 @@ def create_app() -> Flask:
         return render_template(
             "runs.html",
             runs=rows,
-            pending=store.list_staged(pending_only=True, workspace_id=_workspace_id()),
-            accounts={a.id: a for a in store.list_accounts(workspace_id=_workspace_id())},
-            instructions={i.id: i for i in store.list_instructions(workspace_id=_workspace_id())},
-            all_instructions=store.list_instructions(workspace_id=_workspace_id()),
-            all_accounts=store.list_accounts(workspace_id=_workspace_id()),
+            pending=store.list_staged(pending_only=True, workspace_id=scope),
+            accounts={a.id: a for a in scoped_accounts},
+            instructions={i.id: i for i in scoped_instructions},
+            all_instructions=scoped_instructions,
+            all_accounts=scoped_accounts,
+            running_now=running_now,
             statuses=list(RunStatus),
             # A run stuck on "running" has no process behind it — the service was
             # restarted mid-run. Offer the tidy-up only when there is something
@@ -2885,8 +2896,8 @@ def _overview_insights(store, scope) -> dict:
     accounts = store.list_accounts(workspace_id=scope)
     instructions = store.list_instructions(workspace_id=scope)
     pending = store.list_staged(pending_only=True, workspace_id=scope)
-    runs = store.list_runs(limit=_RECENT_RUN_SAMPLE, workspace_id=scope,
-                           sort="created_at", descending=True)
+    runs, _total = store.run_summaries(limit=_RECENT_RUN_SAMPLE, workspace_id=scope,
+                                       sort="created_at", descending=True)
 
     # Per-day activity for the last fortnight, and per-status totals for the month.
     today = now.date()
@@ -2943,7 +2954,7 @@ def _overview_insights(store, scope) -> dict:
     # summed across the window and the best posts surfaced, so the whole account's
     # reach reads at a glance. Only countable integers are summed — a ratio
     # (upvote_ratio) or a bool can't be added up, so it's left to the per-post pills.
-    published_runs = store.recent_published_runs(since=window_start, workspace_id=scope)
+    published_runs = store.published_run_summaries(since=window_start, workspace_id=scope)
     perf_totals: dict[str, int] = {}
     scored: list[tuple[int, "object"]] = []
     for run in published_runs:

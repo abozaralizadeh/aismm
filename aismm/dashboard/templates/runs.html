@@ -11,7 +11,7 @@
     <h1>Runs &amp; approvals</h1>
     <p class="page-sub muted">Everything the agent has done, newest first.</p>
   </div>
-  <span class="muted small" aria-live="polite">Refreshes every 30 seconds</span>
+  {% if running_now %}<span class="muted small" aria-live="polite">A run is in progress: refreshes every 30 seconds</span>{% endif %}
 </div>
 
 {% if stale_runs %}
@@ -209,8 +209,21 @@
 {% endblock %}
 
 {% block scripts %}
+{% if running_now %}
 <script>
-  // Keep the current query string, so filters, sorting and pagination survive.
-  window.setTimeout(function () { window.location.reload(); }, 30000);
+  // Refresh only while a run is in progress, and never in a hidden tab: every
+  // reload re-reads the run table, so a tab left open used to cost a read every
+  // 30 seconds, all day. A hidden tab reloads once when it is looked at again.
+  // reload() keeps the query string, so filters, sorting and pagination survive.
+  window.setTimeout(function () {
+    if (document.visibilityState === 'visible') {
+      window.location.reload();
+      return;
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') { window.location.reload(); }
+    }, { once: true });
+  }, 30000);
 </script>
+{% endif %}
 {% endblock %}

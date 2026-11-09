@@ -37,6 +37,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from ..crypto import decrypt, encrypt
@@ -48,7 +50,8 @@ from ..models import (
     UserProfile, Workspace, WorkspaceMember, WorkspaceRole,
 )
 from .base import (
-    Store, build_git_settings, build_image_settings, build_llm_settings, build_sora_settings,
+    Store, _published_since, build_git_settings, build_image_settings, build_llm_settings,
+    build_sora_settings,
 )
 
 logger = logging.getLogger("aismm.store.azure")
@@ -77,6 +80,20 @@ _DATETIME_FIELDS = {
 }
 # RowKey forbids / \ # ? and control chars — lock keys contain ':'.
 _ROWKEY_UNSAFE = re.compile(r"[/\\#?\x00-\x1f\x7f-\x9f]")
+
+# What a LIST of runs shows. Everything but ``prompt`` and ``log``, which are most of
+# a run row's bytes and only ever shown on one run's own page. Reading them for
+# every list view is what made a dashboard tab left open on /runs cost hundreds of
+# GB a month of cross-region reads.
+_RUN_SUMMARY_FIELDS = (
+    "RowKey", "workspace_id", "instruction_id", "account_id", "status", "caption",
+    "asset_path", "asset_paths_json", "placement", "external_url", "external_id",
+    "metrics_json", "metrics_updated_at", "error", "created_at",
+)
+# How long one read of the run summaries answers every list and count. Any run
+# this process writes clears it at once, so the only staleness left is a run
+# written by ANOTHER process (the CLI), visible within this many seconds.
+RUN_SUMMARY_TTL_SECONDS = 45.0
 
 
 def _ws_match(value: str, workspace_id) -> bool:
@@ -128,6 +145,11 @@ class AzureStore(Store):
 
     def __init__(self, table_client=None) -> None:
         self._table = table_client
+        # (monotonic time, summary entities) or None. ``_summary_gen`` counts run
+        # writes, so a read that raced a write is never cached as current.
+        self._summaries: tuple[float, list[dict]] | None = None
+        self._summary_gen = 0
+        self._summary_lock = threading.Lock()
         if table_client is None:
             self.init()
 
@@ -167,6 +189,8 @@ class AzureStore(Store):
         entity.update({k: _iso(v) for k, v in payload.items() if v is not None})
         _check_size(entity)
         self.table.upsert_entity(entity=entity, mode=UpdateMode.REPLACE)
+        if partition == PK_RUN:
+            self._forget_run_summaries()
 
     def _get(self, partition: str, row: str):
         try:
@@ -174,14 +198,53 @@ class AzureStore(Store):
         except Exception:  # noqa: BLE001 - ResourceNotFoundError and friends
             return None
 
-    def _query(self, partition: str) -> list[dict]:
-        return list(self.table.query_entities(query_filter=f"PartitionKey eq '{partition}'"))
+    def _query(self, partition: str, *, where: dict | None = None,
+               select=None) -> list[dict]:
+        """Every entity of one type, optionally narrowed by exact property matches.
+
+        ``where`` is pushed into the server-side filter, so only matching rows
+        cross the wire; ``select`` names the properties to bring back.
+        """
+        query = f"PartitionKey eq '{partition}'"
+        for name, value in (where or {}).items():
+            escaped = str(value).replace("'", "''")
+            query += f" and {name} eq '{escaped}'"
+        kwargs = {"select": list(select)} if select else {}
+        return list(self.table.query_entities(query_filter=query, **kwargs))
 
     def _delete(self, partition: str, row: str) -> None:
         try:
             self.table.delete_entity(partition_key=partition, row_key=_safe_key(row))
         except Exception:  # noqa: BLE001 - absent is fine
             pass
+        if partition == PK_RUN:
+            self._forget_run_summaries()
+
+    # --- run summaries (cached, without prompt and log) -------------------- #
+    def _forget_run_summaries(self) -> None:
+        with self._summary_lock:
+            self._summary_gen += 1
+            self._summaries = None
+
+    def _run_summary_entities(self) -> list[dict]:
+        """Every run WITHOUT prompt and log, read at most once per TTL.
+
+        The entities are cached, never the ``Run`` objects, so a caller that
+        changes a run it was given cannot change what the next caller sees.
+        """
+        with self._summary_lock:
+            cached, generation = self._summaries, self._summary_gen
+        if cached is not None and time.monotonic() - cached[0] < RUN_SUMMARY_TTL_SECONDS:
+            return cached[1]
+        rows = [{k: v for k, v in dict(e).items() if v is not None}
+                for e in self._query(PK_RUN, select=_RUN_SUMMARY_FIELDS)]
+        with self._summary_lock:
+            if self._summary_gen == generation:
+                self._summaries = (time.monotonic(), rows)
+        return rows
+
+    def _run_summaries(self) -> list[Run]:
+        return [self._run_from_entity(e) for e in self._run_summary_entities()]
 
     # --- model <-> entity -------------------------------------------------- #
     @staticmethod
@@ -724,8 +787,24 @@ class AzureStore(Store):
 
     def _matching_runs(self, *, status, instruction_id, account_id, search,
                        workspace_id=None):
-        """Filter in Python — Table Storage has no LIKE and no server-side sort."""
-        runs = [self._run_from_entity(e) for e in self._query(PK_RUN)]
+        """Filter in Python: Table Storage has no LIKE and no server-side sort.
+
+        Full rows, because callers may write them back. A status filter is the
+        one condition the table can apply itself, so it is sent with the query:
+        the stale-run sweep asks for the few ``running`` rows, not the whole table.
+        """
+        if status and not (search or "").strip():
+            wanted = status.value if hasattr(status, "value") else str(status)
+            entities = self._query(PK_RUN, where={"status": wanted})
+        else:
+            entities = self._query(PK_RUN)
+        runs = [self._run_from_entity(e) for e in entities]
+        return self._filter_runs(runs, status=status, instruction_id=instruction_id,
+                                 account_id=account_id, search=search,
+                                 workspace_id=workspace_id)
+
+    def _filter_runs(self, runs, *, status, instruction_id, account_id, search,
+                     workspace_id=None):
         if status:
             wanted = status.value if hasattr(status, "value") else str(status)
             runs = [r for r in runs if r.status.value == wanted]
@@ -747,26 +826,57 @@ class AzureStore(Store):
                     or r.instruction_id in named]
         return runs
 
+    def _summaries_matching(self, *, status, instruction_id, account_id, search,
+                            workspace_id=None):
+        """Runs for a list view. A search reads full rows, because it covers the log."""
+        if (search or "").strip():
+            return self._matching_runs(status=status, instruction_id=instruction_id,
+                                       account_id=account_id, search=search,
+                                       workspace_id=workspace_id)
+        return self._filter_runs(self._run_summaries(), status=status,
+                                 instruction_id=instruction_id, account_id=account_id,
+                                 search="", workspace_id=workspace_id)
+
+    _RUN_SORT_KEYS = {
+        "created_at": lambda r: r.created_at,
+        "status": lambda r: r.status.value,
+        "instruction_id": lambda r: r.instruction_id,
+        "account_id": lambda r: r.account_id,
+    }
+
+    def _sorted(self, runs, sort, descending):
+        keys = self._RUN_SORT_KEYS
+        runs.sort(key=keys.get(sort, keys["created_at"]), reverse=descending)
+        return runs
+
     def list_runs(self, *, limit=100, offset=0, status=None, instruction_id=None,
                   account_id=None, workspace_id=None, search="", sort="created_at",
                   descending=True):
         runs = self._matching_runs(status=status, instruction_id=instruction_id,
                                    account_id=account_id, workspace_id=workspace_id,
                                    search=search)
-        keys = {
-            "created_at": lambda r: r.created_at,
-            "status": lambda r: r.status.value,
-            "instruction_id": lambda r: r.instruction_id,
-            "account_id": lambda r: r.account_id,
-        }
-        runs.sort(key=keys.get(sort, keys["created_at"]), reverse=descending)
-        return runs[offset:offset + limit]
+        return self._sorted(runs, sort, descending)[offset:offset + limit]
 
     def count_runs(self, *, status=None, instruction_id=None, account_id=None,
                    workspace_id=None, search=""):
-        return len(self._matching_runs(status=status, instruction_id=instruction_id,
-                                       account_id=account_id, workspace_id=workspace_id,
-                                       search=search))
+        # A count needs no prompt or log, so it is answered from the summaries.
+        return len(self._summaries_matching(status=status, instruction_id=instruction_id,
+                                            account_id=account_id, search=search,
+                                            workspace_id=workspace_id))
+
+    def run_summaries(self, *, limit=100, offset=0, status=None, instruction_id=None,
+                      account_id=None, workspace_id=None, search="", sort="created_at",
+                      descending=True):
+        runs = self._summaries_matching(status=status, instruction_id=instruction_id,
+                                        account_id=account_id, search=search,
+                                        workspace_id=workspace_id)
+        return self._sorted(runs, sort, descending)[offset:offset + limit], len(runs)
+
+    def published_run_summaries(self, *, since=None, limit=200, workspace_id=None):
+        runs = self._summaries_matching(status=RunStatus.published, instruction_id=None,
+                                        account_id=None, search="",
+                                        workspace_id=workspace_id)
+        return _published_since(self._sorted(runs, "created_at", True)[:limit], since)
 
     # --- staged posts ------------------------------------------------------ #
     def add_staged(self, staged):
