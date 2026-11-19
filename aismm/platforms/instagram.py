@@ -339,6 +339,27 @@ def _dm_failure_advice(exc: Exception) -> str:
     return _MESSAGE_GENERIC_ADVICE
 
 
+#: Pause before the one retry of a transient container failure.
+CONTAINER_RETRY_PAUSE = 5.0
+
+
+def _transient_graph(exc: httpx.HTTPStatusError) -> bool:
+    """Graph's own hiccup: a 5xx with code 1 ("unknown") or 2 ("temporarily
+    unavailable"), or anything it flags ``is_transient``. Seen live on
+    2026-11-18 as ``500 code=1 subcode=99`` on a container create that a second
+    try would have passed. "Reduce the amount of data" is code 1 too, but that is
+    a query problem, so it is excluded."""
+    resp = exc.response
+    _message, err = _graph_error(exc)
+    if err.get("is_transient") is True:
+        return True
+    if resp is None or resp.status_code < 500:
+        return False
+    if "reduce the amount of data" in (err.get("message") or "").lower():
+        return False
+    return err.get("code") in (1, 2) or not err
+
+
 def _raise_graph(exc: httpx.HTTPStatusError) -> None:
     """Re-raise a Graph failure with the body included and no token in the text.
 
@@ -354,6 +375,16 @@ def _raise_graph(exc: httpx.HTTPStatusError) -> None:
     if code == 1 and "reduce the amount of data" in (err.get("message") or "").lower():
         raise TooMuchData(message) from None
     raise RuntimeError(message) from None
+
+
+_INCOMPATIBLE_METRIC = re.compile(
+    r"metrics? \(([^)]+)\) (?:is|are) incompatible with the metric type", re.I)
+
+
+def _incompatible_metrics(exc: Exception) -> set[str]:
+    """Metric names Graph refused to serve as ``total_value``, from its error text."""
+    match = _INCOMPATIBLE_METRIC.search(str(exc))
+    return {m.strip() for m in match.group(1).split(",")} if match else set()
 
 
 PROVIDER_USER_KEY = "provider_user_id"
@@ -785,12 +816,27 @@ class Instagram(SocialPlatform):
         return media_url
 
     async def _create_container(self, client, ig_user_id, token, data) -> str:
-        r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=data, headers=_auth(token))
-        try:
-            r.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            _raise_graph(exc)
-        return r.json()["id"]
+        """Create one media container, retrying ONCE when Graph says it was its own fault.
+
+        Safe to retry because a container is not a post: if the failed call did
+        create one server-side, it is never published and expires on its own.
+        (``media_publish`` is the step that must never be blindly retried.)
+        """
+        for attempt in (1, 2):
+            r = await client.post(f"{GRAPH}/{ig_user_id}/media", data=data,
+                                  headers=_auth(token))
+            try:
+                r.raise_for_status()
+                return r.json()["id"]
+            except httpx.HTTPStatusError as exc:
+                if attempt == 1 and _transient_graph(exc):
+                    logger.warning("Instagram container create failed transiently (%s); "
+                                   "retrying once in %.0fs", _graph_error(exc)[0],
+                                   CONTAINER_RETRY_PAUSE)
+                    await asyncio.sleep(CONTAINER_RETRY_PAUSE)
+                    continue
+                _raise_graph(exc)
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     async def _create_carousel_container(self, client, ig_user_id, token, caption,
                                          asset_paths, media_kinds, extra=None) -> str:
@@ -1349,12 +1395,40 @@ class Instagram(SocialPlatform):
                         external_id, exc)
         return metrics
 
+    #: Account metrics Graph serves ONLY as a daily time series. Asking for one with
+    #: ``metric_type=total_value`` fails the WHOLE call ("(#100) The following metric
+    #: (follower_count) is incompatible with the metric type (total_value)"), which
+    #: is what every engage run's insights read answered for a week.
+    TIME_SERIES_ACCOUNT_METRICS = frozenset({"follower_count"})
+
     async def account_insights(self, access_token: str, account: Account, *,
                                metrics: str = "", period: str = "day") -> list[dict]:
-        payload = await self._graph_get(access_token, f"{account.external_id}/insights", {
-            "metric": metrics or self.DEFAULT_ACCOUNT_METRICS, "period": period,
-            "metric_type": "total_value"})
-        return payload.get("data", [])
+        names = [m.strip() for m in (metrics or self.DEFAULT_ACCOUNT_METRICS).split(",")
+                 if m.strip()]
+        series = [n for n in names if n in self.TIME_SERIES_ACCOUNT_METRICS]
+        totals = [n for n in names if n not in self.TIME_SERIES_ACCOUNT_METRICS]
+        path = f"{account.external_id}/insights"
+        rows: list[dict] = []
+        if totals:
+            params = {"metric": ",".join(totals), "period": period,
+                      "metric_type": "total_value"}
+            try:
+                rows += (await self._graph_get(access_token, path, params)).get("data", [])
+            except RuntimeError as exc:
+                # Meta moves metrics between the two shapes; one it names as
+                # time-series-only is asked for that way instead of failing the rest.
+                refused = _incompatible_metrics(exc)
+                if not refused:
+                    raise
+                series += [n for n in totals if n in refused]
+                totals = [n for n in totals if n not in refused]
+                if totals:
+                    params["metric"] = ",".join(totals)
+                    rows += (await self._graph_get(access_token, path, params)).get("data", [])
+        if series:
+            rows += (await self._graph_get(access_token, path, {
+                "metric": ",".join(series), "period": "day"})).get("data", [])
+        return rows
 
     async def account_profile(self, access_token: str, account: Account) -> dict:
         return await self._graph_get(access_token, account.external_id, {

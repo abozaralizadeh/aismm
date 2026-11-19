@@ -27,7 +27,7 @@ python -m aismm.cli post --instruction <id-or-name> [--account <id>]
 python -m aismm.cli reconcile [--apply]   # fix runs marked failed whose post is actually live
 
 # test / verify
-pytest -q                       # 30 unit tests (no network, no creds needed)
+pytest -q                       # unit tests (no network, no creds needed)
 python scripts/smoke_llm.py     # verifies Azure/APIM LLM wiring (needs LLM creds)
 python scripts/smoke_sora.py    # generates one Sora clip (skips if unconfigured)
 python scripts/smoke_sora.py --pool   # print the Sora resource pool, no API calls
@@ -1238,6 +1238,14 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   arrives as `thread_id`. Note `langsmith run get --format json` prints a TRIMMED run (no `extra`
   at all) — read the metadata with the `langsmith` Python client, not the CLI, or you will conclude
   it never arrived.
+- **A reply cut off by the provider's CONTENT FILTER is retried once**
+  (`manager_agent.content_filtered`, `ModelBehaviorError` whose message carries
+  `content_filter`). Azure ends the stream with `response.incomplete`, which the SDK raises, and a
+  psychology run (b4848427) failed in 113s with that as its only error. The retry appends
+  `CONTENT_FILTER_NOTE` (clinical, calm wording) plus the media already made this run, so nothing
+  is regenerated. A filter hit AFTER the terminal tool ran is ignored (the job is done); a second
+  hit raises `ContentFiltered` with a message that names the filter; a hit during the recovery
+  nudge falls through to the normal no-terminal ending.
 - **APIM is an *Azure*-shaped client** ([llm.py](aismm/llm.py)): both providers build
   `AsyncAzureOpenAI`; for APIM the gateway route is the `azure_endpoint` (trAIde's
   `_build_openai_client`). A plain `AsyncOpenAI(base_url=…)` drops Azure's `/openai` segment and
@@ -1372,6 +1380,36 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   only arrive already inside the video file (Sora clips carry their own; `video.concat_clips`
   preserves it). Don't add a "music" argument; it cannot be implemented, and the publish docstring
   says so to stop the agent claiming a soundtrack in a caption.
+- **A caption is held to the platform's hard limit in CODE** ([captions.py](aismm/captions.py),
+  called from `perform_publish` before the disclosure is applied). Instagram refused the Comicbook
+  carousel five runs in a row (2,252 to 2,311 characters against 2,200): the kickoff stated the
+  limit, and the only enforcing code lived inside the AI disclosure, which is off by default. Now
+  the kickoff asks for `captions.aim(limit)` (85%) and calls the cap HARD; the `publish` tool passes
+  `shorten_first=True`, so the first over-long caption returns `caption_too_long` once
+  (`state["caption_shorten_asked"]`) and the next one is cut by `captions.fit`: trailing hashtags
+  first, then the body at a paragraph or sentence break keeping `KEEP_TAGS_AFTER_CUT` tags, and only
+  without such a break at a word with an ellipsis. Republish trims straight away (no agent to ask).
+  Length is UTF-16 units, an emoji counts as two: over-counting only trims a caption that would
+  have fitted, under-counting reaches the API. "CAPTION TRIMMED" lands in `run.log`. Threading
+  platforms get no aim, since their budget is `caption_limit * max_thread_posts`.
+- **Image failures come in KINDS, and each gets the opposite reaction**
+  (`image_tool.failure_kind`: safety / timeout / transient / other). A **safety** refusal
+  (`moderation_blocked`, a content policy) is about the PROMPT: it returns `image_safety_rejected`
+  with `SAFETY_ADVICE` (never a child as the unwell one; an adult, or a metaphor, objects, hands, a
+  place) and does NOT count toward the `image_failures` circuit breaker, which is for a broken
+  service. Observed on "Sahar Psychologist Disorders", whose brief asks for "a realistic photo
+  showing the disorder": the output filter blocked a school photo of a child with selective
+  mutism. `MAX_SAFETY_REFUSALS` (3) stops the loop of rewording. A gateway **timeout** at a slow
+  quality (high/xhigh/max/auto) retries ONCE at medium and says so in `adjustment`; any other
+  timeout or a 429/5xx retries once as-is. The client is built with **`max_retries=0`**: the SDK's
+  default 2 retries turned three 600s gateway timeouts into a 793s run that then tripped the
+  breaker. At most `MAX_PARALLEL_IMAGES` (2) render at once per run (`state["_image_slots"]`), since
+  the SDK calls tools in parallel and three high-quality images together are what timed out.
+- **A transient Graph 5xx on CONTAINER creation is retried once** (`Instagram._create_container`,
+  `_transient_graph`, `CONTAINER_RETRY_PAUSE`). Creating a container publishes nothing, so a second
+  try is safe; `media_publish` is NOT retried (it may have posted, see `_find_recent_published`).
+  Transient means `is_transient`, or a 5xx with Graph code 1/2 or a non-JSON body, excluding
+  "reduce the amount of data" (asking again for the same amount never helps).
 - **Instagram placements** ([platforms/instagram.py](aismm/platforms/instagram.py)): carousel =
   child containers with `is_carousel_item=true` and NO caption, then a `CAROUSEL` parent carrying the
   caption + `children=<ids>`; a video child is `media_type=VIDEO` (**not** `REELS`, which is
@@ -1471,6 +1509,12 @@ answering — a liked comment can still get a reply. `x_like_post(post_id, like=
   `EVENT_JOB_MAX_INSTANCES`/`EVENT_JOB_MISSED` — a skipped fire used to be completely silent, which is
   why an instruction quietly not posting was so hard to diagnose. A `RUN START` with no matching
   `RUN DONE` is the signature.
+- **Some account insights are TIME-SERIES only** (`instagram.TIME_SERIES_ACCOUNT_METRICS`, today
+  `follower_count`). Graph answers `(#100) The following metric (follower_count) is incompatible
+  with the metric type (total_value)` when one is mixed into the `metric_type=total_value` call, and
+  the whole read failed. `account_insights` asks the totals and the series in separate calls, and a
+  metric Graph newly refuses the same way (`_incompatible_metrics` parses the error) moves to the
+  series call instead of failing. The tool reports a series by its NEWEST day.
 - **Instagram engagement tools** ([tools/instagram_tools.py](aismm/tools/instagram_tools.py)) return
   `None` from their factories unless the run targets an Instagram account, so other platforms aren't
   handed them. Reply/moderate act on the live account IMMEDIATELY — they are not behind

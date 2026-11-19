@@ -5,6 +5,43 @@ researches, creates and publishes social content on a schedule. Newest first.
 
 ---
 
+## 2026-11-19: Four instructions failing, four different reasons
+
+A sweep of a week of failed runs on the server turned up four separate problems, each with its
+own fix.
+
+**Captions over 2,200 characters.** The comic instruction failed five runs in a row on one day
+because Instagram refused captions of 2,252 to 2,311 characters. The prompt stated the limit, but
+the only code that enforced it was tucked inside the AI disclosure feature, which is off by
+default. So the model's own counting was the only guard. Now the prompt asks for about 85% of the
+cap, and if a caption is still too long the agent is asked once to shorten it. If it's still too
+long after that, code trims it cleanly: trailing hashtags go first, then the body is cut at a
+paragraph or sentence break, never mid-word. The run log says it happened.
+
+**A psychology account asking for "a realistic photo showing the disorder".** The image model's
+safety filter blocked a photo of a child with selective mutism, and that refusal counted towards
+the same circuit breaker as a network failure, so the run gave up on images entirely. Now a safety
+refusal comes back with advice (show an adult, or use a metaphor, objects, hands, a place) and
+doesn't trip the breaker. On another run three high-quality images were requested at once, all
+three timed out at the gateway, and the SDK quietly retried each one twice more. The SDK retries
+are off now, at most two images render at a time, and a timeout at high quality gets one retry at
+medium.
+
+**Instagram changed an insights metric.** `follower_count` can no longer be asked for as a total,
+only as a daily series. It now goes in its own request, and if Graph refuses another metric the
+same way, that one moves over too instead of failing the whole read.
+
+**The model provider's content filter cut a run off mid-stream.** A run about psychology ended
+with "response incomplete: content_filter" and failed in under two minutes. It now retries once
+with a short note asking the agent to keep wording clinical and calm, and it reuses any media
+already made. A second filter hit fails the run with a message that says exactly that.
+
+**Takeaway for the post:** "failed" isn't one thing. A safety refusal, a timeout and a broken
+connection all looked the same to the old code, and each needs the opposite reaction: rewrite the
+prompt, ask for less, or just try again.
+
+---
+
 ## 2026-11-09: A dashboard tab that cost 700 GB a month
 
 **Symptom:** the Azure bill showed about 700 GB a month of Table Storage reads on the storage

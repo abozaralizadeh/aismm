@@ -6,7 +6,7 @@ media, caption, and finish by calling ``publish`` exactly once.
 """
 from __future__ import annotations
 
-from .. import video_style
+from .. import captions, video_style
 
 MANAGER_INSTRUCTIONS = """\
 You are the AI Social Media Manager for a single social account. You act with FULL
@@ -476,7 +476,7 @@ def build_kickoff(*, account, instruction, platform_caps, state=None, files=None
         f"PLATFORM SUPPORTS -> text:{platform_caps.supports_text} "
         f"image:{platform_caps.supports_image} video:{platform_caps.supports_video}; "
         f"recommended orientation: {platform_caps.default_orientation}; "
-        f"caption limit: {platform_caps.caption_limit}.\n\n"
+        f"caption limit: {platform_caps.caption_limit}{_caption_aim(platform_caps)}.\n\n"
         f"Create and publish one post now. Start by calling get_context, then read_memory."
     )
 
@@ -591,6 +591,16 @@ def _policy_block(instruction) -> str:
         return ""
     return ("REPLY POLICY (the operator's rule for who gets answered — this "
             f"OVERRIDES the default in your instructions):\n{policy}\n\n")
+
+
+def _caption_aim(caps) -> str:
+    """How to read the caption limit. The model's own counting is approximate, and a
+    caption a few characters over is refused outright (Instagram: 2,252 against
+    2,200, five runs in a row). A threading platform splits a long text instead."""
+    if getattr(caps, "supports_threads", False) or not caps.caption_limit:
+        return ""
+    return (f" characters, a HARD cap that counts hashtags, emoji and line breaks: write "
+            f"to at most {captions.aim(caps.caption_limit)}")
 
 
 def _unavailable_block(unavailable) -> str:
@@ -855,7 +865,7 @@ def build_auto_kickoff(*, account, instruction, platform_caps, state=None, files
         f"PLATFORM SUPPORTS -> text:{platform_caps.supports_text} "
         f"image:{platform_caps.supports_image} video:{platform_caps.supports_video}; "
         f"recommended orientation: {platform_caps.default_orientation}; "
-        f"caption limit: {platform_caps.caption_limit}.\n\n"
+        f"caption limit: {platform_caps.caption_limit}{_caption_aim(platform_caps)}.\n\n"
         f"{_policy_block(instruction)}"
         f"{_unavailable_block(unavailable)}"
         f"Decide whether to publish a new post or to engage with new comments/mentions and "

@@ -17,7 +17,7 @@ import re
 
 from agents import function_tool
 
-from .. import cooldown, disclosure, media, publish_ledger, schedules, tokens
+from .. import captions, cooldown, disclosure, media, publish_ledger, schedules, tokens
 from ..assets import exists as asset_exists
 from ..assets import kind_from_path, read_bytes, save_bytes
 from ..config import settings
@@ -165,12 +165,16 @@ async def _confirm_duplicate(account, store, platform, digests: list[str]):
 
 async def perform_publish(state: dict, caption: str, asset_path: str = "",
                           media_kind: str = "auto", asset_paths: list[str] | None = None,
-                          placement: str = "feed") -> dict:
+                          placement: str = "feed", *, shorten_first: bool = False) -> dict:
     """Mode-gated publish logic (extracted from the tool so it is unit-testable).
 
     Reads ``account`` / ``instruction`` / ``store`` / ``run`` from ``state``,
     enforces the instruction's publish mode, and records the outcome on
     ``state["result"]``.
+
+    ``shorten_first`` (the agent's publish tool) hands an over-long caption back
+    ONCE for the model to rewrite, since it writes a better short caption than a
+    cut does. Every other path, and a second over-long attempt, is trimmed here.
     """
     account = state["account"]
     instruction = state["instruction"]
@@ -270,6 +274,33 @@ async def perform_publish(state: dict, caption: str, asset_path: str = "",
     caption_budget = caps.caption_limit
     if caps.supports_threads and caps.max_thread_posts > 1:
         caption_budget = caps.caption_limit * caps.max_thread_posts
+
+    # The hard limit. Nothing else enforces it: the only trim lived inside the AI
+    # disclosure, which is off by default, so a 2,311-character caption went
+    # straight to Instagram and came back "Caption Too Long". Room is kept for the
+    # label (when it is on), so the label is never the thing that gets cut.
+    label_room = captions.units(disclosure.apply_to_caption(
+        "x", caption_limit=None, instruction=instruction)) - 1
+    room = max(caption_budget - label_room, 0)
+    length = captions.units((caption or "").strip())
+    if room and length > room:
+        if shorten_first and not state.get("caption_shorten_asked"):
+            state["caption_shorten_asked"] = True
+            logger.warning("Caption is %d characters, over the %d limit: handed back to the "
+                           "agent to shorten", length, room)
+            return {
+                "error": "caption_too_long",
+                "message": (f"The caption is {length} characters and "
+                            f"{account.platform.value} allows {room} (hashtags, emoji and "
+                            f"line breaks all count; an emoji counts as 2). Nothing was "
+                            f"posted. Rewrite it to at most {captions.aim(room)} characters "
+                            f"and call publish again with the same media. If it is still "
+                            f"too long it will be cut automatically at a sentence break."),
+            }
+        caption, note = captions.fit(caption, room)
+        logger.warning("Caption trimmed before publishing: %s", note)
+        run.log = (run.log + f"\nCAPTION TRIMMED: {note}.").strip()
+        state["caption_note"] = note
     caption = disclosure.apply_to_caption(caption, caption_limit=caption_budget,
                                           instruction=instruction)
 
@@ -497,8 +528,12 @@ def _make_publish(state: dict):
         Returns a status dict. The publish mode (dry-run / approval / live) is set
         on the instruction and enforced here — you do not control it.
         """
-        return await perform_publish(state, caption, asset_path, media_kind,
-                                     asset_paths=asset_paths, placement=placement)
+        result = await perform_publish(state, caption, asset_path, media_kind,
+                                       asset_paths=asset_paths, placement=placement,
+                                       shorten_first=True)
+        if state.get("caption_note") and isinstance(result, dict):
+            result["caption_note"] = state["caption_note"]
+        return result
 
     return publish
 

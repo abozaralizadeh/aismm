@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from agents import Agent, Runner, trace
+from agents.exceptions import ModelBehaviorError
 
 from ..attachments import build_agent_input, looks_like_unsupported_file_input
 from ..config import SoraSettings, settings
@@ -197,6 +198,41 @@ def _resolve_git(instruction: Instruction, store: Store):
     return store.resolve_git_settings(cfg_id)
 
 
+class ContentFiltered(RuntimeError):
+    """The model provider's content filter stopped the agent's reply, twice."""
+
+
+#: Added to the kickoff when the first attempt was cut off by the content filter.
+#: Seen live on "Sahar Psicology Generic" (run b4848427): the Responses stream ended
+#: with ``response.incomplete`` / ``reason='content_filter'`` and the SDK raised
+#: ModelBehaviorError, which failed the run with that raw text and nothing else.
+CONTENT_FILTER_NOTE = (
+    "NOTE: a first attempt at this run was stopped partway by the model provider's "
+    "content filter, so start again and finish it. Write about sensitive subjects "
+    "(mental health, disorders, trauma, bodies, food, death) in calm, clinical, "
+    "educational language: no graphic detail of symptoms, no self-harm or suicide "
+    "methods, no abuse or sexual content, no first-person crisis scenes, and no "
+    "content about minors beyond general, supportive facts."
+)
+
+
+def content_filtered(exc: BaseException) -> bool:
+    """True when the run died because the provider's content filter cut the reply."""
+    return isinstance(exc, ModelBehaviorError) and "content_filter" in str(exc)
+
+
+def _content_filter_retry_input(agent_input, state: dict):
+    assets = [a for a in state.get("assets", []) if a.get("path")]
+    note = CONTENT_FILTER_NOTE
+    if assets:
+        note += (" Media already made in this run, reuse it if it fits: "
+                 + ", ".join(f"{a['path']} ({a.get('kind', 'media')})" for a in assets[-6:])
+                 + ".")
+    if isinstance(agent_input, list):
+        return agent_input + [{"role": "user", "content": note}]
+    return f"{agent_input}\n\n{note}"
+
+
 async def run_for_account(account: Account, instruction: Instruction, store: Store, run: Run,
                           prompt_override: str = "") -> dict:
     """Run the agent once for one account. Returns the terminal result dict.
@@ -333,6 +369,31 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                                    "text-only", exc)
                     result = await Runner.run(agent, kickoff, max_turns=MAX_TURNS,
                                               run_config=STATELESS_RUN_CONFIG)
+                elif content_filtered(exc) and state.get("result"):
+                    # The run already reached its ending; only the closing words were cut.
+                    logger.warning("Content filter cut the reply after the run had ended: %s",
+                                   exc)
+                    result = None
+                elif content_filtered(exc):
+                    logger.warning("Content filter stopped the agent's reply; retrying the run "
+                                   "once with a calmer framing: %s", exc)
+                    run.log = (run.log + "\nThe model provider's content filter stopped the "
+                               "first attempt; retried once.").strip()
+                    try:
+                        result = await Runner.run(
+                            agent, _content_filter_retry_input(agent_input, state),
+                            max_turns=MAX_TURNS, run_config=STATELESS_RUN_CONFIG)
+                    except Exception as again:  # noqa: BLE001
+                        if not content_filtered(again):
+                            raise
+                        if not state.get("result"):
+                            raise ContentFiltered(
+                                "The model provider's content filter (Azure OpenAI, reason "
+                                "content_filter) stopped the agent's reply twice, so nothing "
+                                "was published. This happens on sensitive topics; soften the "
+                                "brief or this topic's wording, or check the content filter "
+                                "settings on the model deployment.") from again
+                        result = None
                 else:
                     raise
 
@@ -395,8 +456,14 @@ async def run_for_account(account: Account, instruction: Instruction, store: Sto
                 logger.info("Recovery nudge for account=%s instruction=%s", account.id, instruction.id)
                 # Continue the SAME conversation so prior tool outputs/assets are retained.
                 follow_up = result.to_input_list() + [{"role": "user", "content": nudge}]
-                await Runner.run(agent, follow_up, max_turns=8,
-                                 run_config=STATELESS_RUN_CONFIG)
+                try:
+                    await Runner.run(agent, follow_up, max_turns=8,
+                                     run_config=STATELESS_RUN_CONFIG)
+                except Exception as exc:  # noqa: BLE001
+                    if not content_filtered(exc):
+                        raise
+                    # Fall through to the no-terminal-call ending, which records it.
+                    logger.warning("Content filter stopped the recovery nudge: %s", exc)
         finally:
             # Tear the browser down inside THIS event loop (the AIBlog lesson): a
             # Chromium subprocess finalized later by GC raises "Event loop is closed".

@@ -401,7 +401,7 @@ def _make_insights(state: dict):
                 {"name": row.get("name"),
                  "value": (row.get("total_value") or {}).get("value")
                  if row.get("total_value") else
-                 (row.get("values") or [{}])[0].get("value")}
+                 (row.get("values") or [{}])[-1].get("value")}  # newest day
                 for row in rows]}
 
         return await _with_context(state, call)

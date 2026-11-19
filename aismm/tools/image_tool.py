@@ -33,11 +33,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import asyncio
 import io
 import logging
 
 from agents import function_tool
-from openai import AsyncAzureOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncAzureOpenAI
 
 from ..assets import public_url, read_bytes, save_bytes
 from ..async_clients import ClientCache
@@ -65,6 +66,60 @@ EXTENDED_QUALITIES = {"xhigh", "max"}
 FORMATS = {"png", "jpeg", "jpg", "webp"}
 MAX_REFERENCE_IMAGES = 16
 _MAX_RATIO = 3.0
+
+# --- failures, and what each one needs --------------------------------------- #
+# Three kinds of failure need three different answers, and treating them alike is
+# what failed two "Sahar Psychologist Disorders" runs:
+#   * a SAFETY refusal is about the prompt. Retrying it unchanged costs a call and
+#     gets the same answer, so it never counts against the service; the agent
+#     gets advice on how to depict the subject safely instead.
+#   * a gateway TIMEOUT ("500 - The request timed out" from APIM) comes from slow
+#     high-quality renders. The SDK used to retry it twice, tripling the wait
+#     (one run: 793 s, three parallel calls each timing out three times), and
+#     then the circuit breaker refused even the agent's calm single retry. Now it
+#     is retried ONCE at medium quality, which renders in a fraction of the time.
+#   * anything else transient (429, 502, 503, a dropped connection) is retried
+#     once as it was.
+_SAFETY_MARKERS = ("safety system", "moderation_blocked", "content_policy_violation",
+                   "content policy", "responsibleaipolicyviolation", "content_filter")
+_TIMEOUT_MARKERS = ("timed out", "timeout", "gateway time")
+_SLOW_QUALITIES = {"high", "xhigh", "max", "auto"}
+_FALLBACK_QUALITY = "medium"
+_TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_PAUSE_SECONDS = 3.0
+#: Images rendered at once in one run. Three high-quality renders in parallel is
+#: what made the gateway time out; two keeps a carousel quick without that.
+MAX_PARALLEL_IMAGES = 2
+#: Safety refusals in one run before the tool stops offering photographs at all.
+MAX_SAFETY_REFUSALS = 3
+
+SAFETY_ADVICE = (
+    "The image service's safety system refused this picture (usually the OUTPUT was "
+    "blocked, so the same idea in other words is refused again). Change WHAT is "
+    "shown, not just the wording. For health, mental-health and other sensitive "
+    "subjects: never show a child or teenager as the one who is unwell, frightened "
+    "or struggling; show an adult, or tell it through a symbol, objects, hands, a "
+    "place or a metaphor (a closed door, a muted speaker, a quiet chair in a busy "
+    "room). Keep it calm and dignified: no visible injury, self-harm, extreme "
+    "thinness, vomiting, weapons or crisis scenes, no distress on a face. Supportive "
+    "moments (a conversation, a therapy room, a hand on a shoulder) are fine. If the "
+    "brief asks for a realistic photo, a respectful realistic photo of an adult or "
+    "of a symbolic scene still meets it."
+)
+
+
+def failure_kind(exc: Exception) -> str:
+    """``safety``, ``timeout``, ``transient`` or ``other`` for one failed call."""
+    text = str(exc).lower()
+    if any(marker in text for marker in _SAFETY_MARKERS):
+        return "safety"
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, APITimeoutError) or status in (408, 504) or (
+            status in _TRANSIENT_STATUSES and any(m in text for m in _TIMEOUT_MARKERS)):
+        return "timeout"
+    if isinstance(exc, APIConnectionError) or status in _TRANSIENT_STATUSES:
+        return "transient"
+    return "other"
 
 
 def is_gpt_image_2(model: str) -> bool:
@@ -144,6 +199,9 @@ def _client_for(img: ImageSettings) -> AsyncAzureOpenAI:
             api_version=img.api_version,
             azure_endpoint=img.endpoint,
             timeout=600.0,
+            # Retries are decided below, per kind of failure. The SDK's own two
+            # retries tripled every gateway timeout.
+            max_retries=0,
         )
 
     return _clients.get(_image_fingerprint(img), build)
@@ -194,24 +252,48 @@ async def perform_generate_image(
     note = "; ".join(n for n in [size_note, *option_notes] if n)
     references = [p for p in (reference_asset_paths or []) if p][:MAX_REFERENCE_IMAGES]
 
-    try:
+    async def call(options: dict):
         if references:
             files = []
             for index, path in enumerate(references, start=1):
-                data = read_bytes(path)
-                stream = io.BytesIO(data)
+                stream = io.BytesIO(read_bytes(path))
                 stream.name = f"image{index}.png"    # the SDK needs a filename
                 files.append(stream)
-            logger.info("Editing with %d reference image(s): %s", len(files), kwargs)
-            response = await _client_for(img).images.edit(image=files, prompt=prompt, **kwargs)
-        else:
-            logger.info("Generating image: %s", kwargs)
-            response = await _client_for(img).images.generate(prompt=prompt, **kwargs)
+            logger.info("Editing with %d reference image(s): %s", len(files), options)
+            return await _client_for(img).images.edit(image=files, prompt=prompt, **options)
+        logger.info("Generating image: %s", options)
+        return await _client_for(img).images.generate(prompt=prompt, **options)
+
+    slots = state.setdefault("_image_slots", asyncio.Semaphore(MAX_PARALLEL_IMAGES))
+    async with slots:
+        try:
+            response = await call(kwargs)
+        except Exception as exc:  # noqa: BLE001
+            kind = failure_kind(exc)
+            retry = None
+            if kind == "timeout" and kwargs.get("quality", "auto") in _SLOW_QUALITIES:
+                retry = {**kwargs, "quality": _FALLBACK_QUALITY}
+                retry_note = (f"the image service timed out at quality "
+                              f"{kwargs.get('quality', 'auto')!r}; rendered at "
+                              f"{_FALLBACK_QUALITY!r} instead")
+            elif kind in ("timeout", "transient"):
+                retry, retry_note = dict(kwargs), ""
+                await asyncio.sleep(_RETRY_PAUSE_SECONDS)
+            if retry is None:
+                return _failure(state, kwargs, exc, kind)
+            logger.warning("generate_image %s (%s): %s; retrying once with %s",
+                           kind, kwargs, _short(exc), retry)
+            try:
+                response = await call(retry)
+            except Exception as again:  # noqa: BLE001
+                return _failure(state, retry, again, failure_kind(again))
+            kwargs = retry
+            if retry_note:
+                note = "; ".join(n for n in [note, retry_note] if n)
+    try:
         data = base64.b64decode(response.data[0].b64_json)
     except Exception as exc:  # noqa: BLE001
-        state["image_failures"] = state.get("image_failures", 0) + 1
-        logger.warning("generate_image failed (%s): %s", kwargs, exc)
-        return {"error": "image_generation_failed", "message": str(exc)}
+        return _failure(state, kwargs, exc, "other")
 
     ext = kwargs.get("output_format", "png")
     path = save_bytes(data, "jpg" if ext == "jpeg" else ext)
@@ -223,6 +305,22 @@ async def perform_generate_image(
     if note:
         result["adjustment"] = note
     return result
+
+
+def _short(exc: Exception) -> str:
+    return " ".join(str(exc).split())[:300]
+
+
+def _failure(state: dict, kwargs: dict, exc: Exception, kind: str) -> dict:
+    """Record one failed image and tell the agent what to do about THIS kind of failure."""
+    logger.warning("generate_image failed [%s] (%s): %s", kind, kwargs, _short(exc))
+    if kind == "safety":
+        # About the prompt, not the service: never trips the circuit breaker.
+        refusals = state["image_safety_refusals"] = state.get("image_safety_refusals", 0) + 1
+        return {"error": "image_safety_rejected", "message": _short(exc),
+                "advice": SAFETY_ADVICE, "refusals_this_run": refusals}
+    state["image_failures"] = state.get("image_failures", 0) + 1
+    return {"error": "image_generation_failed", "message": _short(exc), "kind": kind}
 
 
 def _make_generate_image(state: dict):
@@ -280,11 +378,26 @@ def _make_generate_image(state: dict):
                 shot given its own picture is not remix-chained, so either every
                 shot gets one (all derived from the SAME sheet) or none do.
 
+        SENSITIVE SUBJECTS (health, mental health, disorders, grief, abuse): the
+        image service refuses a picture of a child or teenager who is unwell,
+        frightened or struggling, and any graphic symptom, even when the topic
+        is a childhood condition. Show an adult, or tell it through objects,
+        hands, a place or a metaphor, calm and dignified. A refusal comes back
+        as ``image_safety_rejected`` with advice: change what is shown, not just
+        the words, because the same picture in other words is refused again.
+
         Returns ``asset_path`` and ``public_url`` to pass to ``publish``.
         """
         if state.get("image_failures", 0) >= 2:
             return {"error": "image_circuit_open",
                     "message": "Image generation failed repeatedly this run; proceed without it."}
+        if state.get("image_safety_refusals", 0) >= MAX_SAFETY_REFUSALS:
+            return {"error": "image_safety_limit",
+                    "message": (f"The safety system refused {MAX_SAFETY_REFUSALS} pictures this "
+                                "run. Stop asking for this kind of scene: use a symbolic or "
+                                "typographic image (objects, a place, text on a calm "
+                                "background) or report_failure."),
+                    "advice": SAFETY_ADVICE}
         return await perform_generate_image(
             state, prompt, orientation=orientation, size=size, quality=quality,
             output_format=output_format, background=background,
